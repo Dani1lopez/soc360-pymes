@@ -13,3 +13,6 @@ def setup_logging() -> None:
         logger_factory=structlog.stdlib.LoggerFactory(),
     )
     logging.basicConfig(level=logging.INFO)
+
+def get_logger(name: str) -> structlog.stdlib.BoundLogger:
+    return structlog.get_logger(name)

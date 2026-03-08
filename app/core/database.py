@@ -34,6 +34,7 @@ AsyncSessionLocal = async_sessionmaker(
     expire_on_commit=False,
 )
 
+
 class Base(DeclarativeBase):
     pass
 
@@ -47,17 +48,20 @@ async def set_tenant_context(
     if not is_superadmin and tenant_id is None:
         raise ValueError("tenant_id requerido para usuarios no superadmin")
     
-    await db.execute(
-        text("SET LOCAL app.current_tenant = :tenant_id"),
-        {"tenant_id": str(tenant_id) if tenant_id else ""},
-    )
+    if is_superadmin:
+        await db.execute(text("SET LOCAL app.is_superadmin = 'true'"))
+    else:
+        await db.execute(
+            text("SET LOCAL app.current_tenant = :tenant_id"),
+            {"tenant_id": str(tenant_id)},
+        )
+        await db.execute(text("SET LOCAL app.is_superadmin = 'false'"))
     
-    await db.execute(
-        text("SET LOCAL app.is_superadmin = :is_superadmin"),
-        {"is_superadmin": "true" if is_superadmin else "false"},
+    logger.debug(
+        "tenant_context_set", 
+        tenant_id=str(tenant_id) if tenant_id else "ALL",
+        is_superadmin=is_superadmin
     )
-    
-    logger.debug("tenant_context_set", tenant_id=str(tenant_id) or "ALL", is_superadmin=is_superadmin)
 
 #Para celery workers y scripts
 @asynccontextmanager
@@ -68,19 +72,22 @@ async def get_session_with_tenant(
     async with AsyncSessionLocal() as session:
         async with session.begin():
             await set_tenant_context(session, tenant_id, is_superadmin)
-            try:
-                yield session
-            except Exception:
-                await session.rollback()
-                raise
+            yield session
 
 
-#Solo para /health y /auth/login - el resto usa get_db_with _tenant()
+# Solo para /health y /auth/login - el resto usa get_db_with_tenant()
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Sesión SIN contexto de tenant.
+
+    USAR SOLO EN:
+      - GET /health
+      - POST /auth/login
+      - POST /auth/refresh
+
+    NUNCA usar en endpoints que accedan a datos de tenant.
+    Para esos usar get_db_with_tenant() en dependencies.py
+    """
     async with AsyncSessionLocal() as session:
         async with session.begin():
-            try:
-                yield session
-            except Exception:
-                await session.rollback()
-                raise
+            yield session

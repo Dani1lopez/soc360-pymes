@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.core.logging import setup_logging, get_logger
+from app.core.redis import ping_redis, close_pool
 
 logger = get_logger(__name__)
 
@@ -15,9 +16,15 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("soc360.startup", environment=settings.ENVIRONMENT)
     
+    #Verificar Redis
+    if not await ping_redis():
+        raise RuntimeError("No se puede conectar a Redis")
+    logger.info("soc360.redis_connected")
+    
     yield
     
     #Liberación de recursos al apagar
+    await close_pool()
     logger.info("soc360.shutdown")
 
 def create_app() -> FastAPI:

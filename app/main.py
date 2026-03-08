@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.config import settings
+from app.config import settings
 from app.core.logging import setup_logging, get_logger
 
 logger = get_logger(__name__)

@@ -1,15 +1,16 @@
 from contextlib import asynccontextmanager
-import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.core.logging import setup_logging
+from app.core.logging import setup_logging, get_logger
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
+
+APP_VERSION = "0.1.0"
 
 
 @asynccontextmanager
-async def lifespan(app):
+async def lifespan(app: FastAPI):
     #Inicialización de servicios al arrancar
     setup_logging()
     logger.info("soc360.startup", environment=settings.ENVIRONMENT)
@@ -21,9 +22,9 @@ async def lifespan(app):
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="SOC 360 PYMEs",
+        title=settings.APP_NAME,
         description="SOC as a Service para pequeñas y medianas empresas",
-        version="0.1.0",
+        version=APP_VERSION,
         docs_url="/api/docs",
         redoc_url=None,
         lifespan=lifespan,
@@ -41,8 +42,9 @@ def create_app() -> FastAPI:
     #Endpoint para verificar que el servidor está vivo
     @app.get("/health", tags=["system"])
     async def health():
-        return {"status": "ok", "version": "0.1.0"}
+        return {"status": "ok", "version": APP_VERSION}
     
     return app
+
 
 app = create_app()

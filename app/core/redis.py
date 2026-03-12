@@ -1,6 +1,6 @@
 from collections.abc import AsyncGenerator
 from redis.asyncio import Redis, ConnectionPool
-from app.config import settings
+from app.core.config import settings
 
 
 #Se crea una vez cuando arranca la app

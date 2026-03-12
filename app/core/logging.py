@@ -1,6 +1,6 @@
 import logging
 import structlog
-from app.config import settings
+from app.core.config import settings
 
 _SENSITIVE_KEYS = {"password", "token", "secret", "api_key", "authorization"}
 

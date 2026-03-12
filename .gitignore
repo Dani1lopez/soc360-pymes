@@ -1,4 +1,3 @@
-cat > .gitignore << 'EOF'
 # Python
 __pycache__/
 *.py[cod]
@@ -20,6 +19,8 @@ htmlcov/
 !.env.example
 
 # Docker
+postgres-data/
+redis-data/
 docker/postgres-data/
 docker/redis-data/
 
@@ -35,4 +36,28 @@ Thumbs.db
 # Logs
 *.log
 logs/
-EOF
+
+# Lab — credenciales del entorno de pruebas
+lab/configs/*.env
+!lab/configs/*.env.example
+
+# Frontend (F4)
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# Resultados de scans — pueden contener datos sensibles de clientes
+*.xml
+*.nmap
+scans/results/
+reports/generated/
+
+# Monitoring — datos locales de Grafana/Prometheus
+infrastructure/monitoring/grafana/data/
+infrastructure/monitoring/prometheus/data/
+
+# Agentes AI — caché local
+.ollama/
+agents/cache/

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy import text
 from sqlalchemy.orm import DeclarativeBase
 
-from app.config import settings
+from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
@@ -87,6 +89,7 @@ async def get_current_user(
                 detail="Tenant inactivo o no encontrado",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+    user.current_jti = jti
     return user
 
 

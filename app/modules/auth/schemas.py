@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic import BaseModel, EmailStr, field_validator
 import re
 
@@ -23,7 +25,7 @@ class ChangePasswordRequest(BaseModel):
     
     @field_validator("new_password")
     @classmethod
-    def validate(cls, v: str) -> str:
+    def validate_strength(cls, v: str) -> str:
         if len(v) < 12:
             raise ValueError("La contraseña debe de tener al menos 12 caracteres")
         if not re.search(r"[A-Z]", v):

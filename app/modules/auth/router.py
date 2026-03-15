@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
+from sqlalchemy.ext.asyncio import AsyncSession
+from redis.asyncio import Redis
+
+from app.core.config import settings
+from app.core.exceptions import AuthError
+from app.core.database import get_db
+from app.core.redis import get_redis
+from app.dependencies import get_current_user
+from app.modules.auth.schemas import (
+    ChangePasswordRequest,
+    LoginRequest,
+    TokenResponse,
+)
+from app.modules.auth import service
+from app.modules.users.models import User
+
+
+REFRESH_COOKIE_NAME = "refresh_token"
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _set_refresh_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=settings.ENVIRONMENT != "development",
+        samesite="strict",
+        max_age=7 * 24 * 3600,
+        path="/api/v1/auth",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=REFRESH_COOKIE_NAME,
+        path="/api/v1/auth",
+    )
+
+
+@router.post("/login", response_model=TokenResponse)
+async def login(
+    body: LoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+) -> TokenResponse:
+    try:
+        token_response, refresh_token = await service.login(
+            email=body.email,
+            password=body.password,
+            request_ip=request.client.host if request.client else None,
+            db=db,
+            redis=redis,
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    
+    _set_refresh_cookie(response, refresh_token)
+    return token_response
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE_NAME),
+) -> TokenResponse:
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh token ausente")
+    
+    try:
+        token_response, new_refresh = await service.refresh_tokens(
+            refresh_token=refresh_token,
+            db=db,
+            redis=redis,
+            request_ip=request.client.host if request.client else None,
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    
+    _set_refresh_cookie(response, new_refresh)
+    return token_response
+
+
+@router.post("/logout", status_code=200)
+async def logout(
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    current_user: User = Depends(get_current_user),
+    refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE_NAME),
+) -> dict:
+    try:
+        await service.logout(
+            jti=current_user.current_jti,  # type: ignore[attr-defined]
+            # Si no hay cookie, solo revocamos el access token (jti)
+            refresh_token=refresh_token or "",
+            db=db,
+            redis=redis,
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    
+    _clear_refresh_cookie(response)
+    return {"detail": "Sesion cerrada correctamente"}
+
+
+@router.post("/change-password", status_code=200)
+async def change_password(
+    body: ChangePasswordRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    try:
+        await service.change_password(
+            user_id=current_user.id,
+            current_password=body.current_password,
+            new_password=body.new_password,
+            current_jti=current_user.current_jti, # type: ignore[attr-defined]
+            db=db,
+            redis=redis,
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    
+    _clear_refresh_cookie(response)
+    return {"detail": "Contraseña actualizada. Inicia sesion de nuevo"}

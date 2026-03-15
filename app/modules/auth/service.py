@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import hashlib
 import secrets
 from datetime import datetime, timezone, timedelta
@@ -18,7 +20,7 @@ from app.modules.auth.models import RefreshToken
 from app.modules.users.models import User
 from app.modules.tenants.models import Tenant
 from app.modules.auth.schemas import TokenResponse
-
+from app.core.exceptions import AuthError
 
 MAX_ACTIVE_SESSIONS = 5
 REFRESH_TOKEN_EXPIRE_DAYS = 7
@@ -26,17 +28,6 @@ LOGIN_ATTEMPTS_WINDOW_SECONDS = 900
 LOGIN_ATTEMPTS_MAX = 10
 
 
-class AuthError(Exception):
-    """
-    Error de autenticación lanzado por el service layer.
-    El router es responsable de convertirlo a HTTPException.
-    Separar la excepción del HTTP permite reutilizar el service
-    en tests y workers sin depender de FastAPI.
-    """
-    def __init__(self, message: str, code: str = "AUTH_ERROR"):
-        self.message = message
-        self.code = code
-        super().__init__(message)
 
 def _login_attempts_key(email: str) -> str:
     """Genera la clave Redis para el contador de intentos de login."""
@@ -50,8 +41,8 @@ async def _check_account_lockout(email: str, redis: Redis) -> None:
     if attempts and int(attempts) >= LOGIN_ATTEMPTS_MAX:
         ttl = await redis.ttl(key)
         raise AuthError(
-            message=f"Cuenta bloqueada temporalmente. Intenta de nuevo en {ttl} segundos.",
-            code="ACCOUNT_TEMPORARILY_LOCKED",
+            status_code=429,
+            detail=f"Cuenta bloqueada temporalmente. Intenta de nuevo en {ttl} segundos.",
         )
 
 
@@ -76,8 +67,8 @@ async def _get_active_user(email: str, db: AsyncSession) -> User:
     )
     if not user or not user.is_active:
         raise AuthError(
-            message="Credenciales incorrectas",
-            code="INVALID_CREDENTIALS",
+            status_code=401,
+            detail="Credenciales incorrectas",
         )
     return user
 
@@ -89,8 +80,8 @@ async def _get_active_user_by_id(user_id: UUID, db: AsyncSession) -> User:
     )
     if not user or not user.is_active:
         raise AuthError(
-            message="Usuario inactivo.",
-            code="USER_INACTIVE",
+            status_code=401,
+            detail="Usuario inactivo.",
         )
     return user
 
@@ -106,8 +97,8 @@ async def _check_tenant_active(user: User, db: AsyncSession) -> None:
     
     if not tenant or not tenant.is_active:
         raise AuthError(
-            message="Credenciales incorrectas",
-            code="INVALID_CREDENTIALS",
+            status_code=401,
+            detail="Credenciales incorrectas",
         )
 
 
@@ -176,8 +167,8 @@ async def login(
     if not verify_password(password, user.hashed_password):
         await _record_failed_attempt(email, redis)
         raise AuthError(
-            message="Credenciales incorrectas.",
-            code="INVALID_CREDENTIALS",
+            status_code=401,
+            detail="Credenciales incorrectas.",
         )
     
     await _check_tenant_active(user, db)
@@ -215,8 +206,8 @@ async def refresh_tokens(
     )
     if not record:
         raise AuthError(
-            message="Refresh token invalido o expirado",
-            code="INVALID_REFRESH_TOKEN",
+            status_code=401,
+            detail="Refresh token invalido o expirado",
         )
     
     user = await _get_active_user_by_id(record.user_id, db)
@@ -276,8 +267,8 @@ async def change_password(
     user = await _get_active_user_by_id(user_id, db)
     if not verify_password(current_password, user.hashed_password):
         raise AuthError(
-            message="La contraseña actual es incorrecta.",
-            code="INVALID_CURRENT_PASSWORD",
+            status_code=400,
+            detail="La contraseña actual es incorrecta.",
         )
     
     user.hashed_password = hash_password(new_password)

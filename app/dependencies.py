@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import AsyncGenerator
 from jose import JWTError
 
-from app.database import get_db, set_tenant_context
+from app.core.database import get_db, set_tenant_context
 from app.core.redis import get_redis
 from app.modules.users.models import User
 from app.modules.tenants.models import Tenant

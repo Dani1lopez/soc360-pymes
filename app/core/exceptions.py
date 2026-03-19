@@ -17,3 +17,7 @@ class AuthError(AppError):
 
 class TenantError(AppError):
     """Errores del modulo tenants"""
+
+
+class UserError(AppError):
+    """Errores del modulo users"""

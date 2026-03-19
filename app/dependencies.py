@@ -123,3 +123,19 @@ def require_role(minimum_role: str):
             )
         return current_user
     return _check
+
+async def require_superadmin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Permite el acceso solo a usuarios con is_superadmin=True"""
+    if not current_user.is_superadmin:
+        logger.warning(
+            "auth_failed",
+            reason="not_superadmin",
+            user_id=str(current_user.id),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Se requieren permisos de superadmin",
+        )
+    return current_user

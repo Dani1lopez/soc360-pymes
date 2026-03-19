@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.dependencies import get_current_user, require_superadmin
+from app.core.database import get_db
+from app.core.exceptions import TenantError
+from app.modules.users.models import User
+from app.modules.tenants import schemas, service
+
+
+router = APIRouter(prefix="/tenants", tags=["tenants"])
+
+
+@router.post(
+    "/",
+    response_model=schemas.TenantResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear nuevo tenant",
+)
+async def create_tenant(
+    payload: schemas.TenantCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_superadmin),
+) -> schemas.TenantResponse:
+    """Crea una nueva organizacion- Solo superadmin"""
+    try:
+        tenant = await service.create_tenant(payload, db)
+    except TenantError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=str(exc),
+        )
+    return schemas.TenantResponse.model_validate(tenant)
+
+
+@router.get(
+    "/",
+    response_model=list[schemas.TenantResponse],
+    summary="Listar todos los tenants",
+)
+async def list_tenants(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    include_inactive: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_superadmin),
+) -> list[schemas.TenantResponse]:
+    """Lista paginada de tenants"""
+    tenants = await service.list_tenants(db, offset=offset, include_inactive=include_inactive, limit=limit)
+    return [schemas.TenantResponse.model_validate(t) for t in tenants]
+
+
+@router.get(
+    "/{tenant_id}",
+    response_model=schemas.TenantResponse,
+    summary="Obtener tenant por id",
+)
+async def get_tenant(
+    tenant_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> schemas.TenantResponse:
+    if not current_user.is_superadmin:
+        if current_user.tenant_id != tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Tenant no encontrado",
+            )
+    
+    tenant = await service.get_tenant_by_id(tenant_id, db)
+    if tenant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant no encontrado",
+        )
+    return schemas.TenantResponse.model_validate(tenant)
+
+
+@router.patch(
+    "/{tenant_id}",
+    response_model=schemas.TenantResponse,
+    summary="Actualizar tenant",
+)
+async def update_tenant(
+    tenant_id: UUID,
+    payload: schemas.TenantUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_superadmin),
+) -> schemas.TenantResponse:
+    """Actualiza campos de un tenant"""
+    try:
+        updated = await service.update_tenant(tenant_id, payload, db)
+    except TenantError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=str(exc),
+        )
+    return schemas.TenantResponse.model_validate(updated)
+
+
+@router.delete(
+    "/{tenant_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Desactivar tenant"
+)
+async def deactivate_tenant(
+    tenant_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_superadmin),
+) -> None:
+    """Desactiva un tenant.No borra datos"""
+    try:
+        await service.deactivate_tenant(tenant_id, db)
+    except TenantError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=str(exc),
+        )

@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.redis import ping_redis, close_pool
 from app.modules.auth.router import router as auth_router
+from app.modules.tenants.router import router as tenants_router
 
 setup_logging()
 logger = get_logger(__name__)
@@ -58,6 +59,7 @@ def create_app() -> FastAPI:
     
     #Routers
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(tenants_router, prefix="/api/v1")
     
     #Endpoint para verificar que el servidor está vivo
     @app.get("/health", tags=["system"])

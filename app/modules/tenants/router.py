@@ -105,7 +105,8 @@ async def update_tenant(
 @router.delete(
     "/{tenant_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Desactivar tenant"
+    response_model=None,
+    summary="Desactivar tenant",
 )
 async def deactivate_tenant(
     tenant_id: UUID,

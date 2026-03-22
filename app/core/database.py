@@ -54,8 +54,7 @@ async def set_tenant_context(
         await db.execute(text("SET LOCAL app.is_superadmin = 'true'"))
     else:
         await db.execute(
-            text("SET LOCAL app.current_tenant = :tenant_id"),
-            {"tenant_id": str(tenant_id)},
+            text(f"SET LOCAL app.current_tenant = '{str(tenant_id)}'"),
         )
         await db.execute(text("SET LOCAL app.is_superadmin = 'false'"))
     

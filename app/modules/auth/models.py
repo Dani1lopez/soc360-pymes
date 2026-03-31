@@ -5,7 +5,7 @@ from uuid import UUID as PyUUID
 from typing import TYPE_CHECKING
 
 
-from sqlalchemy import VARCHAR, ForeignKey, Index
+from sqlalchemy import VARCHAR, ForeignKey, Index, text
 from sqlalchemy.dialects.postgresql import INET, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -22,7 +22,7 @@ class RefreshToken(Base):
     id: Mapped[PyUUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
-        server_default="gen_random_uuid()",
+        server_default=text("gen_random_uuid()"),
     )
     
     #Foreign Key
@@ -60,7 +60,7 @@ class RefreshToken(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
         nullable=False,
-        server_default="NOW()",
+        server_default=text("NOW()"),
     )
     
     #Relationship

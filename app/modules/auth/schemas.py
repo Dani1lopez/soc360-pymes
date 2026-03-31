@@ -1,16 +1,21 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, EmailStr, field_validator
 import re
 
+from pydantic import BaseModel, field_validator
+
+
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
-    
+
     @field_validator("email", mode="before")
     @classmethod
     def normalize_email(cls, v: str) -> str:
-        return str(v).strip().lower()
+        v = str(v).strip().lower()
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", v):
+            raise ValueError("Formato de email inválido")
+        return v
 
 
 class TokenResponse(BaseModel):
@@ -22,7 +27,7 @@ class TokenResponse(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
-    
+
     @field_validator("new_password")
     @classmethod
     def validate_strength(cls, v: str) -> str:

@@ -24,4 +24,5 @@ pydantic-settings==2.7.0
 httpx==0.27.2
 
 # ── Logging ────────────────────────────────────────────────────
-structlog==24.4.0email-validator==2.3.0
+structlog==24.4.0
+email-validator==2.3.0

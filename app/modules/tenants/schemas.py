@@ -31,7 +31,7 @@ class TenantCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     
     name: str
-    slug: str
+    slug: str | None = None
     plan: Literal["free", "starter", "pro", "enterprise"] = "free"
     max_assets: int = 10
     settings: TenantSettings = TenantSettings()

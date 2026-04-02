@@ -57,21 +57,22 @@ async def _is_slug_taken(
 
 async def create_tenant(data: TenantCreate, db: AsyncSession) -> Tenant:
     """Crea un nuevo tenant"""
-    base_slug = _generate_slug(data.name)
+    if data.slug:
+        if await _is_slug_taken(db, data.slug):
+            raise TenantError("El slug ya esta en uso.", status_code=409)
+        slug = data.slug
+    else:
+        base_slug = _generate_slug(data.name)
+        slug = base_slug
+        suffix = 2
+        MAX_SLUG_ATTEMPTS = 100
+        while await _is_slug_taken(db, slug):
+            if suffix > MAX_SLUG_ATTEMPTS:
+                raise TenantError("No se pudo generar un slug único para este nombre.", status_code=409)
+            slug = f"{base_slug}-{suffix}"
+            suffix += 1
     
-    slug = base_slug
-    suffix = 2
-    
-    MAX_SLUG_ATTEMPTS = 100
-    while await _is_slug_taken(db, slug):
-        if suffix > MAX_SLUG_ATTEMPTS:
-            raise TenantError("No se pudo generar un slug único para este nombre", status_code=409)
-        slug = f"{base_slug}-{suffix}"
-        suffix += 1
-    
-    max_assets = data.max_assets if data.max_assets is not None else _plan_to_max_assets(data.plan)
-    
-    raw_settings: dict[str, Any] = data.settings if data.settings is not None else {}
+    raw_settings: dict[str, Any] = data.settings.model_dump() if data.settings is not None else {}
     validated_settings = TenantSettings.model_validate(raw_settings).model_dump()
     
     tenant = Tenant(
@@ -79,7 +80,7 @@ async def create_tenant(data: TenantCreate, db: AsyncSession) -> Tenant:
         slug=slug,
         plan=data.plan,
         is_active=True,
-        max_assets=max_assets,
+        max_assets=_plan_to_max_assets(data.plan),
         settings=validated_settings,
     )
     db.add(tenant)

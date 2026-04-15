@@ -61,3 +61,4 @@ infrastructure/monitoring/prometheus/data/
 # Agentes AI — caché local
 .ollama/
 agents/cache/
+.atl/

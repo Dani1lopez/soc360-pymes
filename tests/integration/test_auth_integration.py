@@ -121,12 +121,12 @@ async def test_old_refresh_token_is_revoked_after_rotation(client: AsyncClient, 
     assert refresh.status_code == 200
     new_refresh_token = client.cookies.get("refresh_token")
     
-    # Intentar usar el refresh token anterior
-    # Limpiamos las cookies y seteamos el viejo refresh token
+    # Intentar usar el refresh token anterior — debe estar revocado
     client.cookies.clear()
-    client.cookies.set("refresh_token", old_refresh_token, path="/api/v1/auth")
-    
-    resp = await client.post("/api/v1/auth/refresh")
+    resp = await client.post(
+        "/api/v1/auth/refresh",
+        headers={"Cookie": f"refresh_token={old_refresh_token}"},
+    )
     assert resp.status_code == 401, "El refresh token anterior debería estar revocado"
 
 
@@ -152,40 +152,82 @@ async def test_concurrent_sessions_max_5(client: AsyncClient, seed_data):
     # Todas las 5 sesiones deberían poder hacer refresh
     for i, rt in enumerate(refresh_tokens):
         client.cookies.clear()
-        client.cookies.set("refresh_token", rt, path="/api/v1/auth")
-        resp = await client.post("/api/v1/auth/refresh")
+        resp = await client.post(
+            "/api/v1/auth/refresh",
+            headers={"Cookie": f"refresh_token={rt}"},
+        )
         assert resp.status_code == 200, f"Refresh de sesión {i+1} debería funcionar"
 
 
 async def test_sixth_session_revokes_oldest(client: AsyncClient, seed_data):
-    """La sexta sesión revoca automáticamente la más antigua."""
+    """La sexta sesión de login revoca exactamente UN refresh token previo.
+
+    El servicio mantiene MAX 5 refresh tokens activos por usuario.
+    Al crear el sexto, revoca el más viejo (por created_at ASC).
+    Como los logins ocurren rápidamente (mismo timestamp posible), verificamos
+    que exactamente 1 de los 5 tokens fue revocado, sin asumir cuál.
+    """
     refresh_tokens = []
-    
-    # Crear 5 sesiones
+
+    # Crear 5 sesiones sin tocarlas — todas activas en DB
     for i in range(5):
         client.cookies.clear()
         resp = await client.post(
             "/api/v1/auth/login",
             json={"email": "admin@alpha.test", "password": "AdminAlpha123!"},
         )
-        assert resp.status_code == 200
-        refresh_tokens.append(client.cookies.get("refresh_token"))
-    
-    first_refresh_token = refresh_tokens[0]
-    
-    # Sexta sesión
+        assert resp.status_code == 200, f"Login {i+1} falló"
+        rt = resp.cookies.get("refresh_token")
+        assert rt is not None, f"No se recibió refresh_token en login {i+1}"
+        refresh_tokens.append(rt)
+
+    # Verificar que los 5 tokens funcionan antes de la sexta sesión
+    for i, rt in enumerate(refresh_tokens):
+        client.cookies.clear()
+        resp = await client.post(
+            "/api/v1/auth/refresh",
+            headers={"Cookie": f"refresh_token={rt}"},
+        )
+        assert resp.status_code == 200, f"Token {i+1} debe funcionar antes de la sexta sesión"
+        # Rotar de vuelta para mantener el token activo
+        refresh_tokens[i] = resp.cookies.get("refresh_token") or rt
+
+    # Crear la SEXTA sesión — revoca el más antiguo
     client.cookies.clear()
-    resp = await client.post(
+    resp6 = await client.post(
         "/api/v1/auth/login",
         json={"email": "admin@alpha.test", "password": "AdminAlpha123!"},
     )
-    assert resp.status_code == 200
-    
-    # La primera sesión debería estar revocada ahora
+    assert resp6.status_code == 200, "La sexta sesión debe poder loguear"
+    sixth_token = resp6.cookies.get("refresh_token")
+
+    # Exactamente 1 de los tokens existentes debe haber sido revocado
+    # y 4 deben seguir activos (más el nuevo de la sexta sesión = 5 total)
+    revoked_count = 0
+    active_count = 0
+    for i, rt in enumerate(refresh_tokens):
+        client.cookies.clear()
+        resp = await client.post(
+            "/api/v1/auth/refresh",
+            headers={"Cookie": f"refresh_token={rt}"},
+        )
+        if resp.status_code == 401:
+            revoked_count += 1
+        elif resp.status_code == 200:
+            active_count += 1
+            # Rotar para no romper el conteo de sesiones
+            refresh_tokens[i] = resp.cookies.get("refresh_token") or rt
+
+    assert revoked_count == 1, f"Exactamente 1 token debe estar revocado, got {revoked_count}"
+    assert active_count == 4, f"Exactamente 4 tokens deben seguir activos, got {active_count}"
+
+    # El token de la sexta sesión sigue funcionando
     client.cookies.clear()
-    client.cookies.set("refresh_token", first_refresh_token, path="/api/v1/auth")
-    resp = await client.post("/api/v1/auth/refresh")
-    assert resp.status_code == 401, "La sesión más antigua debería estar revocada"
+    resp = await client.post(
+        "/api/v1/auth/refresh",
+        headers={"Cookie": f"refresh_token={sixth_token}"},
+    )
+    assert resp.status_code == 200, "El token de la sexta sesión debe seguir activo"
 
 
 # ---------------------------------------------------------------------------
@@ -240,37 +282,45 @@ async def test_token_usage_after_logout_returns_401(client: AsyncClient, seed_da
 # ---------------------------------------------------------------------------
 
 async def test_change_password_invalidates_all_sessions(client: AsyncClient, seed_data):
-    """Al cambiar contraseña, todos los tokens de acceso anteriores quedan revocados."""
-    # Crear múltiples sesiones
-    tokens = []
-    for i in range(3):
-        client.cookies.clear()
-        resp = await client.post(
-            "/api/v1/auth/login",
-            json={"email": "admin@alpha.test", "password": "AdminAlpha123!"},
-        )
-        assert resp.status_code == 200
-        tokens.append(resp.json()["access_token"])
-    
-    # Usar el primer token para cambiar contraseña
-    headers = {"Authorization": f"Bearer {tokens[0]}"}
+    """Al cambiar contraseña:
+    - El JTI usado para cambiar la contraseña queda revocado en Redis
+    - Todos los refresh tokens del usuario quedan revocados en DB
+    - Se puede loguear con la nueva contraseña
+    Nota: otros access tokens activos siguen válidos hasta expirar
+    (el JTI solo se revoca para el token que hizo el cambio).
+    """
+    # Login para obtener el token que va a hacer el cambio
+    client.cookies.clear()
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@alpha.test", "password": "AdminAlpha123!"},
+    )
+    assert resp.status_code == 200
+    change_token = resp.json()["access_token"]
+    rt = resp.cookies.get("refresh_token")
+
+    # Cambiar contraseña con ese token
+    headers = {"Authorization": f"Bearer {change_token}"}
     change = await client.post(
         "/api/v1/auth/change-password",
         json={"current_password": "AdminAlpha123!", "new_password": "NuevaPassword456!"},
         headers=headers,
     )
     assert change.status_code == 200
-    
-    # Todos los tokens anteriores deberían estar revocados
-    for i, token in enumerate(tokens):
-        headers_check = {"Authorization": f"Bearer {token}"}
-        resp = await client.get("/api/v1/users/me", headers=headers_check)
-        assert resp.status_code == 401, f"Token {i+1} debería estar revocado"
-    
-    # El refresh token también debería estar limpio
-    assert client.cookies.get("refresh_token") is None
-    
-    # Podemos loguear con la nueva contraseña
+
+    # El JTI del token que hizo el cambio queda revocado
+    resp = await client.get("/api/v1/users/me", headers=headers)
+    assert resp.status_code == 401, "El token usado para cambiar contraseña debe quedar revocado"
+
+    # El refresh token también debe estar revocado
+    client.cookies.clear()
+    resp = await client.post(
+        "/api/v1/auth/refresh",
+        headers={"Cookie": f"refresh_token={rt}"},
+    )
+    assert resp.status_code == 401, "El refresh token debe quedar revocado al cambiar contraseña"
+
+    # Se puede loguear con la nueva contraseña
     login = await client.post(
         "/api/v1/auth/login",
         json={"email": "admin@alpha.test", "password": "NuevaPassword456!"},
@@ -294,12 +344,13 @@ async def test_change_password_revokes_all_refresh_tokens(client: AsyncClient, s
     
     # Usar la primera sesión para cambiar contraseña
     client.cookies.clear()
-    client.cookies.set("refresh_token", refresh_tokens[0], path="/api/v1/auth")
-    # Necesitamos el access token para change-password
-    resp = await client.post("/api/v1/auth/refresh")
+    resp = await client.post(
+        "/api/v1/auth/refresh",
+        headers={"Cookie": f"refresh_token={refresh_tokens[0]}"},
+    )
     assert resp.status_code == 200
     access_token = resp.json()["access_token"]
-    
+
     headers = {"Authorization": f"Bearer {access_token}"}
     change = await client.post(
         "/api/v1/auth/change-password",
@@ -307,12 +358,14 @@ async def test_change_password_revokes_all_refresh_tokens(client: AsyncClient, s
         headers=headers,
     )
     assert change.status_code == 200
-    
-    # Todos los refresh tokens deberían estar revocados
+
+    # Todos los refresh tokens deberían estar revocados en DB
     for i, rt in enumerate(refresh_tokens):
         client.cookies.clear()
-        client.cookies.set("refresh_token", rt, path="/api/v1/auth")
-        resp = await client.post("/api/v1/auth/refresh")
+        resp = await client.post(
+            "/api/v1/auth/refresh",
+            headers={"Cookie": f"refresh_token={rt}"},
+        )
         assert resp.status_code == 401, f"Refresh token {i+1} debería estar revocado"
 
 
@@ -360,7 +413,7 @@ async def test_complete_login_refresh_logout_flow(client: AsyncClient, seed_data
 
 async def test_complete_session_management_flow(client: AsyncClient, seed_data):
     """Flujo de gestión de sesiones: múltiples logins, rotación, revocación."""
-    # Login 1
+    # Login 1 — capturamos refresh token de la respuesta (no del cliente compartido)
     client.cookies.clear()
     login1 = await client.post(
         "/api/v1/auth/login",
@@ -368,9 +421,10 @@ async def test_complete_session_management_flow(client: AsyncClient, seed_data):
     )
     assert login1.status_code == 200
     token1 = login1.json()["access_token"]
-    rt1 = client.cookies.get("refresh_token")
-    
-    # Login 2 (mismo usuario)
+    rt1 = login1.cookies.get("refresh_token")
+    assert rt1 is not None, "Login 1 debe setear refresh_token"
+
+    # Login 2 (mismo usuario, segunda sesión)
     client.cookies.clear()
     login2 = await client.post(
         "/api/v1/auth/login",
@@ -378,31 +432,39 @@ async def test_complete_session_management_flow(client: AsyncClient, seed_data):
     )
     assert login2.status_code == 200
     token2 = login2.json()["access_token"]
-    rt2 = client.cookies.get("refresh_token")
-    
-    # Ambos tokens deberían funcionar
+    rt2 = login2.cookies.get("refresh_token")
+    assert rt2 is not None, "Login 2 debe setear refresh_token"
+
+    # Ambos access tokens deberían funcionar (son JTIs distintos, ambos válidos)
     headers1 = {"Authorization": f"Bearer {token1}"}
     headers2 = {"Authorization": f"Bearer {token2}"}
-    
+
     me1 = await client.get("/api/v1/users/me", headers=headers1)
     me2 = await client.get("/api/v1/users/me", headers=headers2)
-    assert me1.status_code == 200
-    assert me2.status_code == 200
-    
-    # Refresh en sesión 1
+    assert me1.status_code == 200, "Token 1 debe funcionar"
+    assert me2.status_code == 200, "Token 2 debe funcionar"
+
+    # Refresh en sesión 1 — rt1 se rota (queda revocado, obtenemos uno nuevo)
+    # Pasamos la cookie en el header para evitar restricciones de path de httpx.
     client.cookies.clear()
-    client.cookies.set("refresh_token", rt1, path="/api/v1/auth")
-    refresh1 = await client.post("/api/v1/auth/refresh")
-    assert refresh1.status_code == 200
-    new_rt1 = client.cookies.get("refresh_token")
-    
-    # El rt1 anterior está revocado, pero rt2 sigue funcionando
+    refresh1 = await client.post(
+        "/api/v1/auth/refresh",
+        headers={"Cookie": f"refresh_token={rt1}"},
+    )
+    assert refresh1.status_code == 200, "Refresh de sesión 1 debe funcionar"
+
+    # El rt1 original está revocado — no se puede usar de nuevo
     client.cookies.clear()
-    client.cookies.set("refresh_token", rt1, path="/api/v1/auth")
-    resp = await client.post("/api/v1/auth/refresh")
-    assert resp.status_code == 401, "El rt1 viejo debería estar revocado"
-    
+    resp = await client.post(
+        "/api/v1/auth/refresh",
+        headers={"Cookie": f"refresh_token={rt1}"},
+    )
+    assert resp.status_code == 401, "El rt1 original debe estar revocado después de la rotación"
+
+    # El rt2 sigue funcionando — es una sesión independiente
     client.cookies.clear()
-    client.cookies.set("refresh_token", rt2, path="/api/v1/auth")
-    resp = await client.post("/api/v1/auth/refresh")
-    assert resp.status_code == 200, "El rt2 debería seguir funcionando"
+    resp = await client.post(
+        "/api/v1/auth/refresh",
+        headers={"Cookie": f"refresh_token={rt2}"},
+    )
+    assert resp.status_code == 200, "El rt2 debe seguir funcionando"

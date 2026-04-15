@@ -227,11 +227,13 @@ async def test_user_cannot_deactivate_self(client: AsyncClient, analyst_a_header
 
 
 async def test_user_self_deactivate_via_delete_forbidden(
-    client: AsyncClient, analyst_a_headers, seed_data
+    client: AsyncClient, admin_a_headers, seed_data
 ):
-    """Usuario no puede eliminarse a si mismo via delete."""
-    resp = await client.delete(f"/api/v1/users/{ANALYST_A_ID}", headers=analyst_a_headers)
-    assert resp.status_code == 409
+    """Admin no puede desactivarse a si mismo via DELETE — devuelve 409."""
+    # El endpoint DELETE requiere rol admin+; el check de self-delete ocurre DESPUÉS del check de rol.
+    # Por eso usamos admin_a intentando borrarse a sí mismo (no analyst que fallaría en 403 por rol).
+    resp = await client.delete(f"/api/v1/users/{ADMIN_A_ID}", headers=admin_a_headers)
+    assert resp.status_code == 409, f"Self-delete debe devolver 409, got {resp.status_code}: {resp.text}"
 
 
 # ---------------------------------------------------------------------------
@@ -326,16 +328,19 @@ async def test_admin_cannot_promote_analyst_to_admin(
     assert resp.status_code == 403
 
 
-async def test_admin_cannot_promote_viewer_to_analyst(
+async def test_admin_can_promote_viewer_to_analyst(
     client: AsyncClient, admin_a_headers, seed_data
 ):
-    """Admin no puede promover viewer a analyst."""
+    """Admin SÍ puede promover viewer a analyst — analyst es un rol menor que admin.
+    La restricción solo aplica para roles >= admin (admin y superadmin).
+    """
     resp = await client.patch(
         f"/api/v1/users/{VIEWER_A_ID}",
         json={"role": "analyst"},
         headers=admin_a_headers,
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 200, f"Admin debe poder promover viewer→analyst, got {resp.status_code}: {resp.text}"
+    assert resp.json()["role"] == "analyst"
 
 
 # ---------------------------------------------------------------------------

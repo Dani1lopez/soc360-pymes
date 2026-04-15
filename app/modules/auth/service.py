@@ -195,6 +195,7 @@ async def refresh_tokens(
     db: AsyncSession,
     redis: Redis,
     request_ip: str | None = None,
+    old_jti: str | None = None,
 ) -> tuple[TokenResponse, str]:
     """Invalida el anterior y genera uno nuevo"""
     token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
@@ -224,6 +225,14 @@ async def refresh_tokens(
         role=user.role,
         is_superadmin=user.is_superadmin,
     )
+    
+    # Revocar el access token viejo si se proporcionó
+    if old_jti:
+        await revoke_access_token(
+            jti=old_jti,
+            ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            redis=redis,
+        )
     
     return TokenResponse(
         access_token=access_token,

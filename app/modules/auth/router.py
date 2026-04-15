@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.exceptions import AuthError
 from app.core.database import get_db
 from app.core.redis import get_redis
+from app.core.security import decode_access_token
 from app.dependencies import get_current_user
 from app.modules.auth.schemas import (
     ChangePasswordRequest,
@@ -76,9 +77,21 @@ async def refresh(
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Refresh token ausente")
     
+    # Extraer JTI viejo del access token si existe (no es requerido)
+    old_jti = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        try:
+            token = auth_header[7:]
+            payload = decode_access_token(token)
+            old_jti = payload.get("jti")
+        except Exception:
+            pass  # token inválido o expirado — no importa, no podemos removerlo
+    
     try:
         token_response, new_refresh = await service.refresh_tokens(
             refresh_token=refresh_token,
+            old_jti=old_jti,
             db=db,
             redis=redis,
             request_ip=request.client.host if request.client else None,

@@ -45,8 +45,20 @@ async def test_account_lockout_reset_after_successful_login(client: AsyncClient,
     )
     assert resp.status_code == 200, "El login exitoso debería funcionar y resetear el contador"
     
-    # Ahora podemos tener 10 intentos fallidos más sin bloqueo inmediato
-    # (el contador se reseteó, así que volvemos a empezar desde 0)
+    # Verificar que el contador se reseteó: 10 intentos fallidos más
+    for i in range(10):
+        resp = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@alpha.test", "password": f"WrongPassword{i}!"},
+        )
+        assert resp.status_code == 401, f"Intento {i+1} después del reset debería fallar con 401"
+    
+    # El 11 debería dar 429 (lockout)
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@alpha.test", "password": "WrongPasswordFinal!"},
+    )
+    assert resp.status_code == 429, "Lockout debería ocurrir después de 10 intentos fallidos después del reset"
 
 
 async def test_login_inactive_user_returns_401(client: AsyncClient, seed_data):
@@ -468,3 +480,56 @@ async def test_complete_session_management_flow(client: AsyncClient, seed_data):
         headers={"Cookie": f"refresh_token={rt2}"},
     )
     assert resp.status_code == 200, "El rt2 debe seguir funcionando"
+
+
+# ---------------------------------------------------------------------------
+# JWT VALIDATION EDGE CASES
+# ---------------------------------------------------------------------------
+
+async def test_jwt_invalid_signature_returns_401(client: AsyncClient, seed_data):
+    """Un token con firma inválida devuelve 401."""
+    # Login para obtener un token válido
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@alpha.test", "password": "AdminAlpha123!"},
+    )
+    assert login.status_code == 200
+    access_token = login.json()["access_token"]
+    
+    # Modificar el token (cambiar un carácter en el payload o signature)
+    # Los JWT tienen formato header.payload.signature, modificamos el signature
+    parts = access_token.split(".")
+    if len(parts) == 3:
+        # Invertir un carácter del último segmento (signature)
+        modified_signature = parts[2][:5] + ("0" if parts[2][5] == "1" else "1") + parts[2][6:]
+        modified_token = f"{parts[0]}.{parts[1]}.{modified_signature}"
+    else:
+        modified_token = access_token + "x"
+    
+    # Hacer request con el token modificado
+    headers = {"Authorization": f"Bearer {modified_token}"}
+    resp = await client.get("/api/v1/users/me", headers=headers)
+    assert resp.status_code == 401, "Token con firma inválida debería devolver 401"
+
+
+async def test_request_without_auth_header_returns_401(client: AsyncClient, seed_data):
+    """Una request sin header Authorization devuelve 401."""
+    resp = await client.get("/api/v1/users/me")
+    assert resp.status_code == 401, "Request sin auth header debería devolver 401"
+
+
+async def test_login_invalid_credentials_returns_401(client: AsyncClient, seed_data):
+    """Login con credenciales inválidas devuelve 401."""
+    # Email que no existe
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "noexiste@test.test", "password": "Password123!"},
+    )
+    assert resp.status_code == 401, "Login con email inexistente debería devolver 401"
+    
+    # Password incorrecto
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@alpha.test", "password": "WrongPassword!"},
+    )
+    assert resp.status_code == 401, "Login con password incorrecto debería devolver 401"

@@ -108,9 +108,7 @@ async def test_deactivated_tenant_users_tokens_revoked(
     
     # El token de admin_b ahora debería fallar
     resp = await client.get("/api/v1/users/me", headers=admin_b_headers)
-    # Puede ser 401 o seguir funcionando temporalmente hasta que el token expire
-    # o se haga una verificación adicional. Depende de la implementación.
-    # Generalmente el middleware verifica el tenant en cada request.
+    assert resp.status_code == 401, "El token debería fallar después de desactivar el tenant"
 
 
 async def test_soft_delete_tenant_preserve_data(

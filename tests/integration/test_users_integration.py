@@ -267,6 +267,10 @@ async def test_deactivated_user_token_invalidated(
     # Desactivamos al usuario
     resp = await client.delete(f"/api/v1/users/{VIEWER_A_ID}", headers=admin_a_headers)
     assert resp.status_code == 204
+    
+    # Después de desactivar el usuario, verificar que el token NO funciona
+    resp = await client.get("/api/v1/users/me", headers=viewer_a_headers)
+    assert resp.status_code == 401, "El token debería estar revocado después de desactivar al usuario"
 
 
 # ---------------------------------------------------------------------------
@@ -514,3 +518,85 @@ async def test_cross_tenant_user_creation_prevention(
         headers=admin_a_headers,
     )
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# EMAIL UNIQUENESS
+# ---------------------------------------------------------------------------
+
+async def test_email_unique_globally_returns_409(
+    client: AsyncClient, admin_a_headers, admin_b_headers, seed_data
+):
+    """El email es único globalmente, no solo por tenant."""
+    # Crear un usuario con email duplicate@test.test en tenant A
+    resp = await client.post(
+        "/api/v1/users/",
+        json={
+            "email": "duplicate@test.test",
+            "password": "Password123!",
+            "full_name": "Duplicate Email User A",
+            "role": "viewer",
+            "tenant_id": TENANT_A_ID,
+        },
+        headers=admin_a_headers,
+    )
+    assert resp.status_code == 201, "Primer usuario con email debería crearse"
+    
+    # Intentar crear OTRO usuario con el MISMO email en tenant A → 409
+    resp = await client.post(
+        "/api/v1/users/",
+        json={
+            "email": "duplicate@test.test",
+            "password": "Password123!",
+            "full_name": "Duplicate Email User A2",
+            "role": "viewer",
+            "tenant_id": TENANT_A_ID,
+        },
+        headers=admin_a_headers,
+    )
+    assert resp.status_code == 409, "Email duplicado en mismo tenant debería dar 409"
+    
+    # Intentar crear un usuario con el MISMO email en tenant B → 409 (email es único global)
+    resp = await client.post(
+        "/api/v1/users/",
+        json={
+            "email": "duplicate@test.test",
+            "password": "Password123!",
+            "full_name": "Duplicate Email User B",
+            "role": "viewer",
+            "tenant_id": TENANT_B_ID,
+        },
+        headers=admin_b_headers,
+    )
+    assert resp.status_code == 409, "Email duplicado en otro tenant debería dar 409 (email es único global)"
+
+
+# ---------------------------------------------------------------------------
+# MASS ASSIGNMENT PROTECTION
+# ---------------------------------------------------------------------------
+
+async def test_mass_assignment_rejected(
+    client: AsyncClient, admin_a_headers, seed_data
+):
+    """Campos no permitidos en PATCH son ignorados (no se aplica mass assignment)."""
+    # Obtener el usuario analyst_a para ver su estado actual
+    from tests.conftest import ANALYST_A_ID
+    
+    # Verificar que analyst_a NO es superadmin antes del intento
+    resp = await client.get(f"/api/v1/users/{ANALYST_A_ID}", headers=admin_a_headers)
+    assert resp.status_code == 200
+    assert resp.json()["is_superadmin"] is False, "Analyst no debería ser superadmin inicialmente"
+    
+    # Como admin, hacer PATCH con campos no permitidos como is_superadmin
+    resp = await client.patch(
+        f"/api/v1/users/{ANALYST_A_ID}",
+        json={"is_superadmin": True},
+        headers=admin_a_headers,
+    )
+    # El PATCH puede retornar 200 o 403 dependiendo de la implementación
+    # Lo importante es que el campo no se aplicó
+    
+    # Verificar que el campo NO se aplicó (el usuario NO es superadmin)
+    resp = await client.get(f"/api/v1/users/{ANALYST_A_ID}", headers=admin_a_headers)
+    assert resp.status_code == 200
+    assert resp.json()["is_superadmin"] is False, "El campo is_superadmin no debería haberse aplicado"

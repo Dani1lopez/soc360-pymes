@@ -109,6 +109,7 @@ def get_token_remaining_seconds(payload: dict[str, Any]) -> int:
 
 
 _DENYLIST_PREFIX = "revoked:"
+_ACTIVE_JTIS_PREFIX = "active_jtis:"
 
 
 async def revoke_access_token(jti: str, ttl_seconds: int, redis: Redis) -> None:
@@ -132,6 +133,51 @@ async def revoke_tokens_by_jtis(jtis: list[str], redis: Redis, ttl_seconds: int 
             pipe.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
         await pipe.execute()
     logger.info("Sesiones invalidas en bulk", extra={"count": len(jtis)})
+
+
+async def track_jti(user_id: str, jti: str, redis: Redis) -> None:
+    """Añade el JTI al conjunto de JTIs activos del usuario. Idempotente (SADD)."""
+    await redis.sadd(f"{_ACTIVE_JTIS_PREFIX}{user_id}", jti)
+    logger.debug("JTI trackeado", extra={"user_id": user_id, "jti": jti})
+
+
+async def untrack_jti(user_id: str, jti: str, redis: Redis) -> None:
+    """Remueve el JTI del conjunto de JTIs activos. Seguro si no existe (SREM)."""
+    await redis.srem(f"{_ACTIVE_JTIS_PREFIX}{user_id}", jti)
+    logger.debug("JTI untrackeado", extra={"user_id": user_id, "jti": jti})
+
+
+async def get_active_jtis(user_id: str, redis: Redis) -> list[str]:
+    """Devuelve la lista de JTIs activos para el usuario. Lista vacía si no hay ninguno."""
+    members = await redis.smembers(f"{_ACTIVE_JTIS_PREFIX}{user_id}")
+    return [m.decode() if isinstance(m, bytes) else m for m in members]
+
+
+async def revoke_all_user_access_tokens(
+    user_id: str,
+    redis: Redis,
+    ttl_seconds: int,
+) -> None:
+    """Revoca todos los JTIs activos del usuario y elimina el conjunto.
+    
+    Usa pipeline atómico para denylist + delete. Si falla, la denylist parcial
+    sigue siendo segura (los tokens siguen bloqueados aunque no se borró el set).
+    """
+    key = f"{_ACTIVE_JTIS_PREFIX}{user_id}"
+    jtis = await redis.smembers(key)
+    if not jtis:
+        logger.debug("No hay JTIs activos para revocar", extra={"user_id": user_id})
+        return
+    
+    jti_strs = [j.decode() if isinstance(j, bytes) else j for j in jtis]
+    
+    async with redis.pipeline(transaction=True) as pipe:
+        for jti in jti_strs:
+            pipe.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
+        pipe.delete(key)
+        await pipe.execute()
+    
+    logger.info("Todos los JTIs del usuario revocados", extra={"user_id": user_id, "count": len(jti_strs)})
 
 
 def secure_compare(val_a: str, val_b: str) -> bool:

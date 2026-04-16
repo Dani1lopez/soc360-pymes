@@ -298,8 +298,7 @@ async def test_change_password_invalidates_all_sessions(client: AsyncClient, see
     - El JTI usado para cambiar la contraseña queda revocado en Redis
     - Todos los refresh tokens del usuario quedan revocados en DB
     - Se puede loguear con la nueva contraseña
-    Nota: otros access tokens activos siguen válidos hasta expirar
-    (el JTI solo se revoca para el token que hizo el cambio).
+    Nota: TODOS los access tokens quedan revocados (no solo el que hizo el cambio).
     """
     # Login para obtener el token que va a hacer el cambio
     client.cookies.clear()
@@ -533,3 +532,117 @@ async def test_login_invalid_credentials_returns_401(client: AsyncClient, seed_d
         json={"email": "admin@alpha.test", "password": "WrongPassword!"},
     )
     assert resp.status_code == 401, "Login con password incorrecto debería devolver 401"
+
+
+# ---------------------------------------------------------------------------
+# JTI TRACKING (REFRESH-JTI-TRACKING)
+# ---------------------------------------------------------------------------
+
+async def test_old_access_token_revoked_after_refresh(client: AsyncClient, seed_data):
+    """Después de hacer refresh, el access token anterior queda revocado."""
+    # Login inicial
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@alpha.test", "password": "AdminAlpha123!"},
+    )
+    assert login.status_code == 200
+    old_access_token = login.json()["access_token"]
+    rt = client.cookies.get("refresh_token")
+    
+    # Refresh — el old access token debe quedar revocado
+    refresh = await client.post(
+        "/api/v1/auth/refresh",
+        headers={"Authorization": f"Bearer {old_access_token}"},
+    )
+    assert refresh.status_code == 200
+    
+    # El access token anterior ahora está revocado
+    headers = {"Authorization": f"Bearer {old_access_token}"}
+    resp = await client.get("/api/v1/users/me", headers=headers)
+    assert resp.status_code == 401, "El access token anterior debería estar revocado después del refresh"
+
+
+async def test_change_password_revokes_all_access_tokens(client: AsyncClient, seed_data):
+    """Al cambiar contraseña, TODOS los access tokens activos del usuario se revocan."""
+    # Crear 3 sesiones independientes
+    tokens = []
+    refresh_tokens = []
+    
+    for i in range(3):
+        client.cookies.clear()
+        resp = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@alpha.test", "password": "AdminAlpha123!"},
+        )
+        assert resp.status_code == 200, f"Login {i+1} debería funcionar"
+        tokens.append(resp.json()["access_token"])
+        refresh_tokens.append(client.cookies.get("refresh_token"))
+    
+    # Usar la primera sesión para cambiar contraseña
+    headers = {"Authorization": f"Bearer {tokens[0]}"}
+    change = await client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "AdminAlpha123!", "new_password": "NuevaPassword999!"},
+        headers=headers,
+    )
+    assert change.status_code == 200
+    
+    # TODOS los access tokens deberían estar revocados (incluyendo los de sesiones 2 y 3)
+    for i, token in enumerate(tokens):
+        headers = {"Authorization": f"Bearer {token}"}
+        resp = await client.get("/api/v1/users/me", headers=headers)
+        assert resp.status_code == 401, f"El access token {i+1} debería estar revocado después del cambio de contraseña"
+    
+    # Se puede loguear con la nueva contraseña
+    client.cookies.clear()
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@alpha.test", "password": "NuevaPassword999!"},
+    )
+    assert login.status_code == 200
+
+
+async def test_concurrent_refreshes_both_tracked(client: AsyncClient, seed_data):
+    """Dos refresh feitos com o mesmo refresh token resultam em dois access tokens rastreados."""
+    # Login inicial
+    client.cookies.clear()
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "analyst@alpha.test", "password": "AnalystAlpha123!"},
+    )
+    assert login.status_code == 200
+    first_access_token = login.json()["access_token"]
+    first_rt = client.cookies.get("refresh_token")
+    
+    # Primer refresh — funciona
+    refresh1 = await client.post(
+        "/api/v1/auth/refresh",
+        headers={"Cookie": f"refresh_token={first_rt}"},
+    )
+    assert refresh1.status_code == 200
+    second_access_token = refresh1.json()["access_token"]
+    second_rt = client.cookies.get("refresh_token")
+    assert second_access_token != first_access_token, "Los access tokens deben ser diferentes"
+    
+    # El primer access token sigue funcionando (no fue reemplazado, solo trackeado)
+    headers1 = {"Authorization": f"Bearer {first_access_token}"}
+    resp1 = await client.get("/api/v1/users/me", headers=headers1)
+    assert resp1.status_code == 200, "El primer access token debería seguir funcionando"
+    
+    # Segundo refresh con el nuevo refresh token
+    client.cookies.clear()
+    refresh2 = await client.post(
+        "/api/v1/auth/refresh",
+        headers={"Cookie": f"refresh_token={second_rt}"},
+    )
+    assert refresh2.status_code == 200
+    third_access_token = refresh2.json()["access_token"]
+    assert third_access_token != second_access_token, "Los access tokens deben ser diferentes"
+    
+    # Tanto el segundo como el tercer access token funcionan
+    headers2 = {"Authorization": f"Bearer {second_access_token}"}
+    headers3 = {"Authorization": f"Bearer {third_access_token}"}
+    resp2 = await client.get("/api/v1/users/me", headers=headers2)
+    resp3 = await client.get("/api/v1/users/me", headers=headers3)
+    assert resp2.status_code == 200, "El segundo access token debería funcionar"
+    assert resp3.status_code == 200, "El tercer access token debería funcionar"

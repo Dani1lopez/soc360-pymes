@@ -15,6 +15,9 @@ from app.core.security import (
     verify_password,
     hash_password,
     revoke_access_token,
+    track_jti,
+    untrack_jti,
+    revoke_all_user_access_tokens,
 )
 from app.modules.auth.models import RefreshToken
 from app.modules.users.models import User
@@ -181,6 +184,7 @@ async def login(
         role=user.role,
         is_superadmin=user.is_superadmin,
     )
+    await track_jti(str(user.id), jti, redis)
     refresh_token = await _create_refresh_token(user.id, db, created_from_ip=request_ip)
     
     return TokenResponse(
@@ -219,7 +223,7 @@ async def refresh_tokens(
         user.id, db, created_from_ip=request_ip
     )
     
-    access_token, _ = create_access_token(
+    access_token, new_jti = create_access_token(
         user_id=str(user.id),
         tenant_id=str(user.tenant_id) if user.tenant_id else None,
         role=user.role,
@@ -233,6 +237,9 @@ async def refresh_tokens(
             ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             redis=redis,
         )
+        await untrack_jti(str(user.id), old_jti, redis)
+    
+    await track_jti(str(user.id), new_jti, redis)
     
     return TokenResponse(
         access_token=access_token,
@@ -244,6 +251,7 @@ async def refresh_tokens(
 async def logout(
     jti: str,
     refresh_token: str,
+    user_id: str,
     db: AsyncSession,
     redis: Redis,
 ) -> None:
@@ -253,6 +261,7 @@ async def logout(
         ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         redis=redis,
     )
+    await untrack_jti(user_id, jti, redis)
     
     token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
     record = await db.scalar(
@@ -284,8 +293,8 @@ async def change_password(
     
     await _revoke_all_user_tokens(user_id, db)
     
-    await revoke_access_token(
-        jti=current_jti,
-        ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    await revoke_all_user_access_tokens(
+        user_id=str(user_id),
         redis=redis,
+        ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )

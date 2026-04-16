@@ -116,6 +116,7 @@ async def logout(
             jti=current_user.current_jti,  # type: ignore[attr-defined]
             # Si no hay cookie, solo revocamos el access token (jti)
             refresh_token=refresh_token or "",
+            user_id=str(current_user.id),
             db=db,
             redis=redis,
         )

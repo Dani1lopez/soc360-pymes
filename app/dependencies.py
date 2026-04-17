@@ -16,9 +16,16 @@ from app.modules.users.models import User
 from app.modules.tenants.models import Tenant
 from app.core.logging import get_logger
 from app.core.security import decode_access_token, is_token_revoked, has_minimum_role
+from app.core.llm import get_llm_provider, LLMProvider
 
 
-logger = get_logger(__name__) 
+logger = get_logger(__name__)
+
+
+async def get_llm(
+    ) -> LLMProvider:
+    """FastAPI dependency: return the singleton LLM provider for this request."""
+    return get_llm_provider() 
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")

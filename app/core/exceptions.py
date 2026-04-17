@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 class AppError(Exception):
     """Excepcion base para todos los servicios de aplicacion"""
     def __init__(self, detail: Any = None, status_code: int = 400) -> None:
@@ -10,9 +9,10 @@ class AppError(Exception):
         self.status_code = status_code
         super().__init__(detail)
 
-
 class AuthError(AppError):
     """Excepcion de autenticacion con codigo HTTP y mensaje."""
+
+
 
 
 class TenantError(AppError):
@@ -21,38 +21,3 @@ class TenantError(AppError):
 
 class UserError(AppError):
     """Errores del modulo users"""
-
-
-class LLMError(AppError):
-    """Base for all LLM provider failures."""
-
-    def __init__(self, detail: Any = None, status_code: int = 500) -> None:
-        super().__init__(detail, status_code)
-
-
-class LLMTimeoutError(LLMError):
-    """Provider call exceeded configured LLM_TIMEOUT."""
-
-    def __init__(self, detail: Any = None) -> None:
-        super().__init__(detail, status_code=408)
-
-
-class LLMRateLimitError(LLMError):
-    """Provider returned 429 — not retried automatically."""
-
-    def __init__(self, detail: Any = None) -> None:
-        super().__init__(detail, status_code=429)
-
-
-class LLMContentFilterError(LLMError):
-    """Provider refused content (safety filter, policy violation)."""
-
-    def __init__(self, detail: Any = None) -> None:
-        super().__init__(detail, status_code=451)
-
-
-class LLMResponseError(LLMError):
-    """Provider returned error response or unparseable output."""
-
-    def __init__(self, detail: Any = None) -> None:
-        super().__init__(detail, status_code=502)

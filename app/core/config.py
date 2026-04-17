@@ -33,21 +33,6 @@ class Settings(BaseSettings):
     USE_OLLAMA: bool = False
     OLLAMA_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3.2"
-
-    # LLM Abstraction
-    LLM_PROVIDER: str = "groq"
-    LLM_TIMEOUT: int = 30
-    LLM_MAX_TOKENS: int = 2048
-    LLM_TEMPERATURE: float = 0.1
-
-    # Per-provider API keys (None = not configured for that provider)
-    OPENAI_API_KEY: str | None = None
-    ANTHROPIC_API_KEY: str | None = None
-    GEMINI_API_KEY: str | None = None
-    MISTRAL_API_KEY: str | None = None
-    COHERE_API_KEY: str | None = None
-    TOGETHER_API_KEY: str | None = None
-    HUGGINGFACE_API_KEY: str | None = None
     
     #Redis
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -109,17 +94,6 @@ class Settings(BaseSettings):
         if not v.startswith("gsk_"):
             raise ValueError("GROQ_API_KEY debe empezar con 'gsk_'")
         return v
-
-    @field_validator("LLM_PROVIDER")
-    @classmethod
-    def llm_provider_valid(cls, v: str) -> str:
-        allowed = {
-            "groq", "ollama", "openai", "anthropic",
-            "gemini", "mistral", "cohere", "together", "huggingface",
-        }
-        if v.lower() not in allowed:
-            raise ValueError(f"LLM_PROVIDER debe ser uno de: {sorted(allowed)}")
-        return v.lower()
 
 
 settings = Settings()

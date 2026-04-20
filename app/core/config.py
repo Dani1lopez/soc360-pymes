@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     HUGGINGFACE_API_KEY: str | None = None
     
     #Redis
+    REDIS_PASSWORD: str | None = None
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_MAX_CONNECTIONS: int = 20
     
@@ -99,6 +100,9 @@ class Settings(BaseSettings):
     @classmethod
     def redis_auth_in_production(cls, v: str, info) -> str:
         environment = info.data.get("ENVIRONMENT", "development")
+        redis_password = info.data.get("REDIS_PASSWORD")
+        if redis_password and "@" not in v:
+            raise ValueError("REDIS_URL debe incluir autenticación cuando REDIS_PASSWORD está configurado")
         if environment == "production" and "@" not in v:
             raise ValueError("REDIS_URL debe incluir autenticación en producción")
         return v

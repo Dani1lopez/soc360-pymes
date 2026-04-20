@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import re
 from typing import Annotated
 
+import re
 from pydantic.functional_validators import AfterValidator
 
 # RFC 5322 simplificado — valida sintaxis sin comprobar dominio ni DNS.

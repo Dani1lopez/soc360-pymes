@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, status, Query
 
 from app.core.exceptions import TenantError
-from app.dependencies import DBDep, CurrentUserDep, SuperadminDep
+from app.dependencies import DBDep, CurrentUserDep, SuperadminDep, RedisDep
 from app.modules.tenants import schemas, service
 
 
@@ -108,11 +108,12 @@ async def update_tenant(
 async def deactivate_tenant(
     tenant_id: UUID,
     db: DBDep,
+    redis: RedisDep,
     current_user: SuperadminDep,
 ) -> None:
-    """Desactiva un tenant.No borra datos"""
+    """Desactiva un tenant, sus usuarios, y revoca todas las sesiones"""
     try:
-        await service.deactivate_tenant(tenant_id, db)
+        await service.deactivate_tenant(tenant_id, db, redis)
     except TenantError as exc:
         raise HTTPException(
             status_code=exc.status_code,

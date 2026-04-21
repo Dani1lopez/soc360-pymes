@@ -155,6 +155,21 @@ async def _revoke_all_user_tokens(
     )
 
 
+async def _revoke_all_user_tokens_for_tenant(
+    tenant_id: UUID,
+    db: AsyncSession,
+) -> None:
+    """Revoca todos los refresh tokens activos de un tenant en una sola query"""
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id.in_(
+            select(User.id).where(User.tenant_id == tenant_id)
+        ))
+        .where(RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(timezone.utc))
+    )
+
+
 async def login(
     email: str,
     password: str,

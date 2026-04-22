@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import uuid
 
+from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import UserError
-from app.core.security import hash_password
+from app.core.security import hash_password, revoke_all_user_access_tokens
+from app.modules.auth.service import _revoke_all_user_tokens
 from app.modules.tenants.models import Tenant
 from app.modules.users.models import User
 from app.modules.users.schemas import UserCreate, UserUpdate
@@ -140,8 +143,9 @@ async def update_user(
 async def deactivate_user(
     user_id: uuid.UUID,
     db: AsyncSession,
+    redis: Redis,
 ) -> None:
-    """Desactiva el usuario"""
+    """Desactiva el usuario y revoca todas sus sesiones activas"""
     user = await get_user_by_id(user_id, db)
     if user is None:
         raise UserError("Usuario no encontrado", status_code=404)
@@ -149,3 +153,13 @@ async def deactivate_user(
         raise UserError("El usuario ya está desactivado", status_code=409)
     user.is_active = False
     await db.flush()
+
+    # Revocar todos los refresh tokens del usuario (DB)
+    await _revoke_all_user_tokens(user_id, db)
+
+    # Revocar todos los access tokens del usuario (Redis denylist)
+    await revoke_all_user_access_tokens(
+        user_id=str(user_id),
+        redis=redis,
+        ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )

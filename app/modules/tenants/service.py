@@ -5,10 +5,14 @@ import uuid
 import unicodedata
 from typing import Any
 
+from redis.asyncio import Redis
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import TenantError
+from app.core.security import revoke_all_user_access_tokens
+from app.modules.auth.service import _revoke_all_user_tokens_for_tenant
 from app.modules.tenants.models import Tenant
 from app.modules.tenants.schemas import TenantCreate, TenantUpdate, TenantSettings
 from app.modules.users.models import User
@@ -150,19 +154,40 @@ async def update_tenant(
     return tenant
 
 
-async def deactivate_tenant(tenant_id: uuid.UUID, db: AsyncSession) -> Tenant:
-    """Desactiva el tenant"""
+async def deactivate_tenant(
+    tenant_id: uuid.UUID,
+    db: AsyncSession,
+    redis: Redis,
+) -> Tenant:
+    """Desactiva el tenant, sus usuarios, y revoca todas las sesiones"""
     tenant = await get_tenant_by_id(tenant_id, db)
     if tenant is None:
         raise TenantError("Tenant no encontrado", status_code=404)
     if not tenant.is_active:
         raise TenantError("El tenant ya esta desactivado", status_code=409)
     tenant.is_active = False
+
+    # Desactivar todos los usuarios del tenant
     await db.execute(
         update(User)
         .where(User.tenant_id == tenant_id)
         .values(is_active=False)
     )
+
+    # Revocar todos los refresh tokens de los usuarios del tenant (DB)
+    await _revoke_all_user_tokens_for_tenant(tenant_id, db)
+
+    # Revocar todos los access tokens de los usuarios del tenant (Redis denylist)
+    user_ids = await db.scalars(
+        select(User.id).where(User.tenant_id == tenant_id)
+    )
+    for uid in user_ids:
+        await revoke_all_user_access_tokens(
+            user_id=str(uid),
+            redis=redis,
+            ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        )
+
     await db.flush()
     await db.refresh(tenant)
     return tenant

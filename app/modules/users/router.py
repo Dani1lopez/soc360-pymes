@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.core.exceptions import UserError
 from app.core.logging import get_logger
 from app.core.security import has_minimum_role
-from app.dependencies import DBWithTenantDep, CurrentUserDep, require_role
+from app.dependencies import DBWithTenantDep, CurrentUserDep, require_role, RedisDep
 from app.modules.users import service
 from app.modules.users.models import User
 from app.modules.users.schemas import RoleEnum, UserCreate, UserResponse, UserUpdate
@@ -187,9 +187,10 @@ async def update_user(
 async def deactivate_user(
     user_id: uuid.UUID,
     db: DBWithTenantDep,
+    redis: RedisDep,
     current_user: User = Depends(require_role("admin")),
 ) -> None:
-    """Desactiva un usuario"""
+    """Desactiva un usuario y revoca todas sus sesiones"""
     if user_id == current_user.id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -221,7 +222,7 @@ async def deactivate_user(
             )
 
     try:
-        await service.deactivate_user(user_id=user_id, db=db)
+        await service.deactivate_user(user_id=user_id, db=db, redis=redis)
     except UserError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 

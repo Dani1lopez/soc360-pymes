@@ -51,7 +51,6 @@ async def login(
             email=body.email,
             password=body.password,
             request_ip=request.client.host if request.client else None,
-            request_headers=dict(request.headers),
             db=db,
             redis=redis,
         )

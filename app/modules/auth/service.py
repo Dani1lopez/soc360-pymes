@@ -203,25 +203,40 @@ async def refresh_tokens(
 ) -> tuple[TokenResponse, str]:
     """Invalida el anterior y genera uno nuevo"""
     token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
-    record = await db.scalar(
-        select(RefreshToken)
-        .where(RefreshToken.token_hash == token_hash)
-        .where(RefreshToken.revoked_at.is_(None))
-        .where(RefreshToken.expires_at > datetime.now(timezone.utc))
-    )
-    if not record:
-        raise AuthError(
-            status_code=401,
-            detail="Refresh token invalido o expirado",
+    async def _rotate_refresh_token() -> tuple[User, str]:
+        stmt = (
+            select(RefreshToken)
+            .where(RefreshToken.token_hash == token_hash)
+            .where(RefreshToken.revoked_at.is_(None))
+            .where(RefreshToken.expires_at > datetime.now(timezone.utc))
+            .with_for_update(skip_locked=True)
         )
-    
-    user = await _get_active_user_by_id(record.user_id, db)
-    await _check_tenant_active(user, db)
-    
-    record.revoked_at = datetime.now(timezone.utc)
-    new_refresh_token = await _create_refresh_token(
-        user.id, db, created_from_ip=request_ip
-    )
+        record = await db.scalar(stmt)
+        if not record:
+            raise AuthError(
+                status_code=401,
+                detail="Refresh token invalido o expirado",
+            )
+        if record.revoked_at is not None:
+            raise AuthError(
+                status_code=401,
+                detail="Refresh token invalido o expirado",
+            )
+
+        user = await _get_active_user_by_id(record.user_id, db)
+        await _check_tenant_active(user, db)
+
+        record.revoked_at = datetime.now(timezone.utc)
+        new_refresh_token = await _create_refresh_token(
+            user.id, db, created_from_ip=request_ip
+        )
+        return user, new_refresh_token
+
+    if db.in_transaction():
+        user, new_refresh_token = await _rotate_refresh_token()
+    else:
+        async with db.begin():
+            user, new_refresh_token = await _rotate_refresh_token()
     
     access_token, new_jti = create_access_token(
         user_id=str(user.id),

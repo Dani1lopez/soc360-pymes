@@ -167,6 +167,11 @@ async def update_user(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="No puedes elegir un rol igual o superior al tuyo",
             )
+        if body.is_active is not None and has_minimum_role(target.role, "admin"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Un admin no puede cambiar el estado de activación de otro admin",
+            )
 
     else:
         raise HTTPException(

@@ -87,46 +87,70 @@ async def db_session():
 @pytest_asyncio.fixture
 async def seed_data(db_session: AsyncSession):
     from uuid import UUID
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-    tenant_a = Tenant(
-        id=UUID(TENANT_A_ID), name="Empresa Alpha", slug="empresa-alpha",
-        plan="starter", is_active=True, max_assets=50,
-    )
-    tenant_b = Tenant(
-        id=UUID(TENANT_B_ID), name="Empresa Beta", slug="empresa-beta",
-        plan="free", is_active=True, max_assets=10,
-    )
-    superadmin = User(
-        id=UUID(SUPERADMIN_ID), tenant_id=None,
-        email="superadmin@soc360.test", hashed_password=hash_password("SuperAdmin123!"),
-        full_name="Super Admin", role="superadmin", is_active=True, is_superadmin=True,
-    )
-    admin_a = User(
-        id=UUID(ADMIN_A_ID), tenant_id=UUID(TENANT_A_ID),
-        email="admin@alpha.test", hashed_password=hash_password("AdminAlpha123!"),
-        full_name="Admin Alpha", role="admin", is_active=True, is_superadmin=False,
-    )
-    analyst_a = User(
-        id=UUID(ANALYST_A_ID), tenant_id=UUID(TENANT_A_ID),
-        email="analyst@alpha.test", hashed_password=hash_password("AnalystAlpha123!"),
-        full_name="Analyst Alpha", role="analyst", is_active=True, is_superadmin=False,
-    )
-    viewer_a = User(
-        id=UUID(VIEWER_A_ID), tenant_id=UUID(TENANT_A_ID),
-        email="viewer@alpha.test", hashed_password=hash_password("ViewerAlpha123!"),
-        full_name="Viewer Alpha", role="viewer", is_active=True, is_superadmin=False,
-    )
-    admin_b = User(
-        id=UUID(ADMIN_B_ID), tenant_id=UUID(TENANT_B_ID),
-        email="admin@beta.test", hashed_password=hash_password("AdminBeta123!"),
-        full_name="Admin Beta", role="admin", is_active=True, is_superadmin=False,
-    )
-
+    # Idempotent tenant inserts — concurrency tests may have already committed these
     await db_session.execute(text("SET LOCAL app.is_superadmin = 'true'"))
-    db_session.add_all([tenant_a, tenant_b])
+    await db_session.execute(
+        pg_insert(Tenant).values(
+            id=UUID(TENANT_A_ID), name="Empresa Alpha", slug="empresa-alpha",
+            plan="starter", is_active=True, max_assets=50,
+        ).on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.execute(
+        pg_insert(Tenant).values(
+            id=UUID(TENANT_B_ID), name="Empresa Beta", slug="empresa-beta",
+            plan="free", is_active=True, max_assets=10,
+        ).on_conflict_do_nothing(index_elements=["id"])
+    )
     await db_session.flush()
-    db_session.add_all([superadmin, admin_a, analyst_a, viewer_a, admin_b])
+
+    # Idempotent user inserts
+    await db_session.execute(
+        pg_insert(User).values(
+            id=UUID(SUPERADMIN_ID), tenant_id=None,
+            email="superadmin@soc360.test", hashed_password=hash_password("SuperAdmin123!"),
+            full_name="Super Admin", role="superadmin", is_active=True, is_superadmin=True,
+        ).on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.execute(
+        pg_insert(User).values(
+            id=UUID(ADMIN_A_ID), tenant_id=UUID(TENANT_A_ID),
+            email="admin@alpha.test", hashed_password=hash_password("AdminAlpha123!"),
+            full_name="Admin Alpha", role="admin", is_active=True, is_superadmin=False,
+        ).on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.execute(
+        pg_insert(User).values(
+            id=UUID(ANALYST_A_ID), tenant_id=UUID(TENANT_A_ID),
+            email="analyst@alpha.test", hashed_password=hash_password("AnalystAlpha123!"),
+            full_name="Analyst Alpha", role="analyst", is_active=True, is_superadmin=False,
+        ).on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.execute(
+        pg_insert(User).values(
+            id=UUID(VIEWER_A_ID), tenant_id=UUID(TENANT_A_ID),
+            email="viewer@alpha.test", hashed_password=hash_password("ViewerAlpha123!"),
+            full_name="Viewer Alpha", role="viewer", is_active=True, is_superadmin=False,
+        ).on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.execute(
+        pg_insert(User).values(
+            id=UUID(ADMIN_B_ID), tenant_id=UUID(TENANT_B_ID),
+            email="admin@beta.test", hashed_password=hash_password("AdminBeta123!"),
+            full_name="Admin Beta", role="admin", is_active=True, is_superadmin=False,
+        ).on_conflict_do_nothing(index_elements=["id"])
+    )
     await db_session.flush()
+
+    # Fetch persisted records for test use
+    tenant_a = await db_session.get(Tenant, UUID(TENANT_A_ID))
+    tenant_b = await db_session.get(Tenant, UUID(TENANT_B_ID))
+    superadmin = await db_session.get(User, UUID(SUPERADMIN_ID))
+    admin_a = await db_session.get(User, UUID(ADMIN_A_ID))
+    analyst_a = await db_session.get(User, UUID(ANALYST_A_ID))
+    viewer_a = await db_session.get(User, UUID(VIEWER_A_ID))
+    admin_b = await db_session.get(User, UUID(ADMIN_B_ID))
 
     return {
         "tenant_a": tenant_a, "tenant_b": tenant_b,
@@ -208,3 +232,50 @@ async def viewer_a_headers(viewer_a_token: str) -> dict:
 @pytest_asyncio.fixture
 async def admin_b_headers(admin_b_token: str) -> dict:
     return {"Authorization": f"Bearer {admin_b_token}"}
+
+
+# ---------------------------------------------------------------------------
+# Concurrency test infrastructure — real pooled connections for parallel tests
+# ---------------------------------------------------------------------------
+
+@pytest_asyncio.fixture(scope="function")
+async def pooled_engine():
+    """Engine with a real connection pool for concurrency tests.
+
+    Unlike the default NullPool fixture, this allows multiple concurrent
+    sessions to obtain separate DB connections, which is required to prove
+    advisory-lock serialization under parallel load.
+    """
+    engine = create_async_engine(
+        TEST_DATABASE_URL,
+        echo=False,
+        pool_size=10,
+        max_overflow=10,
+    )
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def isolated_db_session(pooled_engine):
+    """Factory that yields function-scoped AsyncSession instances from a pooled engine.
+
+    Usage in concurrency tests:
+        session1 = await isolated_db_session()
+        session2 = await isolated_db_session()
+    Each call returns a fresh session with its own DB connection.
+    """
+    session_factory = async_sessionmaker(
+        bind=pooled_engine, class_=AsyncSession, expire_on_commit=False
+    )
+    sessions: list[AsyncSession] = []
+
+    def _make_session() -> AsyncSession:
+        s = session_factory()
+        sessions.append(s)
+        return s
+
+    yield _make_session
+
+    for s in sessions:
+        await s.close()

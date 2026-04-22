@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
 from redis.asyncio import Redis
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -105,12 +105,36 @@ async def _check_tenant_active(user: User, db: AsyncSession) -> None:
         )
 
 
+# PostgreSQL advisory lock SQL — serializes session-cap checks per user.
+# Uses pg_advisory_xact_lock so the lock is held for the transaction duration
+# and released automatically on commit or rollback.
+_ADVISORY_LOCK_SQL = text(
+    "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:user_id AS text), 0))"
+)
+
+
+async def _acquire_session_cap_lock(user_id: UUID, db: AsyncSession) -> None:
+    """Acquire a transaction-scoped advisory lock for session-cap serialization.
+
+    Must be called inside an active transaction (db.in_transaction() == True).
+    The lock blocks concurrent calls for the same user_id until the holding
+    transaction commits or rolls back, preventing race conditions in the
+    session-cap check + insert sequence.
+    """
+    if not db.in_transaction():
+        raise RuntimeError(
+            "_acquire_session_cap_lock requires an active transaction"
+        )
+    await db.execute(_ADVISORY_LOCK_SQL, {"user_id": str(user_id)})
+
+
 async def _create_refresh_token(
     user_id: UUID,
     db: AsyncSession,
     created_from_ip: str | None = None,
 ) -> str:
     """Genera un refresh token seguro, lo hashea y guarda en BD"""
+    await _acquire_session_cap_lock(user_id, db)
     active_count = await db.scalar(
         select(func.count()).select_from(RefreshToken)
         .where(RefreshToken.user_id == user_id)
@@ -175,7 +199,8 @@ async def login(
     password: str,
     db: AsyncSession,
     redis: Redis,
-    request_ip: str | None = None
+    request_ip: str | None = None,
+    request_headers: dict | None = None,
 ) -> tuple[TokenResponse, str]:
     """Autentica al usuario y delvuelve el access token + refresh token"""
     await _check_account_lockout(email, redis)

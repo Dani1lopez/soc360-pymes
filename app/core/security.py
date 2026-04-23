@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import bcrypt as _bcrypt
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from redis.asyncio import Redis
@@ -13,6 +14,18 @@ from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+if not getattr(_bcrypt, "__soc360_compat__", False):
+    _bcrypt_hashpw = _bcrypt.hashpw
+
+    def _hashpw_compat(secret: bytes, salt: bytes) -> bytes:
+        if len(secret) > 72:
+            secret = secret[:72]
+        return _bcrypt_hashpw(secret, salt)
+
+    _bcrypt.hashpw = _hashpw_compat
+    _bcrypt.__soc360_compat__ = True
 
 
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

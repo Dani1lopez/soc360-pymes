@@ -119,37 +119,83 @@ async def update_tenant(
     tenant_id: uuid.UUID,
     data: TenantUpdate,
     db: AsyncSession,
+    redis: Redis,
 ) -> Tenant:
     """Actualiza el tenant"""
     tenant = await get_tenant_by_id(tenant_id, db)
     if tenant is None:
         raise TenantError("Tenant no encontrado", status_code=404)
-    
+
     update_data = data.model_dump(exclude_unset=True)
-    
+
+    # Detectar transición de activo → inactivo ANTES de aplicar cambios
+    is_deactivating = (
+        "is_active" in update_data
+        and update_data["is_active"] is False
+        and tenant.is_active is True
+    )
+
+    # Detectar transición de inactivo → activo para reactivar usuarios del tenant
+    is_reactivating = (
+        "is_active" in update_data
+        and update_data["is_active"] is True
+        and tenant.is_active is False
+    )
+
     if "name" in update_data:
         tenant.name = update_data["name"].strip()
-    
+
     if "plan" in update_data:
         tenant.plan = update_data["plan"]
         if "max_assets" not in update_data:
             tenant.max_assets = _plan_to_max_assets(update_data["plan"])
-    
+
     if "max_assets" in update_data:
         # TODO(F2): validar que max_assets >= assets activos del tenant
         tenant.max_assets = update_data["max_assets"]
-    
+
     if "is_active" in update_data:
         tenant.is_active = update_data["is_active"]
-    
+
     if "settings" in update_data:
         current = TenantSettings.model_validate(tenant.settings or {})
-        
+
         merged = current.model_dump()
         merged.update(update_data["settings"])
         tenant.settings = TenantSettings.model_validate(merged).model_dump()
-    
+
     await db.flush()
+
+    if is_reactivating:
+        await db.execute(
+            update(User)
+            .where(User.tenant_id == tenant_id)
+            .values(is_active=True)
+        )
+
+    # Revocar tokens solo si hubo transición True → False
+    if is_deactivating:
+        # Desactivar todos los usuarios del tenant
+        await db.execute(
+            update(User)
+            .where(User.tenant_id == tenant_id)
+            .values(is_active=False)
+        )
+
+        # Revocar todos los refresh tokens de los usuarios del tenant (DB)
+        await _revoke_all_user_tokens_for_tenant(tenant_id, db)
+
+        # Revocar todos los access tokens de los usuarios del tenant (Redis denylist)
+        user_ids = await db.scalars(
+            select(User.id).where(User.tenant_id == tenant_id)
+        )
+        for uid in user_ids:
+            await revoke_all_user_access_tokens(
+                user_id=str(uid),
+                redis=redis,
+                ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            )
+
     await db.refresh(tenant)
     return tenant
 

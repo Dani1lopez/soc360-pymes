@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 
+import bcrypt
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
@@ -27,7 +28,6 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 
 from app.main import create_app
 from app.core.database import Base, set_tenant_context
-from app.core.security import hash_password
 from app.core.redis import get_redis
 from app.dependencies import get_db, get_db_with_tenant
 from app.modules.users.models import User
@@ -42,6 +42,10 @@ VIEWER_A_ID   = "dddddddd-dddd-dddd-dddd-dddddddddddd"
 ADMIN_B_ID    = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
 
 TEST_DATABASE_URL = os.environ["DATABASE_URL"]
+
+
+def _seed_password_hash(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 # ✅ SYNC fixture — usa asyncio.run() para no contaminar ningún loop de test
@@ -109,35 +113,35 @@ async def seed_data(db_session: AsyncSession):
     await db_session.execute(
         pg_insert(User).values(
             id=UUID(SUPERADMIN_ID), tenant_id=None,
-            email="superadmin@soc360.test", hashed_password=hash_password("SuperAdmin123!"),
+            email="superadmin@soc360.test", hashed_password=_seed_password_hash("SuperAdmin123!"),
             full_name="Super Admin", role="superadmin", is_active=True, is_superadmin=True,
         ).on_conflict_do_nothing(index_elements=["id"])
     )
     await db_session.execute(
         pg_insert(User).values(
             id=UUID(ADMIN_A_ID), tenant_id=UUID(TENANT_A_ID),
-            email="admin@alpha.test", hashed_password=hash_password("AdminAlpha123!"),
+            email="admin@alpha.test", hashed_password=_seed_password_hash("AdminAlpha123!"),
             full_name="Admin Alpha", role="admin", is_active=True, is_superadmin=False,
         ).on_conflict_do_nothing(index_elements=["id"])
     )
     await db_session.execute(
         pg_insert(User).values(
             id=UUID(ANALYST_A_ID), tenant_id=UUID(TENANT_A_ID),
-            email="analyst@alpha.test", hashed_password=hash_password("AnalystAlpha123!"),
+            email="analyst@alpha.test", hashed_password=_seed_password_hash("AnalystAlpha123!"),
             full_name="Analyst Alpha", role="analyst", is_active=True, is_superadmin=False,
         ).on_conflict_do_nothing(index_elements=["id"])
     )
     await db_session.execute(
         pg_insert(User).values(
             id=UUID(VIEWER_A_ID), tenant_id=UUID(TENANT_A_ID),
-            email="viewer@alpha.test", hashed_password=hash_password("ViewerAlpha123!"),
+            email="viewer@alpha.test", hashed_password=_seed_password_hash("ViewerAlpha123!"),
             full_name="Viewer Alpha", role="viewer", is_active=True, is_superadmin=False,
         ).on_conflict_do_nothing(index_elements=["id"])
     )
     await db_session.execute(
         pg_insert(User).values(
             id=UUID(ADMIN_B_ID), tenant_id=UUID(TENANT_B_ID),
-            email="admin@beta.test", hashed_password=hash_password("AdminBeta123!"),
+            email="admin@beta.test", hashed_password=_seed_password_hash("AdminBeta123!"),
             full_name="Admin Beta", role="admin", is_active=True, is_superadmin=False,
         ).on_conflict_do_nothing(index_elements=["id"])
     )

@@ -86,11 +86,12 @@ async def update_tenant(
     tenant_id: UUID,
     payload: schemas.TenantUpdate,
     db: DBDep,
+    redis: RedisDep,
     current_user: SuperadminDep,
 ) -> schemas.TenantResponse:
     """Actualiza campos de un tenant"""
     try:
-        updated = await service.update_tenant(tenant_id, payload, db)
+        updated = await service.update_tenant(tenant_id, payload, db, redis)
     except TenantError as exc:
         raise HTTPException(
             status_code=exc.status_code,

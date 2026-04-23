@@ -125,6 +125,7 @@ async def update_user(
     body: UserUpdate,
     current_user: CurrentUserDep,
     db: DBWithTenantDep,
+    redis: RedisDep,
 ) -> User:
     """Actualiza un usuario"""
     target = await service.get_user_by_id(user_id=user_id, db=db)
@@ -180,7 +181,7 @@ async def update_user(
         )
 
     try:
-        user = await service.update_user(user_id=user_id, data=body, db=db)
+        user = await service.update_user(user_id=user_id, data=body, db=db, redis=redis)
     except UserError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 

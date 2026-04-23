@@ -145,7 +145,7 @@ class TestUserService:
         data = UserUpdate(full_name="New Name")
         
         with pytest.raises(UserError) as exc_info:
-            await service.update_user(user_id=uuid4(), data=data, db=mock_db)
+            await service.update_user(user_id=uuid4(), data=data, db=mock_db, redis=AsyncMock())
         
         assert exc_info.value.status_code == 404
     
@@ -164,7 +164,7 @@ class TestUserService:
         mock_db.execute.return_value = mock_result
         
         with pytest.raises(UserError) as exc_info:
-            await service.deactivate_user(user_id=uuid4(), db=mock_db)
+            await service.deactivate_user(user_id=uuid4(), db=mock_db, redis=AsyncMock())
         
         assert exc_info.value.status_code == 409
 
@@ -208,3 +208,134 @@ class TestUserResponseSchema:
         assert response.email == "test@example.com"
         assert response.role == RoleEnum.admin
         assert response.is_active is True
+
+
+class TestUpdateUserTokenRevocation:
+    """Test that update_user revokes tokens on deactivation transition."""
+
+    @pytest.mark.asyncio
+    async def test_update_user_deactivate_revokes_tokens(self):
+        """update_user con is_active=True→False llama a revocacion de tokens."""
+        from app.modules.users import service
+        from app.modules.users.schemas import UserUpdate
+        from uuid import uuid4
+
+        user_id = uuid4()
+        mock_user = MagicMock()
+        mock_user.id = user_id
+        mock_user.is_active = True
+
+        mock_db = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        mock_redis = AsyncMock()
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_user
+        mock_db.execute.return_value = mock_result
+
+        data = UserUpdate(is_active=False)
+
+        with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            await service.update_user(user_id=user_id, data=data, db=mock_db, redis=mock_redis)
+
+            mock_revoke_refresh.assert_awaited_once_with(user_id, mock_db)
+            mock_revoke_access.assert_awaited_once()
+            call_kwargs = mock_revoke_access.await_args.kwargs
+            assert call_kwargs["user_id"] == str(user_id)
+            assert call_kwargs["redis"] == mock_redis
+
+    @pytest.mark.asyncio
+    async def test_update_user_deactivate_already_inactive_no_revocation(self):
+        """update_user con is_active=False sobre usuario ya inactivo NO revoca tokens."""
+        from app.modules.users import service
+        from app.modules.users.schemas import UserUpdate
+        from uuid import uuid4
+
+        user_id = uuid4()
+        mock_user = MagicMock()
+        mock_user.id = user_id
+        mock_user.is_active = False  # ya inactivo
+
+        mock_db = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        mock_redis = AsyncMock()
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_user
+        mock_db.execute.return_value = mock_result
+
+        data = UserUpdate(is_active=False)
+
+        with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            await service.update_user(user_id=user_id, data=data, db=mock_db, redis=mock_redis)
+
+            mock_revoke_refresh.assert_not_awaited()
+            mock_revoke_access.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_user_reactivate_no_revocation(self):
+        """update_user con is_active=False→True NO revoca tokens (reactivacion)."""
+        from app.modules.users import service
+        from app.modules.users.schemas import UserUpdate
+        from uuid import uuid4
+
+        user_id = uuid4()
+        mock_user = MagicMock()
+        mock_user.id = user_id
+        mock_user.is_active = False  # inactivo, se va a reactivar
+
+        mock_db = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        mock_redis = AsyncMock()
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_user
+        mock_db.execute.return_value = mock_result
+
+        data = UserUpdate(is_active=True)
+
+        with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            await service.update_user(user_id=user_id, data=data, db=mock_db, redis=mock_redis)
+
+            mock_revoke_refresh.assert_not_awaited()
+            mock_revoke_access.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_user_patch_without_is_active_no_revocation(self):
+        """update_user sin cambio de is_active NO revoca tokens."""
+        from app.modules.users import service
+        from app.modules.users.schemas import UserUpdate
+        from uuid import uuid4
+
+        user_id = uuid4()
+        mock_user = MagicMock()
+        mock_user.id = user_id
+        mock_user.is_active = True
+
+        mock_db = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        mock_redis = AsyncMock()
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_user
+        mock_db.execute.return_value = mock_result
+
+        data = UserUpdate(full_name="New Name")
+
+        with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            await service.update_user(user_id=user_id, data=data, db=mock_db, redis=mock_redis)
+
+            mock_revoke_refresh.assert_not_awaited()
+            mock_revoke_access.assert_not_awaited()

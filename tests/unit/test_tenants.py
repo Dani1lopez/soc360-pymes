@@ -189,7 +189,7 @@ class TestTenantService:
         data = TenantUpdate(name="New Name")
         
         with pytest.raises(TenantError) as exc_info:
-            await service.update_tenant(tenant_id=uuid4(), data=data, db=mock_db)
+            await service.update_tenant(tenant_id=uuid4(), data=data, db=mock_db, redis=AsyncMock())
         
         assert exc_info.value.status_code == 404
     
@@ -208,7 +208,7 @@ class TestTenantService:
         mock_db.execute.return_value = mock_result
         
         with pytest.raises(TenantError) as exc_info:
-            await service.deactivate_tenant(tenant_id=uuid4(), db=mock_db)
+            await service.deactivate_tenant(tenant_id=uuid4(), db=mock_db, redis=AsyncMock())
         
         assert exc_info.value.status_code == 409
     
@@ -234,6 +234,7 @@ class TestTenantService:
             tenant_id=mock_tenant.id,
             data=data,
             db=mock_db,
+            redis=AsyncMock(),
         )
         
         assert updated.plan == "pro"
@@ -276,3 +277,143 @@ class TestTenantResponseSchema:
         
         result = TenantResponse.settings_default_if_none({"key": "value"})
         assert result == {"key": "value"}
+
+
+class TestUpdateTenantTokenRevocation:
+    """Test that update_tenant revokes tokens on deactivation transition."""
+
+    @pytest.mark.asyncio
+    async def test_update_tenant_deactivate_revokes_tokens(self):
+        """update_tenant con is_active=True→False llama a revocacion de tokens."""
+        from app.modules.tenants import service
+        from app.modules.tenants.schemas import TenantUpdate
+        from uuid import uuid4
+
+        tenant_id = uuid4()
+        mock_tenant = MagicMock()
+        mock_tenant.id = tenant_id
+        mock_tenant.is_active = True
+
+        user1 = uuid4()
+        user2 = uuid4()
+        mock_db = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+        mock_db.execute = AsyncMock()
+        mock_db.scalars = AsyncMock(return_value=[user1, user2])
+
+        mock_redis = AsyncMock()
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_tenant
+        mock_db.execute.return_value = mock_result
+
+        data = TenantUpdate(is_active=False)
+
+        with patch.object(service, "_revoke_all_user_tokens_for_tenant", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.tenants.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            await service.update_tenant(tenant_id=tenant_id, data=data, db=mock_db, redis=mock_redis)
+
+            mock_revoke_refresh.assert_awaited_once_with(tenant_id, mock_db)
+            assert mock_revoke_access.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_update_tenant_deactivate_already_inactive_no_revocation(self):
+        """update_tenant con is_active=False sobre tenant ya inactivo NO revoca tokens."""
+        from app.modules.tenants import service
+        from app.modules.tenants.schemas import TenantUpdate
+        from uuid import uuid4
+
+        tenant_id = uuid4()
+        mock_tenant = MagicMock()
+        mock_tenant.id = tenant_id
+        mock_tenant.is_active = False  # ya inactivo
+
+        mock_db = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+        mock_db.execute = AsyncMock()
+        mock_db.scalars = AsyncMock(return_value=[])
+
+        mock_redis = AsyncMock()
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_tenant
+        mock_db.execute.return_value = mock_result
+
+        data = TenantUpdate(is_active=False)
+
+        with patch.object(service, "_revoke_all_user_tokens_for_tenant", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.tenants.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            await service.update_tenant(tenant_id=tenant_id, data=data, db=mock_db, redis=mock_redis)
+
+            mock_revoke_refresh.assert_not_awaited()
+            mock_revoke_access.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_tenant_reactivate_no_revocation(self):
+        """update_tenant con is_active=False→True NO revoca tokens (reactivacion)."""
+        from app.modules.tenants import service
+        from app.modules.tenants.schemas import TenantUpdate
+        from uuid import uuid4
+
+        tenant_id = uuid4()
+        mock_tenant = MagicMock()
+        mock_tenant.id = tenant_id
+        mock_tenant.is_active = False  # inactivo, se va a reactivar
+
+        mock_db = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+        mock_db.execute = AsyncMock()
+        mock_db.scalars = AsyncMock(return_value=[])
+
+        mock_redis = AsyncMock()
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_tenant
+        mock_db.execute.return_value = mock_result
+
+        data = TenantUpdate(is_active=True)
+
+        with patch.object(service, "_revoke_all_user_tokens_for_tenant", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.tenants.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            await service.update_tenant(tenant_id=tenant_id, data=data, db=mock_db, redis=mock_redis)
+
+            mock_revoke_refresh.assert_not_awaited()
+            mock_revoke_access.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_tenant_patch_without_is_active_no_revocation(self):
+        """update_tenant sin cambio de is_active NO revoca tokens."""
+        from app.modules.tenants import service
+        from app.modules.tenants.schemas import TenantUpdate
+        from uuid import uuid4
+
+        tenant_id = uuid4()
+        mock_tenant = MagicMock()
+        mock_tenant.id = tenant_id
+        mock_tenant.is_active = True
+        mock_tenant.plan = "free"
+        mock_tenant.max_assets = 10
+
+        mock_db = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+        mock_db.execute = AsyncMock()
+        mock_db.scalars = AsyncMock(return_value=[])
+
+        mock_redis = AsyncMock()
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_tenant
+        mock_db.execute.return_value = mock_result
+
+        data = TenantUpdate(plan="pro")
+
+        with patch.object(service, "_revoke_all_user_tokens_for_tenant", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.tenants.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            await service.update_tenant(tenant_id=tenant_id, data=data, db=mock_db, redis=mock_redis)
+
+            mock_revoke_refresh.assert_not_awaited()
+            mock_revoke_access.assert_not_awaited()

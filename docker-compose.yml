@@ -3,10 +3,14 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: soc360_postgres
+    profiles: [dev]
+    # Only starts with: docker compose --profile dev up
+    # Does NOT expose port to host by default
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+    # Host port mapping — only active when --profile dev is used (postgres service)
     ports:
       - "5433:5432"
     volumes:

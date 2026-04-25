@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     )
     
     #Aplicacion
-    ENVIRONMENT: str = "development"
+    ENVIRONMENT: str
     APP_NAME: str = "SOC 360 PYMEs"
     SECRET_KEY: str
     

@@ -239,6 +239,19 @@ async def admin_b_headers(admin_b_token: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Singleton isolation — reset module-level singletons between tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _reset_event_bus_singleton():
+    """Reset the _event_bus singleton before/after each test for isolation."""
+    import app.dependencies
+    app.dependencies._event_bus = None
+    yield
+    app.dependencies._event_bus = None
+
+
+# ---------------------------------------------------------------------------
 # Concurrency test infrastructure — real pooled connections for parallel tests
 # ---------------------------------------------------------------------------
 

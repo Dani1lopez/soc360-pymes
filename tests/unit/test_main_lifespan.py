@@ -39,9 +39,9 @@ class TestLifespanConsumerLifecycle:
 
                         app = MagicMock()
                         async with lifespan(app):
-                            # At this point, startup should have completed
+                            # Yield to event loop so background task is scheduled
+                            await asyncio.sleep(0)
                             assert consumer_started, "EventConsumer should have been instantiated"
-                            assert mock_stop_event.set is not None or True  # stop event exists
 
         await mock_redis.aclose()
 

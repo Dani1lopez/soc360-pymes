@@ -31,6 +31,12 @@ LOGIN_ATTEMPTS_WINDOW_SECONDS = 900
 LOGIN_ATTEMPTS_MAX = 10
 
 
+async def get_event_bus() -> "EventBus":
+    """Thin alias so tests can patch app.modules.auth.service.get_event_bus."""
+    from app.dependencies import get_event_bus as _get
+    return await _get()
+
+
 
 def _login_attempts_key(email: str) -> str:
     """Genera la clave Redis para el contador de intentos de login."""
@@ -226,7 +232,22 @@ async def login(
     )
     await track_jti(str(user.id), jti, redis)
     refresh_token = await _create_refresh_token(user.id, db, created_from_ip=request_ip)
-    
+
+    # Publish auth.login event (non-blocking on failure)
+    try:
+        event_bus = await get_event_bus()
+        from app.event_schemas import AuthLoginEvent
+        await event_bus.publish(AuthLoginEvent(
+            event_id=__import__("uuid").uuid4(),
+            tenant_id=user.tenant_id,
+            user_id=str(user.id),
+            email=user.email,
+            ip_address=request_ip,
+        ))
+    except Exception:
+        logger = __import__("app.core.logging", fromlist=["get_logger"]).get_logger(__name__)
+        logger.warning("event_publish_failed", event_type="auth.login")
+
     return TokenResponse(
         access_token=access_token,
         token_type="bearer",

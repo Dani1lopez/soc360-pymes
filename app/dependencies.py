@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated, TypeAlias, AsyncGenerator
 
 from app.core.database import get_db, set_tenant_context
-from app.core.redis import get_redis
+from app.core.redis import get_redis, get_redis_client
 from app.core.security import decode_access_token, is_token_revoked, has_minimum_role
 from app.core.llm import get_llm_provider, LLMProvider
 from app.modules.users.models import User
@@ -20,6 +20,18 @@ from app.core.logging import get_logger
 
 
 logger = get_logger(__name__)
+
+_event_bus: "EventBus | None" = None
+
+
+async def get_event_bus() -> "EventBus":
+    """Singleton factory for the EventBus dependency."""
+    global _event_bus
+    if _event_bus is None:
+        from app.event_bus import EventBus
+        redis = await get_redis_client()
+        _event_bus = EventBus(redis)
+    return _event_bus
 
 
 async def get_llm(

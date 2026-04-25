@@ -28,6 +28,11 @@ async def get_redis() -> AsyncGenerator[Redis, None]:
         await redis.aclose()
 
 
+async def get_redis_client() -> Redis:
+    """Direct async factory. Caller owns the connection lifecycle."""
+    return Redis(connection_pool=get_pool())
+
+
 async def ping_redis() -> bool:
     redis = Redis(connection_pool=get_pool())
     try:

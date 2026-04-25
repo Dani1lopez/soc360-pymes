@@ -164,7 +164,7 @@ class TestUserService:
         mock_db.execute.return_value = mock_result
         
         with pytest.raises(UserError) as exc_info:
-            await service.deactivate_user(user_id=uuid4(), db=mock_db)
+            await service.deactivate_user(user_id=uuid4(), db=mock_db, redis=AsyncMock())
         
         assert exc_info.value.status_code == 409
 

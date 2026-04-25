@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     TOGETHER_API_KEY: str | None = None
     HUGGINGFACE_API_KEY: str | None = None
     
+    # Event Bus (Redis Streams)
+    EVENT_STREAM_PREFIX: str = "events"
+    EVENT_CONSUMER_GROUP: str = "soc360-consumers"
+    EVENT_MAX_RETRIES: int = 3
+    EVENT_STREAM_MAXLEN: int = 100000
+    EVENT_STREAM_MAXAGE_SECONDS: int = 604800
+    EVENT_PENDING_LAG_THRESHOLD: int = 100
+
     #Redis
     REDIS_PASSWORD: str | None = None
     REDIS_URL: str = "redis://localhost:6379/0"

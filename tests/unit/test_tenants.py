@@ -208,7 +208,7 @@ class TestTenantService:
         mock_db.execute.return_value = mock_result
         
         with pytest.raises(TenantError) as exc_info:
-            await service.deactivate_tenant(tenant_id=uuid4(), db=mock_db)
+            await service.deactivate_tenant(tenant_id=uuid4(), db=mock_db, redis=AsyncMock())
         
         assert exc_info.value.status_code == 409
     

@@ -51,12 +51,13 @@ async def set_tenant_context(
         raise ValueError("tenant_id requerido para usuarios no superadmin")
     
     if is_superadmin:
-        await db.execute(text("SET LOCAL app.is_superadmin = 'true'"))
+        await db.execute(text("SELECT set_config('app.is_superadmin', 'true', true)"))
     else:
         await db.execute(
-            text(f"SET LOCAL app.current_tenant = '{str(tenant_id)}'"),
+            text("SELECT set_config('app.current_tenant', :tenant_id, true)"),
+            {"tenant_id": str(tenant_id)},
         )
-        await db.execute(text("SET LOCAL app.is_superadmin = 'false'"))
+        await db.execute(text("SELECT set_config('app.is_superadmin', 'false', true)"))
     
     logger.debug(
         "tenant_context_set", 

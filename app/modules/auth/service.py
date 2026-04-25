@@ -38,14 +38,17 @@ def _login_attempts_key(email: str) -> str:
 
 
 async def _check_account_lockout(email: str, redis: Redis) -> None:
-    """Verifica si la cuenta esta bloqueada por demasiados intentos fallidos"""
+    """Verifica si la cuenta esta bloqueada por demasiados intentos fallidos.
+
+    El lockout se rastrea internamente (Redis) pero el response PUBLICO
+    devuelve 401 generico para no revelar existencia de la cuenta.
+    """
     key = _login_attempts_key(email)
     attempts = await redis.get(key)
     if attempts and int(attempts) >= LOGIN_ATTEMPTS_MAX:
-        ttl = await redis.ttl(key)
         raise AuthError(
-            status_code=429,
-            detail=f"Cuenta bloqueada temporalmente. Intenta de nuevo en {ttl} segundos.",
+            status_code=401,
+            detail="Credenciales incorrectas",
         )
 
 
@@ -211,7 +214,7 @@ async def login(
         await _record_failed_attempt(email, redis)
         raise AuthError(
             status_code=401,
-            detail="Credenciales incorrectas.",
+            detail="Credenciales incorrectas",
         )
     
     await _check_tenant_active(user, db)

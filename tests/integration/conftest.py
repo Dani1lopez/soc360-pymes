@@ -79,7 +79,11 @@ def _run_alembic_upgrade(dry_run: bool = False, db_url: str = "") -> None:
     cmd = [
         sys.executable, "-m", "alembic", "upgrade", "head",
     ]
-    env = {**os.environ, "PYTHONPATH": project_root}
+    env = {
+        **os.environ,
+        "PYTHONPATH": project_root,
+        "DATABASE_URL_MIGRATION": os.environ["DATABASE_URL_MIGRATION"],
+    }
 
     try:
         result = subprocess.run(

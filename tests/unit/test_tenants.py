@@ -240,6 +240,142 @@ class TestTenantService:
         assert updated.plan == "pro"
         assert updated.max_assets == 100  # pro plan limit
 
+    @pytest.mark.asyncio
+    async def test_create_tenant_with_explicit_slug(self):
+        """Test creating tenant with explicit slug."""
+        from app.modules.tenants import service
+        from app.modules.tenants.schemas import TenantCreate
+
+        mock_db = AsyncMock()
+        mock_db.add = MagicMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        with patch.object(service, "_is_slug_taken", new_callable=AsyncMock) as mock_is_slug, \
+             patch.object(service, "_plan_to_max_assets") as mock_plan:
+            mock_is_slug.return_value = False
+            mock_plan.return_value = 10
+
+            data = TenantCreate(name="Test", slug="mi-tenant")
+            result = await service.create_tenant(data=data, db=mock_db)
+
+            assert result.slug == "mi-tenant"
+
+    @pytest.mark.asyncio
+    async def test_create_tenant_slug_taken(self):
+        """Test creating tenant with taken slug raises error."""
+        from app.modules.tenants import service
+        from app.modules.tenants.schemas import TenantCreate
+        from app.core.exceptions import TenantError
+
+        mock_db = AsyncMock()
+
+        with patch.object(service, "_is_slug_taken", new_callable=AsyncMock) as mock_is_slug:
+            mock_is_slug.return_value = True
+
+            data = TenantCreate(name="Test", slug="mi-tenant")
+            with pytest.raises(TenantError) as exc_info:
+                await service.create_tenant(data=data, db=mock_db)
+
+            assert exc_info.value.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_create_tenant_auto_generates_slug(self):
+        """Test creating tenant auto-generates slug from name."""
+        from app.modules.tenants import service
+        from app.modules.tenants.schemas import TenantCreate
+
+        mock_db = AsyncMock()
+        mock_db.add = MagicMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        with patch.object(service, "_is_slug_taken", new_callable=AsyncMock) as mock_is_slug:
+            mock_is_slug.return_value = False
+
+            data = TenantCreate(name="Acme Corp")
+            result = await service.create_tenant(data=data, db=mock_db)
+
+            assert result.slug == "acme-corp"
+
+    @pytest.mark.asyncio
+    async def test_create_tenant_slug_collision(self):
+        """Test creating tenant handles slug collision."""
+        from app.modules.tenants import service
+        from app.modules.tenants.schemas import TenantCreate
+
+        mock_db = AsyncMock()
+        mock_db.add = MagicMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        async def is_taken(db, slug):
+            return slug == "acme-corp"
+
+        with patch.object(service, "_is_slug_taken", new_callable=AsyncMock) as mock_is_slug:
+            mock_is_slug.side_effect = is_taken
+
+            data = TenantCreate(name="Acme Corp")
+            result = await service.create_tenant(data=data, db=mock_db)
+
+            assert result.slug == "acme-corp-2"
+
+    @pytest.mark.asyncio
+    async def test_create_tenant_plan_maps_max_assets(self):
+        """Test creating tenant maps plan to max_assets."""
+        from app.modules.tenants import service
+        from app.modules.tenants.schemas import TenantCreate
+
+        mock_db = AsyncMock()
+        mock_db.add = MagicMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        with patch.object(service, "_is_slug_taken", new_callable=AsyncMock) as mock_is_slug:
+            mock_is_slug.return_value = False
+
+            data = TenantCreate(name="Pro Tenant", plan="pro")
+            result = await service.create_tenant(data=data, db=mock_db)
+
+            assert result.max_assets == 100
+
+    @pytest.mark.asyncio
+    async def test_list_tenants_active_only_default(self):
+        """Test listing tenants returns active only by default."""
+        from app.modules.tenants import service
+
+        mock_t1 = MagicMock()
+        mock_t2 = MagicMock()
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [mock_t1, mock_t2]
+        mock_db.execute.return_value = mock_result
+
+        tenants = await service.list_tenants(db=mock_db)
+
+        assert len(tenants) == 2
+
+        called_stmt = mock_db.execute.call_args[0][0]
+        compiled = str(called_stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+        assert "is_active" in compiled
+
+    @pytest.mark.asyncio
+    async def test_list_tenants_pagination(self):
+        """Test listing tenants applies pagination."""
+        from app.modules.tenants import service
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = []
+        mock_db.execute.return_value = mock_result
+
+        await service.list_tenants(db=mock_db, offset=0, limit=2)
+
+        called_stmt = mock_db.execute.call_args[0][0]
+        assert called_stmt._offset_clause.value == 0
+        assert called_stmt._limit_clause.value == 2
+
 
 class TestTenantResponseSchema:
     """Test TenantResponse schema."""

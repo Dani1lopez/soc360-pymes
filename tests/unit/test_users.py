@@ -168,6 +168,94 @@ class TestUserService:
         
         assert exc_info.value.status_code == 409
 
+    @pytest.mark.asyncio
+    async def test_get_user_by_email_case_insensitive(self):
+        """Test getting user by email is case-insensitive."""
+        from app.modules.users import service
+
+        mock_user = MagicMock()
+        mock_user.email = "User@Example.COM"
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_user
+        mock_db.execute.return_value = mock_result
+
+        user = await service.get_user_by_email("user@example.com", db=mock_db)
+
+        assert user == mock_user
+
+    @pytest.mark.asyncio
+    async def test_get_user_by_email_not_found(self):
+        """Test getting user by email returns None if not found."""
+        from app.modules.users import service
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute.return_value = mock_result
+
+        user = await service.get_user_by_email("no-existe@test.com", db=mock_db)
+
+        assert user is None
+
+    @pytest.mark.asyncio
+    async def test_list_users_filters_by_tenant(self):
+        """Test listing users filters by tenant_id."""
+        from app.modules.users import service
+        from uuid import uuid4
+
+        tenant_id = uuid4()
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = []
+        mock_db.execute.return_value = mock_result
+
+        await service.list_users(db=mock_db, tenant_id=tenant_id)
+
+        called_stmt = mock_db.execute.call_args[0][0]
+        assert "tenant_id" in str(called_stmt.compile())
+
+    @pytest.mark.asyncio
+    async def test_get_active_tenant_not_found(self):
+        """Test _get_active_tenant raises 404 when tenant not found."""
+        from app.modules.users import service
+        from app.core.exceptions import UserError
+
+        tenant_id = uuid4()
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute.return_value = mock_result
+
+        with pytest.raises(UserError) as exc_info:
+            await service._get_active_tenant(mock_db, tenant_id)
+
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_active_tenant_inactive(self):
+        """Test _get_active_tenant raises 409 when tenant is inactive."""
+        from app.modules.users import service
+        from app.core.exceptions import UserError
+
+        tenant_id = uuid4()
+
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = False
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_tenant
+        mock_db.execute.return_value = mock_result
+
+        with pytest.raises(UserError) as exc_info:
+            await service._get_active_tenant(mock_db, tenant_id)
+
+        assert exc_info.value.status_code == 409
+
 
 class TestUserRoleHierarchy:
     """Test role hierarchy logic."""

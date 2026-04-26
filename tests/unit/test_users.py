@@ -16,7 +16,7 @@ class TestUserSchemas:
         with pytest.raises(ValueError, match="superadmin no puede pertenecer"):
             UserCreate(
                 email="test@test.com",
-                password="password123",
+                password="ValidPass123!",
                 full_name="Test User",
                 role=RoleEnum.superadmin,
                 tenant_id=uuid4(),
@@ -27,7 +27,7 @@ class TestUserSchemas:
         with pytest.raises(ValueError, match="usuario normal debe tener"):
             UserCreate(
                 email="test@test.com",
-                password="password123",
+                password="ValidPass123!",
                 full_name="Test User",
                 role=RoleEnum.admin,
                 tenant_id=None,
@@ -38,7 +38,7 @@ class TestUserSchemas:
         with pytest.raises(ValueError, match="is_superadmin=True requiere"):
             UserCreate(
                 email="test@test.com",
-                password="password123",
+                password="ValidPass123!",
                 full_name="Test User",
                 role=RoleEnum.admin,
                 tenant_id=None,
@@ -48,7 +48,7 @@ class TestUserSchemas:
         # Valid normal user
         valid = UserCreate(
             email="test@test.com",
-            password="password123",
+            password="ValidPass123!",
             full_name="Test User",
             role=RoleEnum.admin,
             tenant_id=uuid4(),
@@ -85,7 +85,7 @@ class TestUserService:
         from app.modules.users.schemas import UserCreate, RoleEnum
         data = UserCreate(
             email="taken@test.com",
-            password="password123",
+            password="ValidPass123!",
             full_name="Test User",
             role=RoleEnum.viewer,
             tenant_id=uuid4(),

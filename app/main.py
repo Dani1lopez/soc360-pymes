@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
+from app.core.middleware import HTTPSRedirectMiddleware, SecurityHeadersMiddleware
 from app.core.redis import ping_redis, close_pool, get_redis_client
 from app.event_bus import EventConsumer
 from app.modules.auth.router import router as auth_router
@@ -70,7 +71,7 @@ def create_app() -> FastAPI:
         title=settings.APP_NAME,
         description="SOC as a Service para pequeñas y medianas empresas",
         version=APP_VERSION,
-        docs_url="/api/docs",
+        docs_url="/api/docs" if settings.ENVIRONMENT != "production" else None,
         redoc_url="/api/redoc" if settings.ENVIRONMENT != "production" else None,
         lifespan=lifespan,
     )
@@ -89,6 +90,8 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
+    app.add_middleware(HTTPSRedirectMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
     
     #Routers
     app.include_router(auth_router, prefix="/api/v1")

@@ -228,6 +228,6 @@ class TestConsumerHandlerIntegration:
         # structlog's ConsoleRenderer includes key=value pairs in the message
         # Strip ANSI codes before checking content
         msg = strip_ansi_codes(login_record.message)
-        assert "email=payload@test.com" in msg, f"Expected email in message, got: {msg}"
-        assert "ip_address=8.8.8.8" in msg, f"Expected ip_address in message, got: {msg}"
+        assert "email_hash=60afbf6231f9ba6c" in msg, f"Expected email_hash in message, got: {msg}"
+        assert "ip_prefix=8.8.8.0/24" in msg, f"Expected ip_prefix in message, got: {msg}"
         assert "user_id=" in msg, f"Expected user_id in message, got: {msg}"

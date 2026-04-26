@@ -53,10 +53,10 @@ SEED_VIEWER_ID     = uuid.UUID("00000000-0000-0000-0000-000000000013")
 # Débiles por diseño (solo dev). Para cambiarlas sin tocar código:
 #   SEED_SUPERADMIN_PASSWORD=xxx python scripts/seed_db.py
 
-_SUPERADMIN_PASS = os.getenv("SEED_SUPERADMIN_PASSWORD", "superadmin1234")
-_ADMIN_PASS      = os.getenv("SEED_ADMIN_PASSWORD",      "admin1234")
-_ANALYST_PASS    = os.getenv("SEED_ANALYST_PASSWORD",    "analyst1234")
-_VIEWER_PASS     = os.getenv("SEED_VIEWER_PASSWORD",     "viewer1234")
+_SUPERADMIN_PASS = os.getenv("SEED_SUPERADMIN_PASSWORD", "Superadmin1234!")
+_ADMIN_PASS      = os.getenv("SEED_ADMIN_PASSWORD",      "Admin1234!")
+_ANALYST_PASS    = os.getenv("SEED_ANALYST_PASSWORD",    "Analyst1234!")
+_VIEWER_PASS     = os.getenv("SEED_VIEWER_PASSWORD",     "Viewer1234!")
 
 # ── Datos de seed ────────────────────────────────────────────────────────────
 # Los hashes bcrypt se calculan aquí UNA SOLA VEZ al arrancar el script.
@@ -296,11 +296,7 @@ async def main(dry_run: bool = False) -> None:
             print(f"   {line}")
 
     if not dry_run:
-        print("\n   Credenciales de desarrollo:")
-        print(f"   superadmin@soc360.local  /  {_SUPERADMIN_PASS}")
-        print(f"   admin@acme.com           /  {_ADMIN_PASS}")
-        print(f"   analyst@acme.com         /  {_ANALYST_PASS}")
-        print(f"   viewer@acme.com          /  {_VIEWER_PASS}")
+        print("\n   ✅ Development users seeded (credentials configured)")
 
         if _SUPERADMIN_PASS == "superadmin1234":
             print(

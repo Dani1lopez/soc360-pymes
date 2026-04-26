@@ -42,6 +42,7 @@ VIEWER_A_ID   = "dddddddd-dddd-dddd-dddd-dddddddddddd"
 ADMIN_B_ID    = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
 
 TEST_DATABASE_URL = os.environ["DATABASE_URL"]
+MIGRATION_DATABASE_URL = os.environ["DATABASE_URL_MIGRATION"]
 
 
 def _seed_password_hash(password: str) -> str:
@@ -56,14 +57,18 @@ def prepare_database():
     from app.modules.auth.models import RefreshToken  # noqa: F401
 
     async def _setup() -> None:
-        engine = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
+        engine = create_async_engine(MIGRATION_DATABASE_URL, echo=False, poolclass=NullPool)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(text("GRANT ALL ON ALL TABLES IN SCHEMA public TO soc360_app"))
+            await conn.execute(text("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO soc360_app"))
+            await conn.execute(text("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO soc360_app"))
+            await conn.execute(text("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO soc360_app"))
         await engine.dispose()
 
     async def _teardown() -> None:
-        engine = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
+        engine = create_async_engine(MIGRATION_DATABASE_URL, echo=False, poolclass=NullPool)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
         await engine.dispose()

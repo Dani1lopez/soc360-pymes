@@ -18,7 +18,7 @@ class RoleEnum(str, Enum):
 
 class UserCreate(BaseModel):
     email: EmailStr = Field(..., description="Email unico del usuario")
-    password: str = Field(..., min_length=8, max_length=128)
+    password: str = Field(..., min_length=12, max_length=128)
     full_name: str = Field(..., min_length=1, max_length=255)
     role: RoleEnum = Field(..., description="Rol del usuario")
     tenant_id: uuid.UUID | None = Field(None, description="None solo si is_superadmin=True")

@@ -6,6 +6,7 @@ that wrap Redis Streams primitives with typed Pydantic event schemas.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from redis.asyncio import Redis
 
 from app.core.config import settings
@@ -178,12 +179,16 @@ class EventBus:
         user_agent = data.get("user_agent", None)
         tenant_id = data.get("tenant_id", None)
 
+        email_hash = hashlib.sha256(email.encode()).hexdigest()[:16] if email else None
+        ip_prefix = "{}.".format(".".join(ip_address.split(".")[:3])) + "0/24" if ip_address else None
+        user_agent_short = user_agent[:64] if user_agent else user_agent
+
         logger.info(
             "auth.login_event_consumed",
             user_id=user_id,
-            email=email,
-            ip_address=ip_address,
-            user_agent=user_agent,
+            email_hash=email_hash,
+            ip_prefix=ip_prefix,
+            user_agent=user_agent_short,
             tenant_id=tenant_id,
         )
 

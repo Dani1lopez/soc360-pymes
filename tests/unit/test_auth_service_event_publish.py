@@ -81,8 +81,9 @@ class TestAuthLoginEventPublish:
         # Verify event fields
         assert event.event_type == "auth.login"
         assert event.user_id == str(mock_user.id)
-        assert event.email == "test@example.com"
-        assert event.ip_address == "192.168.1.1"
+        assert event.email_hash is not None
+        assert len(event.email_hash) == 16
+        assert event.ip_prefix == "192.168.1.0/24"
         assert event.tenant_id == mock_user.tenant_id
 
     @pytest.mark.asyncio
@@ -142,7 +143,9 @@ class TestAuthLoginEventPublish:
         event = published_events[0]
         # user_agent passed via request headers is None in this test
         # (not passed), so it defaults to None per schema
-        assert event.ip_address == "10.0.0.1"
+        assert event.ip_prefix == "10.0.0.0/24"
+        assert event.email_hash is not None
+        assert len(event.email_hash) == 16
 
     @pytest.mark.asyncio
     async def test_login_does_not_block_on_publish_failure(self):

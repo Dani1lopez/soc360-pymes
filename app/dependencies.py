@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated, TypeAlias, AsyncGenerator
 
 from app.core.database import get_db, set_tenant_context
-from app.core.redis import get_redis, get_redis_client
+from app.core.redis import get_redis, get_redis_client, check_redis_healthy
 from app.core.security import decode_access_token, is_token_revoked, has_minimum_role
 from app.core.llm import get_llm_provider, LLMProvider
 from app.modules.users.models import User
@@ -77,6 +77,12 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     jti = payload.get("jti")
+    if not await check_redis_healthy(redis):
+        logger.error("redis_unhealthy", reason="auth_dependency")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Servicio temporalmente no disponible",
+        )
     if not jti or await is_token_revoked(jti, redis):
         logger.warning("auth_failed", reason="revoked_token", jti=jti)
         raise HTTPException(

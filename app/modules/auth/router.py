@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Cookie, HTTPException, Request, Response
 
 from app.core.config import settings
-from app.core.exceptions import AuthError
+from app.core.exceptions import AppError
 from app.core.security import decode_access_token
 from app.dependencies import DBDep, RedisDep, CurrentUserDep
 from app.modules.auth.schemas import (
@@ -54,7 +54,7 @@ async def login(
             db=db,
             redis=redis,
         )
-    except AuthError as exc:
+    except AppError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
     _set_refresh_cookie(response, refresh_token)
@@ -91,7 +91,7 @@ async def refresh(
             redis=redis,
             request_ip=request.client.host if request.client else None,
         )
-    except AuthError as exc:
+    except AppError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
     _set_refresh_cookie(response, new_refresh)
@@ -115,7 +115,7 @@ async def logout(
             db=db,
             redis=redis,
         )
-    except AuthError as exc:
+    except AppError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
     _clear_refresh_cookie(response)
@@ -139,7 +139,7 @@ async def change_password(
             db=db,
             redis=redis,
         )
-    except AuthError as exc:
+    except AppError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
     _clear_refresh_cookie(response)

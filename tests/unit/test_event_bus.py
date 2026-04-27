@@ -56,24 +56,7 @@ class TestEventBusPublish:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email="user@example.com",
-        )
-        msg_id = await bus.publish(event)
-        assert isinstance(msg_id, bytes)
-        assert b"-" in msg_id
-
-    @pytest.mark.asyncio
-    async def test_publish_stores_event_in_stream(self, client: FakeRedis):
-        """publish() MUST store the event in the correct Redis stream."""
-        from app.event_bus import EventBus
-        from app.event_schemas import AuthLoginEvent
-
-        bus = EventBus(redis_client=client)
-        event = AuthLoginEvent(
-            event_id=uuid.uuid4(),
-            tenant_id=uuid.uuid4(),
-            user_id="user-123",
-            email="user@example.com",
+            email_hash="a" * 16,
         )
         await bus.publish(event)
         length = await client.xlen("events:auth.login")
@@ -92,7 +75,7 @@ class TestEventBusPublish:
                 event_id=uuid.uuid4(),
                 tenant_id=uuid.uuid4(),
                 user_id=f"user-{i}",
-                email=f"user{i}@example.com",
+                email_hash=f"{i:016x}",
             )
             await bus.publish(event)
         # Stream length should be bounded (fakeredis approximates, allow up to 3)
@@ -101,7 +84,7 @@ class TestEventBusPublish:
 
     @pytest.mark.asyncio
     async def test_publish_event_with_optional_fields(self, client: FakeRedis):
-        """publish() MUST correctly serialize ip_address and user_agent."""
+        """publish() MUST correctly serialize ip_prefix and user_agent."""
         from app.event_bus import EventBus
         from app.event_schemas import AuthLoginEvent
 
@@ -110,8 +93,64 @@ class TestEventBusPublish:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email="user@example.com",
-            ip_address="192.168.1.1",
+            email_hash="a" * 16,
+            ip_prefix="192.168.1.0/24",
+            user_agent="Mozilla/5.0",
+        )
+        msg_id = await bus.publish(event)
+        assert isinstance(msg_id, bytes)
+        assert b"-" in msg_id
+
+    @pytest.mark.asyncio
+    async def test_publish_stores_event_in_stream(self, client: FakeRedis):
+        """publish() MUST store the event in the correct Redis stream."""
+        from app.event_bus import EventBus
+        from app.event_schemas import AuthLoginEvent
+
+        bus = EventBus(redis_client=client)
+        event = AuthLoginEvent(
+            event_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            user_id="user-123",
+            email_hash="a" * 16,
+        )
+        await bus.publish(event)
+        length = await client.xlen("events:auth.login")
+        assert length == 1
+
+    @pytest.mark.asyncio
+    async def test_publish_uses_maxlen_from_settings(self, client: FakeRedis):
+        """publish() MUST use xadd maxlen with approximate=True from settings."""
+        from app.event_bus import EventBus
+        from app.event_schemas import AuthLoginEvent
+
+        bus = EventBus(redis_client=client)
+        # Publish 3 events with maxlen=2 (approximate)
+        for i in range(3):
+            event = AuthLoginEvent(
+                event_id=uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                user_id=f"user-{i}",
+                email_hash=f"{i:016x}",
+            )
+            await bus.publish(event)
+        # Stream length should be bounded (fakeredis approximates, allow up to 3)
+        length = await client.xlen("events:auth.login")
+        assert length <= 3
+
+    @pytest.mark.asyncio
+    async def test_publish_event_with_optional_fields(self, client: FakeRedis):
+        """publish() MUST correctly serialize ip_prefix and user_agent."""
+        from app.event_bus import EventBus
+        from app.event_schemas import AuthLoginEvent
+
+        bus = EventBus(redis_client=client)
+        event = AuthLoginEvent(
+            event_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            user_id="user-123",
+            email_hash="a" * 16,
+            ip_prefix="192.168.1.0/24",
             user_agent="Mozilla/5.0",
         )
         msg_id = await bus.publish(event)

@@ -25,6 +25,7 @@ from app.modules.users.models import User
 from app.modules.tenants.models import Tenant
 from app.modules.auth.schemas import TokenResponse
 from app.core.exceptions import AuthError, ServiceUnavailableError
+from app.core.pii import hash_email, mask_ip
 from app.core.redis import check_redis_healthy
 
 MAX_ACTIVE_SESSIONS = 5
@@ -268,8 +269,8 @@ async def login(
             event_id=__import__("uuid").uuid4(),
             tenant_id=user.tenant_id,
             user_id=str(user.id),
-            email=user.email,
-            ip_address=request_ip,
+            email_hash=hash_email(user.email),
+            ip_prefix=mask_ip(request_ip),
         ))
     except Exception:
         logger = __import__("app.core.logging", fromlist=["get_logger"]).get_logger(__name__)

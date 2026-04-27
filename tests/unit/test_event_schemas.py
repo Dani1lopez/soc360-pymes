@@ -116,45 +116,45 @@ class TestAuthLoginEvent:
         errors = exc_info.value.errors()
         assert any(e["loc"] == ("user_id",) for e in errors)
 
-    def test_auth_login_event_requires_email(self):
-        """AuthLoginEvent MUST require email field."""
+    def test_auth_login_event_requires_email_hash(self):
+        """AuthLoginEvent MUST require email_hash field."""
         from app.event_schemas import AuthLoginEvent
 
         with pytest.raises(ValidationError) as exc_info:
             AuthLoginEvent(
                 user_id="user-123",
-                email="",  # empty should fail
-                ip_address="192.168.1.1",
+                email_hash="",  # empty should fail
+                ip_prefix="192.168.1.0/24",
                 user_agent="Mozilla/5.0",
             )
         errors = exc_info.value.errors()
-        assert any(e["loc"] == ("email",) for e in errors)
+        assert any(e["loc"] == ("email_hash",) for e in errors)
 
-    def test_auth_login_event_email_must_be_valid(self):
-        """AuthLoginEvent email MUST be a valid email format."""
+    def test_auth_login_event_email_hash_must_be_non_empty(self):
+        """AuthLoginEvent email_hash MUST be non-empty."""
         from app.event_schemas import AuthLoginEvent
 
         with pytest.raises(ValidationError) as exc_info:
             AuthLoginEvent(
                 user_id="user-123",
-                email="not-an-email",
-                ip_address="192.168.1.1",
+                email_hash="",  # empty should fail min_length
+                ip_prefix="192.168.1.0/24",
                 user_agent="Mozilla/5.0",
             )
         errors = exc_info.value.errors()
-        assert any(e["loc"] == ("email",) for e in errors)
+        assert any(e["loc"] == ("email_hash",) for e in errors)
 
     def test_auth_login_event_optional_fields_default_to_none(self):
-        """AuthLoginEvent ip_address and user_agent MUST default to None when not provided."""
+        """AuthLoginEvent ip_prefix and user_agent MUST default to None when not provided."""
         from app.event_schemas import AuthLoginEvent
 
         event = AuthLoginEvent(
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email="user@example.com",
+            email_hash="a" * 16,
         )
-        assert event.ip_address is None
+        assert event.ip_prefix is None
         assert event.user_agent is None
 
     def test_auth_login_event_accepts_full_data(self):
@@ -165,13 +165,13 @@ class TestAuthLoginEvent:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email="user@example.com",
-            ip_address="192.168.1.1",
+            email_hash="a" * 16,
+            ip_prefix="192.168.1.0/24",
             user_agent="Mozilla/5.0",
         )
         assert event.user_id == "user-123"
-        assert event.email == "user@example.com"
-        assert event.ip_address == "192.168.1.1"
+        assert event.email_hash == "a" * 16
+        assert event.ip_prefix == "192.168.1.0/24"
         assert event.user_agent == "Mozilla/5.0"
 
     def test_auth_login_event_inherits_from_base(self):
@@ -187,7 +187,7 @@ class TestAuthLoginEvent:
             tenant_id=tenant_id,
             timestamp=ts,
             user_id="user-123",
-            email="user@example.com",
+            email_hash="a" * 16,
         )
         assert event.event_id == event_id
         assert event.tenant_id == tenant_id
@@ -205,15 +205,15 @@ class TestAuthLoginEventSerialization:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email="user@example.com",
-            ip_address="192.168.1.1",
+            email_hash="a" * 16,
+            ip_prefix="192.168.1.0/24",
             user_agent="Mozilla/5.0",
         )
         data = event.model_dump()
         assert isinstance(data, dict)
         assert data["user_id"] == "user-123"
-        assert data["email"] == "user@example.com"
-        assert data["ip_address"] == "192.168.1.1"
+        assert data["email_hash"] == "a" * 16
+        assert data["ip_prefix"] == "192.168.1.0/24"
         assert data["user_agent"] == "Mozilla/5.0"
         assert "event_id" in data
         assert "tenant_id" in data
@@ -227,14 +227,14 @@ class TestAuthLoginEventSerialization:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email="user@example.com",
-            ip_address="192.168.1.1",
+            email_hash="a" * 16,
+            ip_prefix="192.168.1.0/24",
             user_agent="Mozilla/5.0",
         )
         json_str = event.model_dump_json()
         assert isinstance(json_str, str)
         assert "user-123" in json_str
-        assert "user@example.com" in json_str
+        assert "a" * 16 in json_str
 
     def test_model_validate_round_trip(self):
         """model_validate() MUST reconstruct an identical event."""
@@ -244,14 +244,14 @@ class TestAuthLoginEventSerialization:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email="user@example.com",
-            ip_address="192.168.1.1",
+            email_hash="a" * 16,
+            ip_prefix="192.168.1.0/24",
             user_agent="Mozilla/5.0",
         )
         data = original.model_dump()
         restored = AuthLoginEvent.model_validate(data)
         assert restored.user_id == original.user_id
-        assert restored.email == original.email
-        assert restored.ip_address == original.ip_address
+        assert restored.email_hash == original.email_hash
+        assert restored.ip_prefix == original.ip_prefix
         assert restored.user_agent == original.user_agent
         assert restored.event_id == original.event_id

@@ -97,8 +97,10 @@ async def test_auth_login_event_appears_in_redis_stream():
             found_event = True
             # Verify key fields
             assert field_dict["user_id"] == str(mock_user.id), "user_id must match"
-            assert field_dict["email"] == "integration@test.com", "email must match"
-            assert field_dict["ip_address"] == "203.0.113.50", "ip_address must match"
+            assert "email_hash" in field_dict, "email_hash must be present"
+            assert "email" not in field_dict, "raw email must NOT be present"
+            assert "ip_prefix" in field_dict, "ip_prefix must be present"
+            assert "ip_address" not in field_dict, "raw ip_address must NOT be present"
             assert field_dict["tenant_id"] == str(mock_user.tenant_id), "tenant_id must match"
             break
 
@@ -132,8 +134,8 @@ async def test_auth_login_event_consumed_by_consumer_group():
         event_type="auth.login",
         tenant_id=uuid4(),
         user_id=str(uuid4()),
-        email="consumer@test.com",
-        ip_address="192.0.2.1",
+        email_hash="a" * 16,
+        ip_prefix="192.0.2.0/24",
         user_agent="ConsumerGroupTest/1.0",
         timestamp=datetime.now(timezone.utc),
     )
@@ -166,8 +168,8 @@ async def test_auth_login_event_consumed_by_consumer_group():
     # Verify message data
     msg = pending[0]
     data = msg["data"]
-    assert data["email"] == "consumer@test.com"
-    assert data["ip_address"] == "192.0.2.1"
+    assert data["email_hash"] == "a" * 16
+    assert data["ip_prefix"] == "192.0.2.0/24"
 
     # Acknowledge the message
     await consumer.ack(msg["message_id"])

@@ -42,8 +42,8 @@ class TestEventBusDispatchRouting:
             "event_type": "auth.login",
             "tenant_id": str(uuid.uuid4()),
             "user_id": str(uuid.uuid4()),
-            "email": "handler@test.com",
-            "ip_address": "1.2.3.4",
+            "email_hash": "e" * 16,
+            "ip_prefix": "1.2.3.0/24",
             "user_agent": "TestBrowser/1.0",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
@@ -72,8 +72,8 @@ class TestEventBusDispatchRouting:
         bad_data = {
             "event_type": "auth.login",
             "user_id": str(uuid.uuid4()),
-            "email": "handler_err@test.com",
-            "ip_address": "1.2.3.4",
+            "email_hash": "f" * 16,
+            "ip_prefix": "1.2.3.0/24",
             "user_agent": None,
             "tenant_id": str(uuid.uuid4()),
             "_retry_count": settings.EVENT_MAX_RETRIES,  # Already at max retries
@@ -123,8 +123,8 @@ class TestEventBusPublishSerialization:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-uuid-serializer",
-            email="uuid@test.com",
-            ip_address="10.0.0.1",
+            email_hash="a" * 16,
+            ip_prefix="10.0.0.0/24",
         )
         await bus.publish(event)
 
@@ -156,7 +156,7 @@ class TestEventBusPublishSerialization:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-datetime-serializer",
-            email="datetime@test.com",
+            email_hash="a" * 16,
             timestamp=ts,
         )
         await bus.publish(event)

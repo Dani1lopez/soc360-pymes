@@ -40,8 +40,8 @@ class TestBaseEventExtraFields:
             "event_type": "auth.login",
             "tenant_id": str(uuid.uuid4()),
             "user_id": "user-123",
-            "email": "user@example.com",
-            "ip_address": "192.168.1.1",
+            "email_hash": "a" * 16,
+            "ip_prefix": "192.168.1.0/24",
             "user_agent": "Mozilla/5.0",
             # Extra field — Pydantic should ignore it silently
             "unknown_field": "should be ignored",
@@ -50,23 +50,23 @@ class TestBaseEventExtraFields:
         # Should not raise — extra fields are ignored
         event = AuthLoginEvent.model_validate(data)
         assert event.user_id == "user-123"
-        assert event.email == "user@example.com"
+        assert event.email_hash == "a" * 16
 
 
-class TestAuthLoginEventEmailNormalization:
-    """Validate email field normalization (str_strip_whitespace)."""
+class TestAuthLoginEventEmailHashNormalization:
+    """Validate email_hash field normalization (str_strip_whitespace)."""
 
-    def test_email_whitespace_is_stripped(self):
-        """AuthLoginEvent email MUST have leading/trailing whitespace stripped."""
+    def test_email_hash_whitespace_is_stripped(self):
+        """AuthLoginEvent email_hash MUST have leading/trailing whitespace stripped."""
         from app.event_schemas import AuthLoginEvent
 
         event = AuthLoginEvent(
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email="  user@example.com  ",
+            email_hash="  abcdef1234567890  ",
         )
-        assert event.email == "user@example.com"
+        assert event.email_hash == "abcdef1234567890"
 
 
 class TestBaseEventTenantIdRequired:
@@ -98,7 +98,7 @@ class TestAuthLoginEventTimestampDefault:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email="user@example.com",
+            email_hash="a" * 16,
         )
         after = datetime.now(timezone.utc)
 
@@ -117,7 +117,7 @@ class TestAuthLoginEventTypeDefault:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email="user@example.com",
+            email_hash="a" * 16,
         )
         assert event.event_type == "auth.login"
 
@@ -130,6 +130,23 @@ class TestAuthLoginEventTypeDefault:
             event_type="auth.logout",  # override default
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email="user@example.com",
+            email_hash="a" * 16,
         )
         assert event.event_type == "auth.logout"
+
+
+class TestAuthLoginEventIpPrefixOptional:
+    """Validate ip_prefix is optional."""
+
+    def test_ip_prefix_none_accepted(self):
+        """AuthLoginEvent MUST accept ip_prefix=None."""
+        from app.event_schemas import AuthLoginEvent
+
+        event = AuthLoginEvent(
+            event_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            user_id="user-123",
+            email_hash="a" * 16,
+            ip_prefix=None,
+        )
+        assert event.ip_prefix is None

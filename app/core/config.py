@@ -113,6 +113,8 @@ class Settings(BaseSettings):
             raise ValueError("REDIS_URL debe incluir autenticación cuando REDIS_PASSWORD está configurado")
         if environment == "production" and "@" not in v:
             raise ValueError("REDIS_URL debe incluir autenticación en producción")
+        if environment == "production" and not redis_password:
+            raise ValueError("REDIS_PASSWORD es requerido en producción")
         return v
     
     @field_validator("GROQ_API_KEY")

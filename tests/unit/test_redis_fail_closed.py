@@ -30,6 +30,9 @@ class TestRedisFailClosed:
 
         assert exc_info.value.status_code == 503
         assert "no disponible" in exc_info.value.detail.lower()
+        # Verify guard prevented any downstream operations
+        mock_db.scalar.assert_not_called()
+        mock_redis.get.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_refresh_tokens_raises_service_unavailable_when_redis_down(self):
@@ -50,6 +53,9 @@ class TestRedisFailClosed:
 
         assert exc_info.value.status_code == 503
         assert "no disponible" in exc_info.value.detail.lower()
+        # Verify guard prevented any downstream operations
+        mock_db.scalar.assert_not_called()
+        mock_redis.get.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_logout_raises_service_unavailable_when_redis_down(self):
@@ -72,6 +78,9 @@ class TestRedisFailClosed:
 
         assert exc_info.value.status_code == 503
         assert "no disponible" in exc_info.value.detail.lower()
+        # Verify guard prevented any downstream operations
+        mock_db.scalar.assert_not_called()
+        mock_redis.get.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_change_password_raises_service_unavailable_when_redis_down(self):
@@ -95,6 +104,9 @@ class TestRedisFailClosed:
 
         assert exc_info.value.status_code == 503
         assert "no disponible" in exc_info.value.detail.lower()
+        # Verify guard prevented any downstream operations
+        mock_db.scalar.assert_not_called()
+        mock_redis.get.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_get_current_user_returns_503_when_redis_down(self):
@@ -123,3 +135,5 @@ class TestRedisFailClosed:
 
         assert exc_info.value.status_code == 503
         assert "no disponible" in exc_info.value.detail.lower()
+        # Verify guard prevented DB user lookup
+        mock_db.execute.assert_not_called()

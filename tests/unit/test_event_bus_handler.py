@@ -39,8 +39,8 @@ class TestEventBusHandler:
             event_type="auth.login",
             tenant_id=tenant_id,
             user_id=str(user_id),
-            email="login@test.com",
-            ip_address="192.168.1.100",
+            email_hash="60afbf6231f9ba6c",
+            ip_prefix="192.168.1.0/24",
             user_agent="Mozilla/5.0",
             timestamp=datetime.now(timezone.utc),
         )
@@ -77,8 +77,8 @@ class TestEventBusHandler:
             event_type="auth.login",
             tenant_id=uuid4(),
             user_id=str(uuid4()),
-            email="idempotent@test.com",
-            ip_address="10.0.0.1",
+            email_hash="b" * 16,
+            ip_prefix="10.0.0.0/24",
             user_agent=None,
             timestamp=datetime.now(timezone.utc),
         )
@@ -106,8 +106,8 @@ class TestEventBusHandler:
         # Malformed payload: missing required fields but handler uses .get() so no validation error
         malformed_data = {
             "event_type": "auth.login",
-            # missing event_id, tenant_id, user_id, email
-            "ip_address": "not-an-ip",
+            # missing event_id, tenant_id, user_id, email_hash
+            "ip_prefix": "not-an-ip",
             "user_agent": None,
         }
 
@@ -153,8 +153,8 @@ class TestEventBusHandler:
             event_type="auth.login",
             tenant_id=uuid4(),
             user_id=str(uuid4()),
-            email="dispatch@test.com",
-            ip_address="172.16.0.1",
+            email_hash="c" * 16,
+            ip_prefix="172.16.0.0/24",
             user_agent="TestAgent/1.0",
             timestamp=datetime.now(timezone.utc),
         )
@@ -202,8 +202,8 @@ class TestConsumerHandlerIntegration:
             event_type="auth.login",
             tenant_id=tenant_id,
             user_id=user_id,
-            email="payload@test.com",
-            ip_address="8.8.8.8",
+            email_hash="d" * 16,
+            ip_prefix="8.8.8.0/24",
             user_agent="TestBrowser/1.0",
             timestamp=ts,
         )
@@ -228,6 +228,6 @@ class TestConsumerHandlerIntegration:
         # structlog's ConsoleRenderer includes key=value pairs in the message
         # Strip ANSI codes before checking content
         msg = strip_ansi_codes(login_record.message)
-        assert "email_hash=60afbf6231f9ba6c" in msg, f"Expected email_hash in message, got: {msg}"
+        assert "email_hash=dddddddddddddddd" in msg, f"Expected email_hash in message, got: {msg}"
         assert "ip_prefix=8.8.8.0/24" in msg, f"Expected ip_prefix in message, got: {msg}"
         assert "user_id=" in msg, f"Expected user_id in message, got: {msg}"

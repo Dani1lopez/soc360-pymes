@@ -23,7 +23,8 @@ from app.modules.auth.models import RefreshToken
 from app.modules.users.models import User
 from app.modules.tenants.models import Tenant
 from app.modules.auth.schemas import TokenResponse
-from app.core.exceptions import AuthError
+from app.core.exceptions import AuthError, ServiceUnavailableError
+from app.core.redis import check_redis_healthy
 
 MAX_ACTIVE_SESSIONS = 5
 REFRESH_TOKEN_EXPIRE_DAYS = 7
@@ -212,6 +213,8 @@ async def login(
     request_headers: dict | None = None,
 ) -> tuple[TokenResponse, str]:
     """Autentica al usuario y delvuelve el access token + refresh token"""
+    if not await check_redis_healthy(redis):
+        raise ServiceUnavailableError()
     await _check_account_lockout(email, redis)
     
     user = await _get_active_user(email, db)
@@ -266,6 +269,8 @@ async def refresh_tokens(
     old_jti: str | None = None,
 ) -> tuple[TokenResponse, str]:
     """Invalida el anterior y genera uno nuevo"""
+    if not await check_redis_healthy(redis):
+        raise ServiceUnavailableError()
     token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
     async def _rotate_refresh_token() -> tuple[User, str]:
         stmt = (
@@ -335,6 +340,8 @@ async def logout(
     redis: Redis,
 ) -> None:
     """Revoca el acces token y el refresh token"""
+    if not await check_redis_healthy(redis):
+        raise ServiceUnavailableError()
     await revoke_access_token(
         jti=jti,
         ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
@@ -361,6 +368,8 @@ async def change_password(
     redis: Redis,
 ) -> None:
     """Cambia la contraseña y revoca todas las sesiones activas"""
+    if not await check_redis_healthy(redis):
+        raise ServiceUnavailableError()
     user = await _get_active_user_by_id(user_id, db)
     if not verify_password(current_password, user.hashed_password):
         raise AuthError(

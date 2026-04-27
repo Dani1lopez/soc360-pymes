@@ -41,6 +41,14 @@ async def ping_redis() -> bool:
         await redis.aclose()
 
 
+async def check_redis_healthy(redis: Redis) -> bool:
+    """Returns True if Redis is reachable, False otherwise."""
+    try:
+        return await redis.ping()
+    except Exception:
+        return False
+
+
 async def close_pool() -> None:
     global _pool
     if _pool is not None:

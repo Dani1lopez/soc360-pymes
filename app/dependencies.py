@@ -115,6 +115,18 @@ async def get_current_user(
                 detail="Tenant inactivo o no encontrado",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+    if user.is_superadmin:
+        await set_tenant_context(db, user.tenant_id, True)
+    elif user.tenant_id is None:
+        logger.warning("auth_failed", reason="missing_tenant_id", user_id=str(user_uuid))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuario no encontrado o inactivo",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    else:
+        await set_tenant_context(db, user.tenant_id, False)
+
     user.current_jti = jti
     return user
 

@@ -15,6 +15,13 @@ class AuthError(AppError):
     """Excepcion de autenticacion con codigo HTTP y mensaje."""
 
 
+class ServiceUnavailableError(AppError):
+    """Service is unavailable (e.g., Redis down) — fail closed."""
+
+    def __init__(self, detail: Any = None) -> None:
+        super().__init__(detail=detail or "Servicio temporalmente no disponible", status_code=503)
+
+
 class TenantError(AppError):
     """Errores del modulo tenants"""
 

@@ -10,6 +10,7 @@ from sqlalchemy import select, update, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.core.security import (
     create_access_token,
     verify_password,
@@ -31,6 +32,8 @@ REFRESH_TOKEN_EXPIRE_DAYS = 7
 LOGIN_ATTEMPTS_WINDOW_SECONDS = 900
 LOGIN_ATTEMPTS_MAX = 10
 
+logger = get_logger(__name__)
+
 
 async def get_event_bus() -> "EventBus":
     """Thin alias so tests can patch app.modules.auth.service.get_event_bus."""
@@ -49,9 +52,17 @@ async def _check_account_lockout(email: str, redis: Redis) -> None:
 
     El lockout se rastrea internamente (Redis) pero el response PUBLICO
     devuelve 401 generico para no revelar existencia de la cuenta.
+    Si Redis esta caido, se niega el acceso por seguridad (fail-closed).
     """
     key = _login_attempts_key(email)
-    attempts = await redis.get(key)
+    try:
+        attempts = await redis.get(key)
+    except Exception:
+        logger.warning("login_lockout_check_failed", reason="redis_error")
+        raise AuthError(
+            status_code=401,
+            detail="Credenciales incorrectas",
+        )
     if attempts and int(attempts) >= LOGIN_ATTEMPTS_MAX:
         raise AuthError(
             status_code=401,
@@ -60,17 +71,27 @@ async def _check_account_lockout(email: str, redis: Redis) -> None:
 
 
 async def _record_failed_attempt(email: str, redis: Redis) -> None:
-    """Incrementa el contador de intentos fallidos para el email dado."""
+    """Incrementa el contador de intentos fallidos para el email dado.
+    Si Redis falla, se loguea warning y se continua (best-effort).
+    """
     key = _login_attempts_key(email)
-    attempts = await redis.incr(key)
-    if attempts == 1:
-        await redis.expire(key, LOGIN_ATTEMPTS_WINDOW_SECONDS)
+    try:
+        attempts = await redis.incr(key)
+        if attempts == 1:
+            await redis.expire(key, LOGIN_ATTEMPTS_WINDOW_SECONDS)
+    except Exception:
+        logger.warning("login_record_failed_attempt_failed", reason="redis_error")
 
 
 async def _clear_login_attempts(email: str, redis: Redis) -> None:
-    """Limpia el contador tras un login exitoso"""
+    """Limpia el contador tras un login exitoso.
+    Si Redis falla, se loguea warning y se continua (best-effort).
+    """
     key = _login_attempts_key(email)
-    await redis.delete(key)
+    try:
+        await redis.delete(key)
+    except Exception:
+        logger.warning("login_clear_attempts_failed", reason="redis_error")
 
 
 async def _get_active_user(email: str, db: AsyncSession) -> User:

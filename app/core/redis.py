@@ -28,12 +28,25 @@ async def get_redis() -> AsyncGenerator[Redis, None]:
         await redis.aclose()
 
 
+async def get_redis_client() -> Redis:
+    """Direct async factory. Caller owns the connection lifecycle."""
+    return Redis(connection_pool=get_pool())
+
+
 async def ping_redis() -> bool:
     redis = Redis(connection_pool=get_pool())
     try:
         return await redis.ping()
     finally:
         await redis.aclose()
+
+
+async def check_redis_healthy(redis: Redis) -> bool:
+    """Returns True if Redis is reachable, False otherwise."""
+    try:
+        return await redis.ping()
+    except Exception:
+        return False
 
 
 async def close_pool() -> None:

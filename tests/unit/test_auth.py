@@ -163,12 +163,206 @@ class TestAuthRouterHelpers:
 
 class TestTokenResponseSchema:
     """Test TokenResponse schema."""
-    
+
     def test_token_response_defaults(self):
         """Test TokenResponse has correct defaults."""
         from app.modules.auth.schemas import TokenResponse
-        
+
         response = TokenResponse(access_token="test_token", expires_in=900)
         assert response.access_token == "test_token"
         assert response.token_type == "bearer"
         assert response.expires_in == 900
+
+
+class TestLoginEnumerationResistance:
+    """#19 — Login failures MUST be indistinguishable.
+
+    Unknown user, wrong password, and locked account must return the same
+    public 401 shape so an attacker cannot enumerate valid accounts.
+    """
+
+    GENERIC_AUTH_FAILURE_MSG = "Credenciales incorrectas"
+
+    @pytest.mark.asyncio
+    async def test_login_unknown_user_returns_generic_401(self):
+        """Unknown email returns 401 with generic non-enumerating message."""
+        from app.modules.auth import service
+        from app.core.exceptions import AuthError
+
+        mock_db = AsyncMock()
+        mock_redis = AsyncMock()
+
+        # User does not exist
+        with patch.object(service, '_check_account_lockout', return_value=None):
+            with patch.object(service, '_get_active_user', side_effect=AuthError(
+                    status_code=401, detail="Credenciales incorrectas"
+            )):
+                with pytest.raises(AuthError) as exc_info:
+                    await service.login(
+                        email="noexiste@test.test",
+                        password="AnyPassword123!",
+                        db=mock_db,
+                        redis=mock_redis,
+                    )
+
+        assert exc_info.value.status_code == 401
+        # Message must NOT reveal whether user exists
+        assert "no existe" not in exc_info.value.detail.lower()
+        assert "no encontrado" not in exc_info.value.detail.lower()
+        assert "locked" not in exc_info.value.detail.lower()
+        assert "bloqueada" not in exc_info.value.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_login_wrong_password_returns_generic_401(self):
+        """Wrong password returns 401 with same generic message as unknown user."""
+        from app.modules.auth import service
+        from app.core.exceptions import AuthError
+
+        mock_user = MagicMock()
+        mock_user.is_active = True
+        mock_user.hashed_password = "hashed_password"
+
+        mock_db = AsyncMock()
+        mock_redis = AsyncMock()
+
+        with patch.object(service, '_check_account_lockout', return_value=None):
+            with patch.object(service, '_get_active_user', return_value=mock_user):
+                with patch('app.modules.auth.service.verify_password', return_value=False):
+                    with patch.object(service, '_record_failed_attempt', return_value=None):
+                        with pytest.raises(AuthError) as exc_info:
+                            await service.login(
+                                email="admin@alpha.test",
+                                password="WrongPassword!",
+                                db=mock_db,
+                                redis=mock_redis,
+                            )
+
+        assert exc_info.value.status_code == 401
+        # Message must NOT reveal it was a password problem specifically
+        assert "password" not in exc_info.value.detail.lower()
+        assert "contraseña" not in exc_info.value.detail.lower()
+        assert "incorrecta" in exc_info.value.detail.lower() or \
+               "inválidas" in exc_info.value.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_login_locked_account_returns_401_not_429(self):
+        """Locked account returns 401 (NOT 429) to avoid account-existence enumeration.
+
+        A 429 tells the attacker "this account IS locked, hence it EXISTS".
+        A 401 is indistinguishable from wrong password / unknown user.
+        Internal lockout tracking remains intact.
+        """
+        from app.modules.auth import service
+        from app.core.exceptions import AuthError
+
+        mock_db = AsyncMock()
+        mock_redis = AsyncMock()
+
+        # Simulate lockout triggered — must NOT return 429 publicly
+        with patch.object(
+            service, '_check_account_lockout', side_effect=AuthError(
+                status_code=401, detail="Credenciales incorrectas"
+            )
+        ):
+            with pytest.raises(AuthError) as exc_info:
+                await service.login(
+                    email="admin@alpha.test",
+                    password="AnyPassword123!",
+                    db=mock_db,
+                    redis=mock_redis,
+                )
+
+        # Critical: must be 401, not 429
+        assert exc_info.value.status_code == 401, \
+            "Lockout must return 401 to avoid enumeration"
+        # Must be same generic message
+        assert "locked" not in exc_info.value.detail.lower()
+        assert "bloqueada" not in exc_info.value.detail.lower()
+        assert "429" not in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_login_all_failures_return_identical_public_shape(self):
+        """Unknown user, wrong password, and locked account return identical 401 body.
+
+        The public {status_code, detail} tuple must be identical across all three
+        failure modes so no information about account state leaks.
+        """
+        from app.modules.auth import service
+        from app.core.exceptions import AuthError
+
+        mock_user = MagicMock()
+        mock_user.is_active = True
+        mock_user.hashed_password = "hashed_password"
+
+        mock_db = AsyncMock()
+        mock_redis = AsyncMock()
+
+        # --- Case 1: Unknown user ---
+        unknown_user_exc = AuthError(status_code=401, detail="Credenciales incorrectas")
+        with patch.object(service, '_check_account_lockout', return_value=None):
+            with patch.object(service, '_get_active_user', side_effect=unknown_user_exc):
+                with pytest.raises(AuthError) as exc1:
+                    await service.login(
+                        email="noexiste@test.test",
+                        password="WrongPass!",
+                        db=mock_db,
+                        redis=mock_redis,
+                    )
+
+        # --- Case 2: Wrong password ---
+        with patch.object(service, '_check_account_lockout', return_value=None):
+            with patch.object(service, '_get_active_user', return_value=mock_user):
+                with patch('app.modules.auth.service.verify_password', return_value=False):
+                    with patch.object(service, '_record_failed_attempt', return_value=None):
+                        with pytest.raises(AuthError) as exc2:
+                            await service.login(
+                                email="admin@alpha.test",
+                                password="WrongPass!",
+                                db=mock_db,
+                                redis=mock_redis,
+                            )
+
+        # --- Case 3: Locked account ---
+        locked_exc = AuthError(status_code=401, detail="Credenciales incorrectas")
+        with patch.object(service, '_check_account_lockout', side_effect=locked_exc):
+            with pytest.raises(AuthError) as exc3:
+                await service.login(
+                    email="admin@alpha.test",
+                    password="AnyPass!",
+                    db=mock_db,
+                    redis=mock_redis,
+                )
+
+        # All three must be 401
+        assert exc1.value.status_code == 401
+        assert exc2.value.status_code == 401
+        assert exc3.value.status_code == 401
+
+        # All three must have identical public shape
+        assert exc1.value.detail == exc2.value.detail == exc3.value.detail, \
+            f"All failures must return identical detail. Got: {exc1.value.detail}, {exc2.value.detail}, {exc3.value.detail}"
+
+    @pytest.mark.asyncio
+    async def test_login_inactive_user_returns_same_generic_401(self):
+        """Inactive (soft-deleted) user returns same generic 401 as unknown user."""
+        from app.modules.auth import service
+        from app.core.exceptions import AuthError
+
+        mock_db = AsyncMock()
+        mock_redis = AsyncMock()
+
+        # User exists but is_active=False — same generic message as unknown
+        inactive_exc = AuthError(status_code=401, detail="Credenciales incorrectas")
+        with patch.object(service, '_check_account_lockout', return_value=None):
+            with patch.object(service, '_get_active_user', side_effect=inactive_exc):
+                with pytest.raises(AuthError) as exc_info:
+                    await service.login(
+                        email="inactive@alpha.test",
+                        password="AnyPassword!",
+                        db=mock_db,
+                        redis=mock_redis,
+                    )
+
+        assert exc_info.value.status_code == 401
+        assert "inactivo" not in exc_info.value.detail.lower()
+        assert "activo" not in exc_info.value.detail.lower()

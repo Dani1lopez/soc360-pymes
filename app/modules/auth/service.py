@@ -6,10 +6,11 @@ from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
 from redis.asyncio import Redis
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.core.security import (
     create_access_token,
     verify_password,
@@ -23,12 +24,22 @@ from app.modules.auth.models import RefreshToken
 from app.modules.users.models import User
 from app.modules.tenants.models import Tenant
 from app.modules.auth.schemas import TokenResponse
-from app.core.exceptions import AuthError
+from app.core.exceptions import AuthError, ServiceUnavailableError
+from app.core.pii import hash_email, mask_ip
+from app.core.redis import check_redis_healthy
 
 MAX_ACTIVE_SESSIONS = 5
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 LOGIN_ATTEMPTS_WINDOW_SECONDS = 900
 LOGIN_ATTEMPTS_MAX = 10
+
+logger = get_logger(__name__)
+
+
+async def get_event_bus() -> "EventBus":
+    """Thin alias so tests can patch app.modules.auth.service.get_event_bus."""
+    from app.dependencies import get_event_bus as _get
+    return await _get()
 
 
 
@@ -38,29 +49,50 @@ def _login_attempts_key(email: str) -> str:
 
 
 async def _check_account_lockout(email: str, redis: Redis) -> None:
-    """Verifica si la cuenta esta bloqueada por demasiados intentos fallidos"""
+    """Verifica si la cuenta esta bloqueada por demasiados intentos fallidos.
+
+    El lockout se rastrea internamente (Redis) pero el response PUBLICO
+    devuelve 401 generico para no revelar existencia de la cuenta.
+    Si Redis esta caido, se niega el acceso por seguridad (fail-closed).
+    """
     key = _login_attempts_key(email)
-    attempts = await redis.get(key)
-    if attempts and int(attempts) >= LOGIN_ATTEMPTS_MAX:
-        ttl = await redis.ttl(key)
+    try:
+        attempts = await redis.get(key)
+    except Exception:
+        logger.warning("login_lockout_check_failed", reason="redis_error")
         raise AuthError(
-            status_code=429,
-            detail=f"Cuenta bloqueada temporalmente. Intenta de nuevo en {ttl} segundos.",
+            status_code=401,
+            detail="Credenciales incorrectas",
+        )
+    if attempts and int(attempts) >= LOGIN_ATTEMPTS_MAX:
+        raise AuthError(
+            status_code=401,
+            detail="Credenciales incorrectas",
         )
 
 
 async def _record_failed_attempt(email: str, redis: Redis) -> None:
-    """Incrementa el contador de intentos fallidos para el email dado."""
+    """Incrementa el contador de intentos fallidos para el email dado.
+    Si Redis falla, se loguea warning y se continua (best-effort).
+    """
     key = _login_attempts_key(email)
-    attempts = await redis.incr(key)
-    if attempts == 1:
-        await redis.expire(key, LOGIN_ATTEMPTS_WINDOW_SECONDS)
+    try:
+        attempts = await redis.incr(key)
+        if attempts == 1:
+            await redis.expire(key, LOGIN_ATTEMPTS_WINDOW_SECONDS)
+    except Exception:
+        logger.warning("login_record_failed_attempt_failed", reason="redis_error")
 
 
 async def _clear_login_attempts(email: str, redis: Redis) -> None:
-    """Limpia el contador tras un login exitoso"""
+    """Limpia el contador tras un login exitoso.
+    Si Redis falla, se loguea warning y se continua (best-effort).
+    """
     key = _login_attempts_key(email)
-    await redis.delete(key)
+    try:
+        await redis.delete(key)
+    except Exception:
+        logger.warning("login_clear_attempts_failed", reason="redis_error")
 
 
 async def _get_active_user(email: str, db: AsyncSession) -> User:
@@ -105,12 +137,36 @@ async def _check_tenant_active(user: User, db: AsyncSession) -> None:
         )
 
 
+# PostgreSQL advisory lock SQL — serializes session-cap checks per user.
+# Uses pg_advisory_xact_lock so the lock is held for the transaction duration
+# and released automatically on commit or rollback.
+_ADVISORY_LOCK_SQL = text(
+    "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:user_id AS text), 0))"
+)
+
+
+async def _acquire_session_cap_lock(user_id: UUID, db: AsyncSession) -> None:
+    """Acquire a transaction-scoped advisory lock for session-cap serialization.
+
+    Must be called inside an active transaction (db.in_transaction() == True).
+    The lock blocks concurrent calls for the same user_id until the holding
+    transaction commits or rolls back, preventing race conditions in the
+    session-cap check + insert sequence.
+    """
+    if not db.in_transaction():
+        raise RuntimeError(
+            "_acquire_session_cap_lock requires an active transaction"
+        )
+    await db.execute(_ADVISORY_LOCK_SQL, {"user_id": str(user_id)})
+
+
 async def _create_refresh_token(
     user_id: UUID,
     db: AsyncSession,
     created_from_ip: str | None = None,
 ) -> str:
     """Genera un refresh token seguro, lo hashea y guarda en BD"""
+    await _acquire_session_cap_lock(user_id, db)
     active_count = await db.scalar(
         select(func.count()).select_from(RefreshToken)
         .where(RefreshToken.user_id == user_id)
@@ -155,14 +211,32 @@ async def _revoke_all_user_tokens(
     )
 
 
+async def _revoke_all_user_tokens_for_tenant(
+    tenant_id: UUID,
+    db: AsyncSession,
+) -> None:
+    """Revoca todos los refresh tokens activos de un tenant en una sola query"""
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id.in_(
+            select(User.id).where(User.tenant_id == tenant_id)
+        ))
+        .where(RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(timezone.utc))
+    )
+
+
 async def login(
     email: str,
     password: str,
     db: AsyncSession,
     redis: Redis,
-    request_ip: str | None = None
+    request_ip: str | None = None,
+    request_headers: dict | None = None,
 ) -> tuple[TokenResponse, str]:
     """Autentica al usuario y delvuelve el access token + refresh token"""
+    if not await check_redis_healthy(redis):
+        raise ServiceUnavailableError()
     await _check_account_lockout(email, redis)
     
     user = await _get_active_user(email, db)
@@ -171,7 +245,7 @@ async def login(
         await _record_failed_attempt(email, redis)
         raise AuthError(
             status_code=401,
-            detail="Credenciales incorrectas.",
+            detail="Credenciales incorrectas",
         )
     
     await _check_tenant_active(user, db)
@@ -186,7 +260,22 @@ async def login(
     )
     await track_jti(str(user.id), jti, redis)
     refresh_token = await _create_refresh_token(user.id, db, created_from_ip=request_ip)
-    
+
+    # Publish auth.login event (non-blocking on failure)
+    try:
+        event_bus = await get_event_bus()
+        from app.event_schemas import AuthLoginEvent
+        await event_bus.publish(AuthLoginEvent(
+            event_id=__import__("uuid").uuid4(),
+            tenant_id=user.tenant_id,
+            user_id=str(user.id),
+            email_hash=hash_email(user.email),
+            ip_prefix=mask_ip(request_ip),
+        ))
+    except Exception:
+        logger = __import__("app.core.logging", fromlist=["get_logger"]).get_logger(__name__)
+        logger.warning("event_publish_failed", event_type="auth.login")
+
     return TokenResponse(
         access_token=access_token,
         token_type="bearer",
@@ -202,26 +291,43 @@ async def refresh_tokens(
     old_jti: str | None = None,
 ) -> tuple[TokenResponse, str]:
     """Invalida el anterior y genera uno nuevo"""
+    if not await check_redis_healthy(redis):
+        raise ServiceUnavailableError()
     token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
-    record = await db.scalar(
-        select(RefreshToken)
-        .where(RefreshToken.token_hash == token_hash)
-        .where(RefreshToken.revoked_at.is_(None))
-        .where(RefreshToken.expires_at > datetime.now(timezone.utc))
-    )
-    if not record:
-        raise AuthError(
-            status_code=401,
-            detail="Refresh token invalido o expirado",
+    async def _rotate_refresh_token() -> tuple[User, str]:
+        stmt = (
+            select(RefreshToken)
+            .where(RefreshToken.token_hash == token_hash)
+            .where(RefreshToken.revoked_at.is_(None))
+            .where(RefreshToken.expires_at > datetime.now(timezone.utc))
+            .with_for_update(skip_locked=True)
         )
-    
-    user = await _get_active_user_by_id(record.user_id, db)
-    await _check_tenant_active(user, db)
-    
-    record.revoked_at = datetime.now(timezone.utc)
-    new_refresh_token = await _create_refresh_token(
-        user.id, db, created_from_ip=request_ip
-    )
+        record = await db.scalar(stmt)
+        if not record:
+            raise AuthError(
+                status_code=401,
+                detail="Refresh token invalido o expirado",
+            )
+        if record.revoked_at is not None:
+            raise AuthError(
+                status_code=401,
+                detail="Refresh token invalido o expirado",
+            )
+
+        user = await _get_active_user_by_id(record.user_id, db)
+        await _check_tenant_active(user, db)
+
+        record.revoked_at = datetime.now(timezone.utc)
+        new_refresh_token = await _create_refresh_token(
+            user.id, db, created_from_ip=request_ip
+        )
+        return user, new_refresh_token
+
+    if db.in_transaction():
+        user, new_refresh_token = await _rotate_refresh_token()
+    else:
+        async with db.begin():
+            user, new_refresh_token = await _rotate_refresh_token()
     
     access_token, new_jti = create_access_token(
         user_id=str(user.id),
@@ -256,6 +362,8 @@ async def logout(
     redis: Redis,
 ) -> None:
     """Revoca el acces token y el refresh token"""
+    if not await check_redis_healthy(redis):
+        raise ServiceUnavailableError()
     await revoke_access_token(
         jti=jti,
         ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
@@ -282,6 +390,8 @@ async def change_password(
     redis: Redis,
 ) -> None:
     """Cambia la contraseña y revoca todas las sesiones activas"""
+    if not await check_redis_healthy(redis):
+        raise ServiceUnavailableError()
     user = await _get_active_user_by_id(user_id, db)
     if not verify_password(current_password, user.hashed_password):
         raise AuthError(

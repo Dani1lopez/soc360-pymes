@@ -4,24 +4,41 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import AsyncGenerator
-from jose import JWTError
+from typing import Annotated, TypeAlias, AsyncGenerator
 
 from app.core.database import get_db, set_tenant_context
-from app.core.redis import get_redis
+from app.core.redis import get_redis, get_redis_client, check_redis_healthy
+from app.core.security import decode_access_token, is_token_revoked, has_minimum_role
+from app.core.llm import get_llm_provider, LLMProvider
 from app.modules.users.models import User
 from app.modules.tenants.models import Tenant
 from app.core.logging import get_logger
-from app.core.security import decode_access_token, is_token_revoked, has_minimum_role
+logger = get_logger(__name__)
+
+_event_bus: "EventBus | None" = None
 
 
-logger = get_logger(__name__) 
+async def get_event_bus() -> "EventBus":
+    """Singleton factory for the EventBus dependency."""
+    global _event_bus
+    if _event_bus is None:
+        from app.event_bus import EventBus
+        redis = await get_redis_client()
+        _event_bus = EventBus(redis)
+    return _event_bus
+
+
+async def get_llm() -> LLMProvider:
+    """FastAPI dependency: return the singleton LLM provider for this request."""
+    return get_llm_provider()
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
@@ -37,9 +54,9 @@ async def get_current_user(
             detail="Token invalido o expirado",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     user_id = payload.get("sub")
-    
+
     if not user_id:
         logger.warning("auth_failed", reason="missing_sub")
         raise HTTPException(
@@ -57,6 +74,12 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     jti = payload.get("jti")
+    if not await check_redis_healthy(redis):
+        logger.error("redis_unhealthy", reason="auth_dependency")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Servicio temporalmente no disponible",
+        )
     if not jti or await is_token_revoked(jti, redis):
         logger.warning("auth_failed", reason="revoked_token", jti=jti)
         raise HTTPException(
@@ -70,7 +93,7 @@ async def get_current_user(
         .where(User.id == user_uuid)
     )
     row = result.one_or_none()
-    
+
     if not row or not row.User.is_active:
         logger.warning("auth_failed", reason="user_inactive", user_id=str(user_uuid))
         raise HTTPException(
@@ -78,9 +101,9 @@ async def get_current_user(
             detail="Usuario no encontrado o inactivo",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     user = row.User
-    
+
     if not user.is_superadmin:
         if not row.Tenant or not row.Tenant.is_active:
             logger.warning("auth_failed", reason="tenant_inactive", tenant_id=str(user.tenant_id))
@@ -89,6 +112,18 @@ async def get_current_user(
                 detail="Tenant inactivo o no encontrado",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+    if user.is_superadmin:
+        await set_tenant_context(db, user.tenant_id, True)
+    elif user.tenant_id is None:
+        logger.warning("auth_failed", reason="missing_tenant_id", user_id=str(user_uuid))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuario no encontrado o inactivo",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    else:
+        await set_tenant_context(db, user.tenant_id, False)
+
     user.current_jti = jti
     return user
 
@@ -139,3 +174,14 @@ async def require_superadmin(
             detail="Se requieren permisos de superadmin",
         )
     return current_user
+
+
+# ---------------------------------------------------------------------------
+# FastAPI dependency type aliases — modern Annotated pattern
+# Defined AFTER all dependency functions so they are in scope
+# ---------------------------------------------------------------------------
+DBDep: TypeAlias = Annotated[AsyncSession, Depends(get_db)]
+RedisDep: TypeAlias = Annotated[Redis, Depends(get_redis)]
+CurrentUserDep: TypeAlias = Annotated[User, Depends(get_current_user)]
+SuperadminDep: TypeAlias = Annotated[User, Depends(require_superadmin)]
+DBWithTenantDep: TypeAlias = Annotated[AsyncSession, Depends(get_db_with_tenant)]

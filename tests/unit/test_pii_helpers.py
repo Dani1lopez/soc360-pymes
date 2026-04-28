@@ -33,6 +33,11 @@ class TestMaskIp:
         result = mask_ip("192.168.1.100")
         assert result == "192.168.1.0/24"
 
+    def test_mask_ip_ipv6_returns_64_prefix(self):
+        """mask_ip MUST return /64 prefix for a valid IPv6 address."""
+        result = mask_ip("2001:db8::1")
+        assert result == "2001:db8::/64"
+
     def test_mask_ip_with_none_returns_none(self):
         """mask_ip MUST return None when input is None."""
         assert mask_ip(None) is None

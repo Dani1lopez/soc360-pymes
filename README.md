@@ -325,6 +325,6 @@ Contributions are welcome. Please open an issue to discuss significant changes b
 
 **All Rights Reserved.**
 
-Copyright © 2026 Danii López.
+Copyright © 2026 Daniel Alcaraz López.
 
 This software is provided for viewing and learning purposes only. You may view, fork, and study the code, but any commercial use, reproduction, distribution, modification, or sale of this software or its derivatives is strictly prohibited without explicit written permission from the author.

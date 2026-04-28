@@ -115,6 +115,7 @@ class TestHTTPSRedirectMiddleware:
     async def test_respects_x_forwarded_proto_https(self, middleware, monkeypatch: pytest.MonkeyPatch):
         """Requests with X-Forwarded-Proto: https MUST NOT be redirected."""
         monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+        monkeypatch.setattr(settings, "TRUSTED_PROXIES", ["10.0.0.1"])
 
         calls = []
 
@@ -124,6 +125,7 @@ class TestHTTPSRedirectMiddleware:
         scope = {
             "type": "http",
             "scheme": "http",
+            "client": ["10.0.0.1", 54321],
             "method": "GET",
             "path": "/api/v1/users",
             "headers": [
@@ -137,3 +139,31 @@ class TestHTTPSRedirectMiddleware:
         start = calls[0]
         assert start["type"] == "http.response.start"
         assert start["status"] == 200
+
+    @pytest.mark.asyncio
+    async def test_rejects_x_forwarded_proto_from_untrusted_client(self, middleware, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+        monkeypatch.setattr(settings, "TRUSTED_PROXIES", ["10.0.0.1"])
+
+        calls = []
+
+        async def _send(message):
+            calls.append(message)
+
+        scope = {
+            "type": "http",
+            "scheme": "http",
+            "client": ["192.168.1.99", 54321],
+            "method": "GET",
+            "path": "/api/v1/users",
+            "headers": [
+                [b"host", b"api.example.com"],
+                [b"x-forwarded-proto", b"https"],
+            ],
+        }
+
+        await middleware(scope, AsyncMock(), _send)
+
+        start = calls[0]
+        assert start["type"] == "http.response.start"
+        assert start["status"] == 307

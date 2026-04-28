@@ -7,7 +7,7 @@
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D.svg)
 ![Tests](https://img.shields.io/badge/tests-500%2B-brightgreen.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
+![License](https://img.shields.io/badge/licencia-All%20Rights%20Reserved-red.svg)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 ![Ruff](https://img.shields.io/badge/linter-ruff-261C15.svg)
 ![Mypy](https://img.shields.io/badge/types-mypy-2E6DB4.svg)
@@ -323,4 +323,8 @@ Las contribuciones son bienvenidas. Por favor abre un issue para discutir cambio
 
 ## Licencia
 
-Este proyecto está licenciado bajo la **MIT License**.
+**All Rights Reserved.**
+
+Copyright © 2026 Danii López.
+
+Este software se proporciona únicamente con fines de visualización y aprendizaje. Puedes ver, forkear y estudiar el código, pero cualquier uso comercial, reproducción, distribución, modificación o venta de este software o sus derivados está estrictamente prohibido sin autorización explícita por escrito del autor.

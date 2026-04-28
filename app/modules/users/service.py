@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import uuid
 
+from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import UserError
-from app.core.security import hash_password
+from app.core.security import hash_password, revoke_all_user_access_tokens
+from app.modules.auth.service import _revoke_all_user_tokens
 from app.modules.tenants.models import Tenant
 from app.modules.users.models import User
 from app.modules.users.schemas import UserCreate, UserUpdate
@@ -109,30 +112,48 @@ async def update_user(
     user_id: uuid.UUID,
     data: UserUpdate,
     db: AsyncSession,
+    redis: Redis,
 ) -> User:
     """Actualiza campos del usuario"""
     user = await get_user_by_id(user_id, db)
     if user is None:
         raise UserError("Usuario no encontrado", status_code=404)
-    
+
     update_data = data.model_dump(exclude_unset=True)
-    
+
+    # Detectar transición de activo → inactivo ANTES de aplicar cambios
+    is_deactivating = (
+        "is_active" in update_data
+        and update_data["is_active"] is False
+        and user.is_active is True
+    )
+
     if "email" in update_data:
         new_email = update_data["email"].lower().strip()
         if await _is_email_taken(db, new_email, exclude_id=user_id):
             raise UserError("El email ya esta registrado", status_code=409)
         user.email = new_email
-    
+
     if "full_name" in update_data:
         user.full_name = update_data["full_name"].strip()
-    
+
     if "role" in update_data:
         user.role = update_data["role"].value
-    
+
     if "is_active" in update_data:
         user.is_active = update_data["is_active"]
-    
+
     await db.flush()
+
+    # Revocar tokens solo si hubo transición True → False
+    if is_deactivating:
+        await _revoke_all_user_tokens(user_id, db)
+        await revoke_all_user_access_tokens(
+            user_id=str(user_id),
+            redis=redis,
+            ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        )
+
     await db.refresh(user)
     return user
 
@@ -140,8 +161,9 @@ async def update_user(
 async def deactivate_user(
     user_id: uuid.UUID,
     db: AsyncSession,
+    redis: Redis,
 ) -> None:
-    """Desactiva el usuario"""
+    """Desactiva el usuario y revoca todas sus sesiones activas"""
     user = await get_user_by_id(user_id, db)
     if user is None:
         raise UserError("Usuario no encontrado", status_code=404)
@@ -149,3 +171,13 @@ async def deactivate_user(
         raise UserError("El usuario ya está desactivado", status_code=409)
     user.is_active = False
     await db.flush()
+
+    # Revocar todos los refresh tokens del usuario (DB)
+    await _revoke_all_user_tokens(user_id, db)
+
+    # Revocar todos los access tokens del usuario (Redis denylist)
+    await revoke_all_user_access_tokens(
+        user_id=str(user_id),
+        redis=redis,
+        ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )

@@ -10,7 +10,11 @@ from tests.conftest import ADMIN_A_ID, TENANT_A_ID
 # ---------------------------------------------------------------------------
 
 async def test_account_lockout_after_10_failed_attempts(client: AsyncClient, seed_data):
-    """Después de 10 intentos fallidos de login, la cuenta se bloquea con 429."""
+    """Después de 10 intentos fallidos de login, la cuenta se bloquea con 401 público.
+
+    Internamente el lockout se rastrea (Redis) pero el response público es 401
+    genérico para no revelar que la cuenta existe.
+    """
     # 10 intentos fallidos
     for i in range(10):
         resp = await client.post(
@@ -18,14 +22,16 @@ async def test_account_lockout_after_10_failed_attempts(client: AsyncClient, see
             json={"email": "admin@alpha.test", "password": f"WrongPassword{i}!"},
         )
         assert resp.status_code == 401, f"Intento {i+1} debería fallar con 401"
-    
-    # El intento 11 debe devolver 429 (cuenta bloqueada)
+
+    # El intento 11 devuelve 401 genérico (NO 429) para evitar enumeración
     resp = await client.post(
         "/api/v1/auth/login",
         json={"email": "admin@alpha.test", "password": "WrongPassword11!"},
     )
-    assert resp.status_code == 429, "La cuenta debería estar bloqueada después de 10 intentos"
-    assert "bloqueada" in resp.json()["detail"].lower()
+    assert resp.status_code == 401, "Lockout debe devolver 401 público, no 429"
+    # El mensaje debe ser genérico — no revela lockout
+    assert "bloqueada" not in resp.json()["detail"].lower()
+    assert "429" not in resp.json()["detail"]
 
 
 async def test_account_lockout_reset_after_successful_login(client: AsyncClient, seed_data):
@@ -53,12 +59,130 @@ async def test_account_lockout_reset_after_successful_login(client: AsyncClient,
         )
         assert resp.status_code == 401, f"Intento {i+1} después del reset debería fallar con 401"
     
-    # El 11 debería dar 429 (lockout)
+    # El 11 devuelve 401 genérico (lockout interno, respuesta pública uniforme)
     resp = await client.post(
         "/api/v1/auth/login",
         json={"email": "admin@alpha.test", "password": "WrongPasswordFinal!"},
     )
-    assert resp.status_code == 429, "Lockout debería ocurrir después de 10 intentos fallidos después del reset"
+    assert resp.status_code == 401, "Lockout debe devolver 401 público"
+    assert "bloqueada" not in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# LOGIN ENUMERATION RESISTANCE (#19)
+# ---------------------------------------------------------------------------
+
+async def test_login_unknown_user_returns_401_generic_message(client: AsyncClient, seed_data):
+    """Email que no existe devuelve 401 con mensaje genérico no-enumerante."""
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "noexiste@test.test", "password": "AnyPassword123!"},
+    )
+    assert resp.status_code == 401
+    # El mensaje no debe revelar si el usuario existe o no
+    detail = resp.json()["detail"].lower()
+    assert "no existe" not in detail
+    assert "no encontrado" not in detail
+    assert "not found" not in detail
+    assert "locked" not in detail
+    assert "bloqueada" not in detail
+
+
+async def test_login_wrong_password_returns_same_401_as_unknown_user(client: AsyncClient, seed_data):
+    """Password incorrecto devuelve el MISMO 401 que usuario desconocido.
+
+    Un atacante no puede distinguir.
+    """
+    # Caso A: usuario desconocido
+    resp_unknown = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "noexiste@test.test", "password": "WrongPass!"},
+    )
+    assert resp_unknown.status_code == 401
+    detail_unknown = resp_unknown.json()["detail"]
+
+    # Caso B: password incorrecto (usuario existe)
+    resp_wrong = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@alpha.test", "password": "WrongPassword!"},
+    )
+    assert resp_wrong.status_code == 401
+    detail_wrong = resp_wrong.json()["detail"]
+
+    # Deben ser IDENTICOS
+    assert detail_unknown == detail_wrong, \
+        f"Unknown user and wrong password must return identical body. Got: {detail_unknown!r} vs {detail_wrong!r}"
+
+
+async def test_login_locked_account_returns_same_401_as_unknown_user(client: AsyncClient, seed_data):
+    """Cuenta bloqueada devuelve el MISMO 401 que usuario desconocido.
+
+    El 429 delata que la cuenta existe y está bloqueada.
+    Por eso se возвращает 401 genérico.
+    """
+    # Trigger lockout: 10 intentos fallidos
+    for i in range(10):
+        await client.post(
+            "/api/v1/auth/login",
+            json={"email": "analyst@alpha.test", "password": f"BadPass{i}!"},
+        )
+
+    # Caso A: usuario desconocido (para comparar)
+    resp_unknown = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "noexiste@test.test", "password": "WrongPass!"},
+    )
+    assert resp_unknown.status_code == 401
+    detail_unknown = resp_unknown.json()["detail"]
+
+    # Caso B: cuenta bloqueada (intento 11)
+    resp_locked = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "analyst@alpha.test", "password": "BadPassFinal!"},
+    )
+    assert resp_locked.status_code == 401, "Lockout debe retornar 401 público, no 429"
+    detail_locked = resp_locked.json()["detail"]
+
+    # Deben ser IDENTICOS
+    assert detail_unknown == detail_locked, \
+        f"Unknown user and locked account must return identical body. Got: {detail_unknown!r} vs {detail_locked!r}"
+    # No debe revelar lockout
+    assert "bloqueada" not in detail_locked.lower()
+    assert "locked" not in detail_locked.lower()
+
+
+async def test_login_all_three_failures_identical_401(client: AsyncClient, seed_data):
+    """Unknown user, wrong password, locked account → mismo {status_code, detail}.
+
+    Este es el test de enumeración resistencia más estricto:
+    todas las respuestas públicas deben ser indistinguibles.
+    """
+    # Trigger lockout en analyst@alpha.test
+    for i in range(10):
+        await client.post(
+            "/api/v1/auth/login",
+            json={"email": "analyst@alpha.test", "password": f"BadPass{i}!"},
+        )
+
+    # Caso 1: usuario desconocido
+    r1 = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "noexiste@test.test", "password": "WrongPass!"},
+    )
+    # Caso 2: password incorrecto
+    r2 = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@alpha.test", "password": "WrongPassword!"},
+    )
+    # Caso 3: cuenta bloqueada
+    r3 = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "analyst@alpha.test", "password": "BadPassFinal!"},
+    )
+
+    assert r1.status_code == r2.status_code == r3.status_code == 401
+    assert r1.json()["detail"] == r2.json()["detail"] == r3.json()["detail"], \
+        f"All three must return identical body. Got: {r1.json()['detail']!r}, {r2.json()['detail']!r}, {r3.json()['detail']!r}"
 
 
 async def test_login_inactive_user_returns_401(client: AsyncClient, seed_data):

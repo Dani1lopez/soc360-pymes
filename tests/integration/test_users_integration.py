@@ -572,6 +572,89 @@ async def test_email_unique_globally_returns_409(
 
 
 # ---------------------------------------------------------------------------
+# ISSUE #18: ADMIN CANNOT CHANGE is_active OF ANOTHER ADMIN VIA PATCH
+# ---------------------------------------------------------------------------
+
+async def test_admin_cannot_deactivate_another_admin_via_patch(
+    client: AsyncClient, admin_a_headers, superadmin_headers, seed_data
+):
+    """Admin no puede desactivar a otro admin del mismo tenant via PATCH.
+
+    Issue #18: El PATCH endpoint bloquea cambios de role y modifica superadmins,
+    pero no bloquea cambios de is_active cuando el target es otro admin.
+    El endpoint DELETE sí tiene esta protección (línea 218-222 del router).
+    """
+    # Superadmin crea un segundo admin en tenant A
+    resp = await client.post(
+        "/api/v1/users/",
+        json={
+            "email": "second-admin@alpha.test",
+            "password": "Password123!",
+            "full_name": "Second Admin",
+            "role": "admin",
+            "tenant_id": TENANT_A_ID,
+        },
+        headers=superadmin_headers,
+    )
+    assert resp.status_code == 201
+    second_admin_id = resp.json()["id"]
+    assert resp.json()["role"] == "admin"
+
+    # Admin A intenta desactivar al segundo admin via PATCH
+    resp = await client.patch(
+        f"/api/v1/users/{second_admin_id}",
+        json={"is_active": False},
+        headers=admin_a_headers,
+    )
+    assert resp.status_code == 403, (
+        f"Admin no deberia poder desactivar a otro admin via PATCH. "
+        f"Got {resp.status_code}: {resp.text}"
+    )
+
+
+async def test_admin_cannot_deactivate_superadmin_via_patch(
+    client: AsyncClient, admin_a_headers, seed_data
+):
+    """Admin no puede desactivar a un superadmin via PATCH.
+
+    Ya existe protección contra modificar superadmins (línea 160-163),
+    pero este test verifica explícitamente el caso de is_active=False.
+    """
+    from tests.conftest import SUPERADMIN_ID
+
+    resp = await client.patch(
+        f"/api/v1/users/{SUPERADMIN_ID}",
+        json={"is_active": False},
+        headers=admin_a_headers,
+    )
+    assert resp.status_code == 403, (
+        f"Admin no deberia poder desactivar superadmin via PATCH. "
+        f"Got {resp.status_code}: {resp.text}"
+    )
+
+
+async def test_admin_can_deactivate_analyst_via_patch(
+    client: AsyncClient, admin_a_headers, seed_data
+):
+    """Admin SÍ puede desactivar usuarios de rol inferior via PATCH.
+
+    Verifica que la protección no bloquea casos legítimos.
+    """
+    from tests.conftest import ANALYST_A_ID
+
+    resp = await client.patch(
+        f"/api/v1/users/{ANALYST_A_ID}",
+        json={"is_active": False},
+        headers=admin_a_headers,
+    )
+    assert resp.status_code == 200, (
+        f"Admin debe poder desactivar analyst via PATCH. "
+        f"Got {resp.status_code}: {resp.text}"
+    )
+    assert resp.json()["is_active"] is False
+
+
+# ---------------------------------------------------------------------------
 # MASS ASSIGNMENT PROTECTION
 # ---------------------------------------------------------------------------
 

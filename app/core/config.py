@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     )
     
     #Aplicacion
-    ENVIRONMENT: str = "development"
+    ENVIRONMENT: str
     APP_NAME: str = "SOC 360 PYMEs"
     SECRET_KEY: str
     
@@ -34,12 +34,24 @@ class Settings(BaseSettings):
     OLLAMA_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3.2"
     
+    # Event Bus (Redis Streams)
+    EVENT_STREAM_PREFIX: str = "events"
+    EVENT_CONSUMER_GROUP: str = "soc360-consumers"
+    EVENT_MAX_RETRIES: int = 3
+    EVENT_STREAM_MAXLEN: int = 100000
+    EVENT_STREAM_MAXAGE_SECONDS: int = 604800
+    EVENT_PENDING_LAG_THRESHOLD: int = 100
+
     #Redis
+    REDIS_PASSWORD: str | None = None
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_MAX_CONNECTIONS: int = 20
     
     #CORS
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]
+
+    #Proxy
+    TRUSTED_PROXIES: list[str] = []
     
     #Validators
     
@@ -84,8 +96,13 @@ class Settings(BaseSettings):
     @classmethod
     def redis_auth_in_production(cls, v: str, info) -> str:
         environment = info.data.get("ENVIRONMENT", "development")
+        redis_password = info.data.get("REDIS_PASSWORD")
+        if redis_password and "@" not in v:
+            raise ValueError("REDIS_URL debe incluir autenticación cuando REDIS_PASSWORD está configurado")
         if environment == "production" and "@" not in v:
             raise ValueError("REDIS_URL debe incluir autenticación en producción")
+        if environment == "production" and not redis_password:
+            raise ValueError("REDIS_PASSWORD es requerido en producción")
         return v
     
     @field_validator("GROQ_API_KEY")

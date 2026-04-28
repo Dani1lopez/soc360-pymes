@@ -28,7 +28,10 @@ class HTTPSRedirectMiddleware(BaseHTTPMiddleware):
         if settings.ENVIRONMENT != "production":
             return await call_next(request)
 
-        proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+        if settings.TRUSTED_PROXIES and request.client and request.client.host in settings.TRUSTED_PROXIES:
+            proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+        else:
+            proto = request.url.scheme
         if proto == "http":
             https_url = str(request.url.replace(scheme="https"))
             return RedirectResponse(url=https_url, status_code=307)

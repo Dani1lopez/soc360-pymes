@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     
     #CORS
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]
+
+    #Proxy
+    TRUSTED_PROXIES: list[str] = []
     
     #Validators
     

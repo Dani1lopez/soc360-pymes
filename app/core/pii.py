@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 
 
 def hash_email(email: str | None) -> str | None:
@@ -11,10 +12,15 @@ def hash_email(email: str | None) -> str | None:
 
 
 def mask_ip(ip_address: str | None) -> str | None:
-    """Return IPv4 /24 prefix mask (e.g. 192.168.1.0/24), or None."""
+    """Return IPv4 /24 or IPv6 /64 prefix mask, or None."""
     if not ip_address:
         return None
-    parts = ip_address.split(".")
-    if len(parts) == 4:
-        return ".".join(parts[:3]) + ".0/24"
+    try:
+        addr = ipaddress.ip_address(ip_address)
+        if isinstance(addr, ipaddress.IPv4Address):
+            return str(ipaddress.ip_network(f"{addr}/24", strict=False))
+        if isinstance(addr, ipaddress.IPv6Address):
+            return str(ipaddress.ip_network(f"{addr}/64", strict=False))
+    except ValueError:
+        pass
     return ip_address

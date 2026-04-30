@@ -40,7 +40,7 @@ class TestBaseEventExtraFields:
             "event_type": "auth.login",
             "tenant_id": str(uuid.uuid4()),
             "user_id": "user-123",
-            "email_hash": "a" * 16,
+            "email_hash": "a" * 32,
             "ip_prefix": "192.168.1.0/24",
             "user_agent": "Mozilla/5.0",
             # Extra field — Pydantic should ignore it silently
@@ -50,7 +50,7 @@ class TestBaseEventExtraFields:
         # Should not raise — extra fields are ignored
         event = AuthLoginEvent.model_validate(data)
         assert event.user_id == "user-123"
-        assert event.email_hash == "a" * 16
+        assert event.email_hash == "a" * 32
 
 
 class TestAuthLoginEventEmailHashNormalization:
@@ -64,9 +64,9 @@ class TestAuthLoginEventEmailHashNormalization:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email_hash="  abcdef1234567890  ",
+            email_hash="  abcdef1234567890abcdef1234567890  ",
         )
-        assert event.email_hash == "abcdef1234567890"
+        assert event.email_hash == "abcdef1234567890abcdef1234567890"
 
 
 class TestBaseEventTenantIdRequired:
@@ -98,7 +98,7 @@ class TestAuthLoginEventTimestampDefault:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email_hash="a" * 16,
+            email_hash="a" * 32,
         )
         after = datetime.now(timezone.utc)
 
@@ -117,7 +117,7 @@ class TestAuthLoginEventTypeDefault:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email_hash="a" * 16,
+            email_hash="a" * 32,
         )
         assert event.event_type == "auth.login"
 
@@ -130,7 +130,7 @@ class TestAuthLoginEventTypeDefault:
             event_type="auth.logout",  # override default
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email_hash="a" * 16,
+            email_hash="a" * 32,
         )
         assert event.event_type == "auth.logout"
 
@@ -146,7 +146,7 @@ class TestAuthLoginEventIpPrefixOptional:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email_hash="a" * 16,
+            email_hash="a" * 32,
             ip_prefix=None,
         )
         assert event.ip_prefix is None

@@ -82,7 +82,7 @@ class TestAuthLoginEventPublish:
         assert event.event_type == "auth.login"
         assert event.user_id == str(mock_user.id)
         assert event.email_hash is not None
-        assert len(event.email_hash) == 16
+        assert len(event.email_hash) == 32
         assert event.ip_prefix == "192.168.1.0/24"
         assert event.tenant_id == mock_user.tenant_id
 
@@ -145,7 +145,7 @@ class TestAuthLoginEventPublish:
         # (not passed), so it defaults to None per schema
         assert event.ip_prefix == "10.0.0.0/24"
         assert event.email_hash is not None
-        assert len(event.email_hash) == 16
+        assert len(event.email_hash) == 32
 
     @pytest.mark.asyncio
     async def test_login_does_not_block_on_publish_failure(self):

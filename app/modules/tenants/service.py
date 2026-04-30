@@ -152,7 +152,6 @@ async def update_tenant(
             tenant.max_assets = _plan_to_max_assets(update_data["plan"])
 
     if "max_assets" in update_data:
-        # TODO(F2): validar que max_assets >= assets activos del tenant
         tenant.max_assets = update_data["max_assets"]
 
     if "is_active" in update_data:

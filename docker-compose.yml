@@ -29,14 +29,14 @@ services:
       redis-server
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
-      --requirepass ${REDIS_PASSWORD:-soc360_redis_dev_password}
+      --requirepass ${REDIS_PASSWORD}
     # Host port mapping for local dev ONLY — do not expose in staging/production
     ports:
       - "6379:6379"
     volumes:
       - ./docker/redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-soc360_redis_dev_password}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 6s
       retries: 5

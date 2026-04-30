@@ -134,7 +134,8 @@ async def revoke_access_token(jti: str, ttl_seconds: int, redis: Redis) -> None:
 
 async def is_token_revoked(jti: str, redis: Redis) -> bool:
     """Devuelve True si el token esta en la denylist"""
-    return await redis.exists(f"{_DENYLIST_PREFIX}{jti}") > 0
+    result = await redis.exists(f"{_DENYLIST_PREFIX}{jti}")
+    return int(result) > 0
 
 
 async def revoke_tokens_by_jtis(jtis: list[str], redis: Redis, ttl_seconds: int = 900) -> None:
@@ -188,7 +189,16 @@ async def revoke_all_user_access_tokens(
         for jti in jti_strs:
             pipe.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
         pipe.delete(key)
-        await pipe.execute()
+        try:
+            await pipe.execute()
+        except Exception:
+            from app.core.logging import get_logger
+            _logger = get_logger(__name__)
+            _logger.exception(
+                "redis_pipeline_failed",
+                extra={"user_id": user_id, "jtis_count": len(jti_strs)},
+            )
+            raise
     
     logger.info("Todos los JTIs del usuario revocados", extra={"user_id": user_id, "count": len(jti_strs)})
 

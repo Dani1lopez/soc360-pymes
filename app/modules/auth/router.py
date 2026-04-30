@@ -47,10 +47,12 @@ async def login(
     redis: RedisDep,
 ) -> TokenResponse:
     try:
+        user_agent = request.headers.get("user-agent")
         token_response, refresh_token = await service.login(
             email=body.email,
             password=body.password,
             request_ip=request.client.host if request.client else None,
+            user_agent=user_agent,
             db=db,
             redis=redis,
         )

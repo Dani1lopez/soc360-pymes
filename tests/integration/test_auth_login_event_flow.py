@@ -134,7 +134,7 @@ async def test_auth_login_event_consumed_by_consumer_group():
         event_type="auth.login",
         tenant_id=uuid4(),
         user_id=str(uuid4()),
-        email_hash="a" * 16,
+        email_hash="a" * 32,
         ip_prefix="192.0.2.0/24",
         user_agent="ConsumerGroupTest/1.0",
         timestamp=datetime.now(timezone.utc),
@@ -168,7 +168,7 @@ async def test_auth_login_event_consumed_by_consumer_group():
     # Verify message data
     msg = pending[0]
     data = msg["data"]
-    assert data["email_hash"] == "a" * 16
+    assert data["email_hash"] == "a" * 32
     assert data["ip_prefix"] == "192.0.2.0/24"
 
     # Acknowledge the message

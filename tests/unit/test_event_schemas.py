@@ -152,7 +152,7 @@ class TestAuthLoginEvent:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email_hash="a" * 16,
+            email_hash="a" * 32,
         )
         assert event.ip_prefix is None
         assert event.user_agent is None
@@ -165,12 +165,12 @@ class TestAuthLoginEvent:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email_hash="a" * 16,
+            email_hash="a" * 32,
             ip_prefix="192.168.1.0/24",
             user_agent="Mozilla/5.0",
         )
         assert event.user_id == "user-123"
-        assert event.email_hash == "a" * 16
+        assert event.email_hash == "a" * 32
         assert event.ip_prefix == "192.168.1.0/24"
         assert event.user_agent == "Mozilla/5.0"
 
@@ -187,7 +187,7 @@ class TestAuthLoginEvent:
             tenant_id=tenant_id,
             timestamp=ts,
             user_id="user-123",
-            email_hash="a" * 16,
+            email_hash="a" * 32,
         )
         assert event.event_id == event_id
         assert event.tenant_id == tenant_id
@@ -205,14 +205,14 @@ class TestAuthLoginEventSerialization:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email_hash="a" * 16,
+            email_hash="a" * 32,
             ip_prefix="192.168.1.0/24",
             user_agent="Mozilla/5.0",
         )
         data = event.model_dump()
         assert isinstance(data, dict)
         assert data["user_id"] == "user-123"
-        assert data["email_hash"] == "a" * 16
+        assert data["email_hash"] == "a" * 32
         assert data["ip_prefix"] == "192.168.1.0/24"
         assert data["user_agent"] == "Mozilla/5.0"
         assert "event_id" in data
@@ -227,14 +227,14 @@ class TestAuthLoginEventSerialization:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email_hash="a" * 16,
+            email_hash="a" * 32,
             ip_prefix="192.168.1.0/24",
             user_agent="Mozilla/5.0",
         )
         json_str = event.model_dump_json()
         assert isinstance(json_str, str)
         assert "user-123" in json_str
-        assert "a" * 16 in json_str
+        assert "a" * 32 in json_str
 
     def test_model_validate_round_trip(self):
         """model_validate() MUST reconstruct an identical event."""
@@ -244,7 +244,7 @@ class TestAuthLoginEventSerialization:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email_hash="a" * 16,
+            email_hash="a" * 32,
             ip_prefix="192.168.1.0/24",
             user_agent="Mozilla/5.0",
         )

@@ -233,6 +233,7 @@ async def login(
     redis: Redis,
     request_ip: str | None = None,
     request_headers: dict | None = None,
+    user_agent: str | None = None,
 ) -> tuple[TokenResponse, str]:
     """Autentica al usuario y delvuelve el access token + refresh token"""
     if not await check_redis_healthy(redis):
@@ -271,6 +272,7 @@ async def login(
             user_id=str(user.id),
             email_hash=hash_email(user.email),
             ip_prefix=mask_ip(request_ip),
+            user_agent=user_agent,
         ))
     except Exception:
         logger = __import__("app.core.logging", fromlist=["get_logger"]).get_logger(__name__)

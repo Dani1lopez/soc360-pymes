@@ -45,18 +45,37 @@ if settings.ENVIRONMENT not in _ALLOWED_SEED_ENVIRONMENTS:
 
 SEED_TENANT_ID     = uuid.UUID("00000000-0000-0000-0000-000000000001")
 SEED_SUPERADMIN_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
-SEED_ADMIN_ID      = uuid.UUID("00000000-0000-0000-0000-000000000011")
+SEED_ADMIN_ID      = uuid.UUID("00000000-0000-0000-0000-000000000010")
 SEED_ANALYST_ID    = uuid.UUID("00000000-0000-0000-0000-000000000012")
 SEED_VIEWER_ID     = uuid.UUID("00000000-0000-0000-0000-000000000013")
 
-# ── Contraseñas desde entorno con fallback explícito ─────────────────────────
+# ── Contraseñas desde entorno (sin defaults) ─────────────────────────────────
 # Débiles por diseño (solo dev). Para cambiarlas sin tocar código:
 #   SEED_SUPERADMIN_PASSWORD=xxx python scripts/seed_db.py
 
-_SUPERADMIN_PASS = os.getenv("SEED_SUPERADMIN_PASSWORD", "Superadmin1234!")
-_ADMIN_PASS      = os.getenv("SEED_ADMIN_PASSWORD",      "Admin1234!")
-_ANALYST_PASS    = os.getenv("SEED_ANALYST_PASSWORD",    "Analyst1234!")
-_VIEWER_PASS     = os.getenv("SEED_VIEWER_PASSWORD",     "Viewer1234!")
+def _validate_seed_passwords() -> None:
+    """Valida que todas las seed passwords estén definidas en entorno"""
+    required = [
+        "SEED_SUPERADMIN_PASSWORD",
+        "SEED_ADMIN_PASSWORD",
+        "SEED_ANALYST_PASSWORD",
+        "SEED_VIEWER_PASSWORD",
+    ]
+    missing = [t for t in required if os.getenv(t) is None]
+    if missing:
+        print(f"❌  Seed bloqueado — faltan variables de entorno:")
+        for var in missing:
+            print(f"  . {var}")
+        print("\n Definidas en .env o al ejecutar:")
+        print("  SEED_SUPERADMIN_PASSWORD=xxx SEED_ADMIN_PASSWORD=xxx python scripts/seed_db.py")
+        sys.exit(1)
+
+_validate_seed_passwords()
+
+_SUPERADMIN_PASS = os.getenv("SEED_SUPERADMIN_PASSWORD")
+_ADMIN_PASS      = os.getenv("SEED_ADMIN_PASSWORD")
+_ANALYST_PASS    = os.getenv("SEED_ANALYST_PASSWORD")
+_VIEWER_PASS     = os.getenv("SEED_VIEWER_PASSWORD")
 
 # ── Datos de seed ────────────────────────────────────────────────────────────
 # Los hashes bcrypt se calculan aquí UNA SOLA VEZ al arrancar el script.
@@ -296,13 +315,7 @@ async def main(dry_run: bool = False) -> None:
             print(f"   {line}")
 
     if not dry_run:
-        print("\n   ✅ Development users seeded (credentials configured)")
-
-        if _SUPERADMIN_PASS == "superadmin1234":
-            print(
-                "\n   ⚠️   Usando contraseñas por defecto. "
-                "Define SEED_*_PASSWORD en .env para cambiarlas."
-            )
+        print("\n   ✅ Development users seeded (credentials configured)")        
 
     if stats.errors:
         print(f"\n   ⚠️   {stats.errors} error(s) durante el seed. Revisa los logs.\n")

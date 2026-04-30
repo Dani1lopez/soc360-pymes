@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Cookie, HTTPException, Request, Response
+from jose import JWTError
 
 from app.core.config import settings
 from app.core.exceptions import AppError
@@ -82,7 +83,7 @@ async def refresh(
             token = auth_header[7:]
             payload = decode_access_token(token)
             old_jti = payload.get("jti")
-        except Exception:
+        except JWTError:
             pass  # token inválido o expirado — no importa, no podemos removerlo
 
     try:

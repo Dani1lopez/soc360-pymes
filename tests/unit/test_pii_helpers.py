@@ -9,11 +9,11 @@ from app.core.pii import hash_email, mask_ip
 class TestHashEmail:
     """Validate hash_email behaviour."""
 
-    def test_hash_email_returns_16_char_hex(self):
-        """hash_email MUST return a 16-character hexadecimal string."""
+    def test_hash_email_returns_32_char_hex(self):
+        """hash_email MUST return a 32-character hexadecimal string."""
         result = hash_email("user@example.com")
         assert result is not None
-        assert len(result) == 16
+        assert len(result) == 32
         assert int(result, 16) >= 0  # valid hex
 
     def test_hash_email_with_none_returns_none(self):

@@ -5,10 +5,10 @@ import ipaddress
 
 
 def hash_email(email: str | None) -> str | None:
-    """Return SHA-256 hash of email truncated to 16 hex characters, or None."""
+    """Return SHA-256 hash of email truncated to 32 hex characters, or None."""
     if not email:
         return None
-    return hashlib.sha256(email.encode()).hexdigest()[:16]
+    return hashlib.sha256(email.encode()).hexdigest()[:32]
 
 
 def mask_ip(ip_address: str | None) -> str | None:

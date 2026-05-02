@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Cookie, HTTPException, Request, Response
+from jose import JWTError
 
 from app.core.config import settings
 from app.core.exceptions import AppError
@@ -26,7 +27,7 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
         httponly=True,
         secure=settings.ENVIRONMENT != "development",
         samesite="strict",
-        max_age=7 * 24 * 3600,
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
         path="/api/v1/auth",
     )
 
@@ -47,10 +48,12 @@ async def login(
     redis: RedisDep,
 ) -> TokenResponse:
     try:
+        user_agent = request.headers.get("user-agent")
         token_response, refresh_token = await service.login(
             email=body.email,
             password=body.password,
             request_ip=request.client.host if request.client else None,
+            user_agent=user_agent,
             db=db,
             redis=redis,
         )
@@ -80,7 +83,7 @@ async def refresh(
             token = auth_header[7:]
             payload = decode_access_token(token)
             old_jti = payload.get("jti")
-        except Exception:
+        except JWTError:
             pass  # token inválido o expirado — no importa, no podemos removerlo
 
     try:

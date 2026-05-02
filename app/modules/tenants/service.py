@@ -4,6 +4,7 @@ import re
 import uuid
 import unicodedata
 from typing import Any
+import asyncio
 
 from redis.asyncio import Redis
 from sqlalchemy import select, func, update
@@ -151,7 +152,6 @@ async def update_tenant(
             tenant.max_assets = _plan_to_max_assets(update_data["plan"])
 
     if "max_assets" in update_data:
-        # TODO(F2): validar que max_assets >= assets activos del tenant
         tenant.max_assets = update_data["max_assets"]
 
     if "is_active" in update_data:
@@ -186,15 +186,17 @@ async def update_tenant(
         await _revoke_all_user_tokens_for_tenant(tenant_id, db)
 
         # Revocar todos los access tokens de los usuarios del tenant (Redis denylist)
-        user_ids = await db.scalars(
+        user_ids = (await db.scalars(
             select(User.id).where(User.tenant_id == tenant_id)
-        )
-        for uid in user_ids:
-            await revoke_all_user_access_tokens(
+        )).all()
+        await asyncio.gather(*[
+            revoke_all_user_access_tokens(
                 user_id=str(uid),
                 redis=redis,
                 ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             )
+            for uid in user_ids
+        ])
 
     await db.refresh(tenant)
     return tenant
@@ -224,15 +226,17 @@ async def deactivate_tenant(
     await _revoke_all_user_tokens_for_tenant(tenant_id, db)
 
     # Revocar todos los access tokens de los usuarios del tenant (Redis denylist)
-    user_ids = await db.scalars(
+    user_ids = (await db.scalars(
         select(User.id).where(User.tenant_id == tenant_id)
-    )
-    for uid in user_ids:
-        await revoke_all_user_access_tokens(
+    )).all()
+    await asyncio.gather(*[
+        revoke_all_user_access_tokens(
             user_id=str(uid),
             redis=redis,
             ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         )
+        for uid in user_ids
+    ])
 
     await db.flush()
     await db.refresh(tenant)

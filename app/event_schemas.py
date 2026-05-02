@@ -71,6 +71,6 @@ class AuthLoginEvent(BaseEvent):
 
     event_type: Annotated[str, Field(default="auth.login", description="Event type discriminator")]
     user_id: Annotated[str, Field(min_length=1, description="Authenticated user ID")]
-    email_hash: Annotated[str, Field(min_length=1, description="SHA256[:16] of user email")]
+    email_hash: Annotated[str, Field(min_length=1, description="SHA256[:32] of user email")]
     ip_prefix: Annotated[str | None, Field(default=None, description="Masked IP /24 prefix, e.g. 192.168.1.0/24")]
     user_agent: Annotated[str | None, Field(default=None, description="Client User-Agent if available")]

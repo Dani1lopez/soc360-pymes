@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.core.exceptions import UserError
 from app.core.logging import get_logger
 from app.core.security import has_minimum_role
-from app.dependencies import DBWithTenantDep, CurrentUserDep, require_role, RedisDep
+from app.dependencies import AdminDep, DBWithTenantDep, CurrentUserDep, RedisDep
 from app.modules.users import service
 from app.modules.users.models import User
 from app.modules.users.schemas import RoleEnum, UserCreate, UserResponse, UserUpdate
@@ -29,7 +29,7 @@ async def get_me(
 async def create_user(
     body: UserCreate,
     db: DBWithTenantDep,
-    current_user: User = Depends(require_role("admin")),
+    current_user: AdminDep,
 ) -> User:
     """Crea un nuevo usuario"""
     if not current_user.is_superadmin:
@@ -60,7 +60,7 @@ async def create_user(
 @router.get("/", response_model=list[UserResponse])
 async def list_users(
     db: DBWithTenantDep,
-    current_user: User = Depends(require_role("admin")),
+    current_user: AdminDep,
     tenant_id: uuid.UUID | None = Query(None, description="Filtrar por tenant (solo superadmin)"),
     include_inactive: bool = Query(False),
     offset: int = Query(0, ge=0),
@@ -194,7 +194,7 @@ async def deactivate_user(
     user_id: uuid.UUID,
     db: DBWithTenantDep,
     redis: RedisDep,
-    current_user: User = Depends(require_role("admin")),
+    current_user: AdminDep,
 ) -> None:
     """Desactiva un usuario y revoca todas sus sesiones"""
     if user_id == current_user.id:

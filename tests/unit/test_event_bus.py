@@ -56,7 +56,7 @@ class TestEventBusPublish:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email_hash="a" * 16,
+            email_hash="a" * 32,
         )
         await bus.publish(event)
         length = await client.xlen("events:auth.login")
@@ -75,7 +75,7 @@ class TestEventBusPublish:
                 event_id=uuid.uuid4(),
                 tenant_id=uuid.uuid4(),
                 user_id=f"user-{i}",
-                email_hash=f"{i:016x}",
+                email_hash=f"{i:032x}",
             )
             await bus.publish(event)
         # Stream length should be bounded (fakeredis approximates, allow up to 3)
@@ -93,7 +93,7 @@ class TestEventBusPublish:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email_hash="a" * 16,
+            email_hash="a" * 32,
             ip_prefix="192.168.1.0/24",
             user_agent="Mozilla/5.0",
         )
@@ -112,7 +112,7 @@ class TestEventBusPublish:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email_hash="a" * 16,
+            email_hash="a" * 32,
         )
         await bus.publish(event)
         length = await client.xlen("events:auth.login")
@@ -131,7 +131,7 @@ class TestEventBusPublish:
                 event_id=uuid.uuid4(),
                 tenant_id=uuid.uuid4(),
                 user_id=f"user-{i}",
-                email_hash=f"{i:016x}",
+                email_hash=f"{i:032x}",
             )
             await bus.publish(event)
         # Stream length should be bounded (fakeredis approximates, allow up to 3)
@@ -149,7 +149,7 @@ class TestEventBusPublish:
             event_id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             user_id="user-123",
-            email_hash="a" * 16,
+            email_hash="a" * 32,
             ip_prefix="192.168.1.0/24",
             user_agent="Mozilla/5.0",
         )

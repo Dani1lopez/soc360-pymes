@@ -69,6 +69,64 @@ def _sanitize_output(text: str, db_url: str = "") -> str:
     return text
 
 
+def _clean_database() -> None:
+    """Drop all tables in the public schema to ensure a pristine migration state.
+
+    Handles three failure modes:
+    1. alembic_version has stale stamps but actual tables are missing
+       (was causing UndefinedTableError in 8f2c1a4b9d7e)
+    2. alembic_version was dropped but tables remain from a previous run
+       (would cause DuplicateTableError in 712a827b0929)
+    3. DB is already clean — no-op, safe
+
+    Uses the migration user because it owns all tables created by both
+    alembic (via env.py) and Base.metadata.create_all (via root conftest).
+    """
+    import asyncpg
+
+    db_url = os.environ.get("DATABASE_URL_MIGRATION", "")
+    match = re.match(
+        r"postgresql\+asyncpg://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)",
+        db_url,
+    )
+    if not match:
+        return
+
+    user, password, host, port, dbname = match.groups()
+
+    async def _drop_all() -> None:
+        conn = await asyncpg.connect(
+            user=user,
+            password=password,
+            host=host,
+            port=int(port),
+            database=dbname,
+            timeout=5,
+        )
+        try:
+            # Drop every user table in the public schema.
+            # CASCADE handles foreign-key dependencies between tables.
+            await conn.execute(
+                """
+                DO $$ DECLARE
+                    r RECORD;
+                BEGIN
+                    FOR r IN (
+                        SELECT tablename FROM pg_tables
+                        WHERE schemaname = 'public'
+                    ) LOOP
+                        EXECUTE 'DROP TABLE IF EXISTS '
+                            || quote_ident(r.tablename) || ' CASCADE';
+                    END LOOP;
+                END $$;
+                """
+            )
+        finally:
+            await conn.close()
+
+    asyncio.run(_drop_all())
+
+
 def _run_alembic_upgrade(dry_run: bool = False, db_url: str = "") -> None:
     """Apply Alembic migrations via subprocess (avoids import-time side-effects).
 
@@ -176,6 +234,8 @@ def prepare_database():
             f"DB URL (safe): {_db_url_for_log(db_url)}. "
             f"Error: {e}"
         )
+
+    _clean_database()
 
     _run_alembic_upgrade(db_url=db_url)
 

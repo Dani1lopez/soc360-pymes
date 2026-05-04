@@ -20,6 +20,9 @@ class Tenant(Base):
     slug: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     plan: Mapped[str] = mapped_column(String(50), nullable=False, default="free")
     max_assets: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    scans_per_day: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    ai_enrichment_level: Mapped[str] = mapped_column(String(50), nullable=False, default="basic")
+    report_types: Mapped[list | None] = mapped_column(JSONB, nullable=True, default=["vulnerability"])
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     settings: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

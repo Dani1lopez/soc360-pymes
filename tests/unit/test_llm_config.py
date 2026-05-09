@@ -115,6 +115,7 @@ class TestLLMProviderValidator:
         from app.core.config import Settings
 
         s = Settings(
+            _env_file=None,
             SECRET_KEY="x" * 32,
             DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
             DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
@@ -157,6 +158,42 @@ class TestLLMProviderValidator:
             LLM_PROVIDER="openai",
         )
         assert s.LLM_PROVIDER == "openai"
+
+    def test_non_groq_provider_does_not_require_groq_api_key(self):
+        """Non-Groq providers must not require GROQ_API_KEY."""
+        from app.core.config import Settings
+
+        s = Settings(
+            _env_file=None,
+            SECRET_KEY="x" * 32,
+            DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
+            DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
+            POSTGRES_USER="test",
+            POSTGRES_PASSWORD="test",
+            POSTGRES_DB="test",
+            LLM_PROVIDER="ollama",
+            GROQ_API_KEY=None,
+        )
+
+        assert s.LLM_PROVIDER == "ollama"
+        assert s.GROQ_API_KEY is None
+
+    def test_groq_provider_requires_groq_api_key(self):
+        """Groq provider still requires a Groq API key."""
+        from app.core.config import Settings
+
+        with pytest.raises(ValueError, match="GROQ_API_KEY"):
+            Settings(
+                _env_file=None,
+                SECRET_KEY="x" * 32,
+                DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
+                DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
+                POSTGRES_USER="test",
+                POSTGRES_PASSWORD="test",
+                POSTGRES_DB="test",
+                LLM_PROVIDER="groq",
+                GROQ_API_KEY=None,
+            )
 
 
 class TestLLMSettingsDefaults:

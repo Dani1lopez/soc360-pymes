@@ -189,15 +189,12 @@ class TestOllamaProviderConfig:
     """Verify ollama provider is wired with correct Ollama-specific settings."""
 
     def test_ollama_provider_uses_ollama_base_url(self):
-        """Ollama provider must use settings.OLLAMA_URL, NOT the OpenAI default."""
+        """Ollama provider must normalize the base URL to the v1 API root."""
         from app.core.llm import _create_provider
-        from app.core.config import settings
 
         provider = _create_provider("ollama")
 
-        # Must use the Ollama URL, not api.openai.com
-        assert provider._base_url == settings.OLLAMA_URL
-        assert provider._base_url == "http://localhost:11434"
+        assert provider._base_url == "http://localhost:11434/v1"
 
     def test_ollama_provider_does_not_use_openai_base_url(self):
         """Ollama provider must NOT inherit https://api.openai.com/v1 as base_url."""
@@ -207,6 +204,14 @@ class TestOllamaProviderConfig:
 
         # The bug would set this to the OpenAI default
         assert provider._base_url != "https://api.openai.com/v1"
+
+    def test_ollama_provider_builds_chat_completions_url(self):
+        """Ollama provider must target /v1/chat/completions."""
+        from app.core.llm import _create_provider
+
+        provider = _create_provider("ollama")
+
+        assert f"{provider._base_url}{provider.ENDPOINT}" == "http://localhost:11434/v1/chat/completions"
 
     def test_ollama_provider_uses_ollama_model(self):
         """Ollama provider model is taken from settings.OLLAMA_MODEL."""

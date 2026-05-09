@@ -84,7 +84,9 @@ def _create_provider(provider_name: str) -> "LLMProvider":
     # Per-provider configuration (model, api_key, base_url)
     # -------------------------------------------------------------------------
     if provider_name == "ollama":
-        base_url = getattr(settings, "OLLAMA_URL", "http://localhost:11434")
+        base_url = getattr(settings, "OLLAMA_URL", "http://localhost:11434").rstrip("/")
+        if not base_url.endswith("/v1"):
+            base_url = f"{base_url}/v1"
         api_key = ""  # Ollama has no auth
         model = settings.OLLAMA_MODEL
     elif provider_name == "groq":

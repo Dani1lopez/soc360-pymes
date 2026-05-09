@@ -152,7 +152,6 @@ class TestAuthLoginEventPublish:
         """Test login succeeds even if event publishing fails (non-blocking)."""
         from app.modules.auth import service
         from app.event_bus import EventBus
-        import logging
 
         mock_user = MagicMock()
         mock_user.id = uuid4()
@@ -186,10 +185,7 @@ class TestAuthLoginEventPublish:
                                         "app.modules.auth.service.get_event_bus",
                                         return_value=mock_event_bus,
                                     ):
-                                        with patch.object(
-                                            logging.getLogger("app.modules.auth.service"),
-                                            "warning",
-                                        ) as mock_warning:
+                                        with patch.object(service.logger, "warning") as mock_warning:
                                             # Login MUST succeed even if publish fails
                                             result = await service.login(
                                                 email="fail@test.com",
@@ -206,8 +202,7 @@ class TestAuthLoginEventPublish:
 
         # Warning was logged about the publish failure
         mock_warning.assert_called_once()
-        call_args = mock_warning.call_args[0]
-        assert "event" in call_args[0].lower() or "publish" in call_args[0].lower()
+        mock_warning.assert_called_with("event_publish_failed", event_type="auth.login")
 
     @pytest.mark.asyncio
     async def test_login_blocked_if_credentials_invalid(self):

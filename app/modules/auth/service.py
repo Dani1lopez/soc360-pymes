@@ -275,7 +275,6 @@ async def login(
             user_agent=user_agent,
         ))
     except Exception:
-        logger = __import__("app.core.logging", fromlist=["get_logger"]).get_logger(__name__)
         logger.warning("event_publish_failed", event_type="auth.login")
 
     return TokenResponse(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -28,11 +28,26 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
     # AI
-    GROQ_API_KEY: str
+    GROQ_API_KEY: str | None = None
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     USE_OLLAMA: bool = False
     OLLAMA_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3.2"
+
+    # LLM Abstraction
+    LLM_PROVIDER: str = "groq"
+    LLM_TIMEOUT: int = 30
+    LLM_MAX_TOKENS: int = 2048
+    LLM_TEMPERATURE: float = 0.1
+
+    # Per-provider API keys (None = not configured for that provider)
+    OPENAI_API_KEY: str | None = None
+    ANTHROPIC_API_KEY: str | None = None
+    GEMINI_API_KEY: str | None = None
+    MISTRAL_API_KEY: str | None = None
+    COHERE_API_KEY: str | None = None
+    TOGETHER_API_KEY: str | None = None
+    HUGGINGFACE_API_KEY: str | None = None
     
     # Event Bus (Redis Streams)
     EVENT_STREAM_PREFIX: str = "events"
@@ -105,12 +120,25 @@ class Settings(BaseSettings):
             raise ValueError("REDIS_PASSWORD es requerido en producción")
         return v
     
-    @field_validator("GROQ_API_KEY")
+    @field_validator("LLM_PROVIDER")
     @classmethod
-    def groq_key_format(cls, v: str) -> str:
-        if not v.startswith("gsk_"):
-            raise ValueError("GROQ_API_KEY debe empezar con 'gsk_'")
-        return v
+    def llm_provider_valid(cls, v: str) -> str:
+        allowed = {
+            "groq", "ollama", "openai", "anthropic",
+            "gemini", "mistral", "cohere", "together", "huggingface",
+        }
+        if v.lower() not in allowed:
+            raise ValueError(f"LLM_PROVIDER debe ser uno de: {sorted(allowed)}")
+        return v.lower()
+
+    @model_validator(mode="after")
+    def groq_key_required_for_groq(self) -> Settings:
+        if self.LLM_PROVIDER == "groq":
+            if not self.GROQ_API_KEY:
+                raise ValueError("GROQ_API_KEY es requerido cuando LLM_PROVIDER='groq'")
+            if not self.GROQ_API_KEY.startswith("gsk_"):
+                raise ValueError("GROQ_API_KEY debe empezar con 'gsk_'")
+        return self
 
 
 settings = Settings()

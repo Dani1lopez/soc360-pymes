@@ -63,3 +63,20 @@ class LLMResponseError(LLMError):
 
     def __init__(self, detail: Any = None) -> None:
         super().__init__(detail, status_code=502)
+
+
+class AssetError(AppError):
+    pass
+
+
+class ScanError(AppError):
+    pass
+
+
+class VulnerabilityError(AppError):
+    pass
+
+
+class ReportError(AppError):
+    pass
+

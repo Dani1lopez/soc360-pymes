@@ -55,6 +55,10 @@ def prepare_database():
     from app.modules.tenants.models import Tenant  # noqa: F401
     from app.modules.users.models import User       # noqa: F401
     from app.modules.auth.models import RefreshToken  # noqa: F401
+    from app.modules.assets.models import Asset  # noqa: F401
+    from app.modules.scans.models import Scan  # noqa: F401
+    from app.modules.vulnerabilities.models import Vulnerability  # noqa: F401
+    from app.modules.reports.models import Report  # noqa: F401
 
     async def _setup() -> None:
         engine = create_async_engine(MIGRATION_DATABASE_URL, echo=False, poolclass=NullPool)

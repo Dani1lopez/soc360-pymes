@@ -1,10 +1,15 @@
-"""assets scans vulnerabilities reports
+"""assets scans vulnerabilities reports (F2 self-contained)
+
+Creates assets, scans, vulnerabilities, reports tables plus
+tenants.report_types with server_default and NULL backfill.
+Fully reversible in a single downgrade step.
 
 Revision ID: 8f2c1a4b9d7e
 Revises: b5e9d8c4a123
 Create Date: 2026-05-04 11:30:00.000000
 
 """
+from __future__ import annotations
 
 from typing import Sequence, Union
 
@@ -22,7 +27,21 @@ def upgrade() -> None:
     # --- Alter tenants ---
     op.add_column("tenants", sa.Column("scans_per_day", sa.Integer(), nullable=False, server_default="1"))
     op.add_column("tenants", sa.Column("ai_enrichment_level", sa.String(length=50), nullable=False, server_default="basic"))
-    op.add_column("tenants", sa.Column("report_types", postgresql.JSONB(astext_type=sa.Text()), nullable=True))
+    op.add_column(
+        "tenants",
+        sa.Column(
+            "report_types",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=True,
+            server_default=sa.text("'[\"vulnerability\"]'::jsonb"),
+        ),
+    )
+    # Backfill existing rows where the column was added as NULL
+    # (server_default only applies to new rows inserted after this point)
+    op.execute(
+        "UPDATE tenants SET report_types = '[\"vulnerability\"]'::jsonb "
+        "WHERE report_types IS NULL"
+    )
     # Create assets
     op.create_table("assets",
         sa.Column("id", sa.UUID(), nullable=False),

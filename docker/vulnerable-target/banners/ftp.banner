@@ -1,0 +1,7 @@
+220 (vsFTPd 3.0.5) [DEMO-SIMULATED]
+331 Please specify the password.
+230 Login successful. [SIMULATED]
+227 Entering Passive Mode (127,0,0,1,19,137).
+150 Here comes the directory listing. [SIMULATED]
+226 Directory send OK. [SIMULATED]
+221 Goodbye. [DEMO-TARGET-SOC360]

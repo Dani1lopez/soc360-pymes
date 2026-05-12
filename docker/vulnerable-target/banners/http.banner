@@ -1,0 +1,16 @@
+HTTP/1.1 200 OK
+Server: Apache/2.4.62 (Unix) [DEMO-SIMULATED]
+Content-Type: text/html; charset=UTF-8
+X-Powered-By: PHP/8.2.27 [DEMO]
+X-Demo-Company: LeadFlow
+X-Demo-Platform: PrestaShop-like [SIMULATED]
+
+<!DOCTYPE html>
+<html>
+<head><title>LeadFlow Backoffice</title></head>
+<body>
+<h1>LeadFlow Admin Portal [SIMULATED]</h1>
+<p>PrestaShop-like backoffice demo for SOC360 scan demonstrations.</p>
+<p>No real login, customer data, orders, or vulnerabilities are present.</p>
+</body>
+</html>

@@ -1,5 +1,4 @@
 services:
-  
   postgres:
     image: postgres:16-alpine
     container_name: soc360_postgres
@@ -21,7 +20,7 @@ services:
       timeout: 6s
       retries: 5
     restart: unless-stopped
-  
+
   redis:
     image: redis:7-alpine
     container_name: soc360_redis
@@ -41,3 +40,31 @@ services:
       timeout: 6s
       retries: 5
     restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Demo-only simulated vulnerable target for Nmap scan walkthroughs
+  # ---------------------------------------------------------------------------
+  # SAFETY: This is a STATIC, FAKE, SIMULATED target. It serves predictable
+  # fake banners on ports 22/80/21/3306 for demo scans. No real vulnerabilities.
+  #
+  # Enabled only with: docker compose --profile demo up
+  # Isolated to the internal demo_network — NO host ports exposed by default.
+  # ---------------------------------------------------------------------------
+  vulnerable-target:
+    build:
+      context: ./docker/vulnerable-target
+      dockerfile: Dockerfile
+    container_name: soc360_demo_vulnerable_target
+    profiles: [demo]
+    # No 'ports:' section → NOT exposed to host (internal Docker network only)
+    networks:
+      - demo_network
+    restart: unless-stopped
+
+networks:
+  demo_network:
+    driver: bridge
+    internal: true
+    # Internal Docker network — not reachable from host unless explicitly
+    # connected. The scanner workload attaches to this same network.
+

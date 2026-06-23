@@ -50,13 +50,16 @@ class TestLifespanConsumerLifecycle:
                         # "RuntimeError: Event loop is closed".
                         with patch("app.main.asyncio.create_task", side_effect=fake_create_task):
                             with patch("app.main.asyncio.wait_for", AsyncMock()):
-                                app = MagicMock()
-                                async with lifespan(app):
-                                    assert consumer_started, "EventConsumer should have been instantiated"
-                                    assert scheduled_tasks, "Consumer background task must be scheduled"
-                                    coro, task_name = scheduled_tasks[0]
-                                    assert coro.__name__ == "_consumer_loop"
-                                    assert task_name == "event-consumer"
+                                # Do not touch the global Redis pool on shutdown; earlier tests
+                                # may have created it on a now-closed event loop.
+                                with patch("app.main.close_pool", AsyncMock()):
+                                    app = MagicMock()
+                                    async with lifespan(app):
+                                        assert consumer_started, "EventConsumer should have been instantiated"
+                                        assert scheduled_tasks, "Consumer background task must be scheduled"
+                                        coro, task_name = scheduled_tasks[0]
+                                        assert coro.__name__ == "_consumer_loop"
+                                        assert task_name == "event-consumer"
 
         await mock_redis.aclose()
 

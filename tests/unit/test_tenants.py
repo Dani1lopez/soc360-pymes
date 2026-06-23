@@ -436,7 +436,9 @@ class TestUpdateTenantTokenRevocation:
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
         mock_db.execute = AsyncMock()
-        mock_db.scalars = AsyncMock(return_value=[user1, user2])
+        mock_scalar_result = MagicMock()
+        mock_scalar_result.all.return_value = [user1, user2]
+        mock_db.scalars = AsyncMock(return_value=mock_scalar_result)
 
         mock_redis = AsyncMock()
 

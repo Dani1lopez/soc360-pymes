@@ -36,12 +36,16 @@ class TestLifespanConsumerLifecycle:
                     with patch("app.main.asyncio.Event") as MockEvent:
                         mock_stop_event = MagicMock()
                         MockEvent.return_value = mock_stop_event
-
-                        app = MagicMock()
-                        async with lifespan(app):
-                            # Yield to event loop so background task is scheduled
-                            await asyncio.sleep(0)
-                            assert consumer_started, "EventConsumer should have been instantiated"
+                        # Avoid a real background task; CI closes the per-test loop
+                        # before an uncontrolled task finishes, raising
+                        # "RuntimeError: Event loop is closed".
+                        with patch("app.main.asyncio.create_task", return_value=MagicMock(done=True)):
+                            with patch("app.main.asyncio.wait_for", AsyncMock()):
+                                app = MagicMock()
+                                async with lifespan(app):
+                                    # Yield to event loop so background task is scheduled
+                                    await asyncio.sleep(0)
+                                    assert consumer_started, "EventConsumer should have been instantiated"
 
         await mock_redis.aclose()
 

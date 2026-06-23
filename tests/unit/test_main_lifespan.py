@@ -30,18 +30,33 @@ class TestLifespanConsumerLifecycle:
                 # Store kwargs for verification
                 self.kwargs = kwargs
 
+        scheduled_tasks = []
+
+        def fake_create_task(coro, *, name=None):
+            # Capture the scheduled coroutine and discard it so the test does
+            # not leak a real background task or an unawaited coroutine.
+            scheduled_tasks.append((coro, name))
+            coro.close()
+            return MagicMock(done=True)
+
         with patch("app.main.ping_redis", AsyncMock(return_value=True)):
             with patch("app.main.get_redis_client", AsyncMock(return_value=mock_redis)):
                 with patch("app.main.EventConsumer", MockEventConsumer):
                     with patch("app.main.asyncio.Event") as MockEvent:
                         mock_stop_event = MagicMock()
                         MockEvent.return_value = mock_stop_event
-
-                        app = MagicMock()
-                        async with lifespan(app):
-                            # Yield to event loop so background task is scheduled
-                            await asyncio.sleep(0)
-                            assert consumer_started, "EventConsumer should have been instantiated"
+                        # Avoid a real background task; CI closes the per-test loop
+                        # before an uncontrolled task finishes, raising
+                        # "RuntimeError: Event loop is closed".
+                        with patch("app.main.asyncio.create_task", side_effect=fake_create_task):
+                            with patch("app.main.asyncio.wait_for", AsyncMock()):
+                                app = MagicMock()
+                                async with lifespan(app):
+                                    assert consumer_started, "EventConsumer should have been instantiated"
+                                    assert scheduled_tasks, "Consumer background task must be scheduled"
+                                    coro, task_name = scheduled_tasks[0]
+                                    assert coro.__name__ == "_consumer_loop"
+                                    assert task_name == "event-consumer"
 
         await mock_redis.aclose()
 
@@ -71,11 +86,11 @@ class TestLifespanConsumerLifecycle:
             # Await a real task to avoid the TypeError
             return await asyncio.sleep(0)
 
-        # Create a real task that finishes immediately
-        async def make_fake_task(coro, *, name=None):
-            async def noop():
-                return None
-            return asyncio.create_task(noop())
+        def make_fake_task(coro, *, name=None):
+            # Discard the real consumer loop coroutine so it is not leaked as
+            # an unawaited coroutine; return a mock task since wait_for is patched.
+            coro.close()
+            return MagicMock(done=True)
 
         with patch("app.main.ping_redis", AsyncMock(return_value=True)):
             with patch("app.main.get_redis_client", AsyncMock(return_value=mock_redis)):
@@ -112,10 +127,15 @@ class TestLifespanConsumerLifecycle:
 
         mock_redis = FakeRedis()
 
+        def fake_create_task(coro, *, name=None):
+            # Discard the consumer loop coroutine so it is not leaked.
+            coro.close()
+            return MagicMock(done=True)
+
         with patch("app.main.ping_redis", AsyncMock(return_value=True)):
             with patch("app.main.get_redis_client", AsyncMock(return_value=mock_redis)):
                 with patch("app.main.EventConsumer"):
-                    with patch("app.main.asyncio.create_task", return_value=MagicMock(done=True)):
+                    with patch("app.main.asyncio.create_task", side_effect=fake_create_task):
                         with patch("app.main.asyncio.wait_for", AsyncMock()):
                             with patch("app.main.asyncio.Event", return_value=MagicMock()):
                                 with patch("app.main.close_pool", AsyncMock()) as mock_close_pool:

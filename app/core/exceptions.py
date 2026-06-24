@@ -61,3 +61,21 @@ class LLMResponseError(LLMError):
 
     def __init__(self, detail: Any = None) -> None:
         super().__init__(detail, status_code=502)
+
+
+# ── F2 Domain Exceptions ───────────────────────────────────────────────
+
+class AssetError(AppError):
+    """Errores del modulo assets (F2)."""
+
+
+class ScanError(AppError):
+    """Errores del modulo scans (F2)."""
+
+
+class VulnerabilityError(AppError):
+    """Errores del modulo vulnerabilities (F2)."""
+
+
+class ReportError(AppError):
+    """Errores del modulo reports (F2)."""

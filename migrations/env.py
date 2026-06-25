@@ -15,9 +15,11 @@ from app.core.database import Base
 # IMPORTANTE: estos imports parecen no usarse pero son obligatorios.
 # Al importar cada modelo, se registra en Base.metadata y Alembic
 # puede detectarlo en el autogenerate. Nunca eliminar sin verificar.
+from app.modules.assets.models import Asset  # noqa: F401
+from app.modules.auth.models import RefreshToken  # noqa: F401
+from app.modules.scans.models import Scan  # noqa: F401
 from app.modules.tenants.models import Tenant  # noqa: F401
 from app.modules.users.models import User  # noqa: F401
-from app.modules.auth.models import RefreshToken  # noqa: F401
 
 
 #Objeto configuracion de Alembic

@@ -27,7 +27,7 @@ os.environ.setdefault("POSTGRES_DB", "soc360_test")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 
 from app.main import create_app
-from app.core.database import Base, set_tenant_context
+from app.core.database import Base
 from app.core.redis import get_redis
 from app.dependencies import get_db, get_db_with_tenant
 from app.modules.users.models import User
@@ -52,9 +52,11 @@ def _seed_password_hash(password: str) -> str:
 # ✅ SYNC fixture — usa asyncio.run() para no contaminar ningún loop de test
 @pytest.fixture(scope="session", autouse=True)
 def prepare_database():
-    from app.modules.tenants.models import Tenant  # noqa: F401
-    from app.modules.users.models import User       # noqa: F401
+    from app.modules.assets.models import Asset  # noqa: F401
     from app.modules.auth.models import RefreshToken  # noqa: F401
+    from app.modules.scans.models import Scan  # noqa: F401
+    from app.modules.tenants.models import Tenant  # noqa: F401
+    from app.modules.users.models import User  # noqa: F401
 
     async def _setup() -> None:
         engine = create_async_engine(MIGRATION_DATABASE_URL, echo=False, poolclass=NullPool)

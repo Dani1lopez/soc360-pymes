@@ -37,12 +37,18 @@ Chain strategy: stacked-to-main
 
 ## Phase 3: PR-B — Vulnerability / Report
 
-- [ ] 3.1 Add failing DB-free assertions for `Vulnerability` and `Report` in `tests/unit/test_f2_models.py` covering severity/status enums, FK targets, and metadata columns.
-- [ ] 3.2 Create `app/modules/vulnerabilities/models.py`, `app/modules/reports/__init__.py`, and `app/modules/reports/models.py` with `Base`, `Mapped[...]`, constraints, and parent FKs.
-- [ ] 3.3 Update `migrations/env.py` and `tests/conftest.py` for PR-B imports, then add R2 chained to R1 for `vulnerabilities`/`reports` + indexes/triggers/RLS/grants.
-- [ ] 3.4 Add `tests/integration/conftest.py` cleanup/Alembic loader infra only if the integration subset still needs stale-table protection.
+- [x] 3.1 Add failing DB-free assertions for `Vulnerability` and `Report` in `tests/unit/test_f2_models.py` covering severity/status enums, FK targets, and metadata columns.
+- [x] 3.2 Create `app/modules/vulnerabilities/models.py`, `app/modules/reports/__init__.py`, and `app/modules/reports/models.py` with `Base`, `Mapped[...]`, constraints, and parent FKs.
+- [x] 3.3 Update `migrations/env.py` and `tests/conftest.py` for PR-B imports, then add R2 chained to R1 for `vulnerabilities`/`reports` + indexes/triggers/RLS/grants.
+- [x] 3.4 Add `tests/integration/conftest.py` cleanup/Alembic loader infra only if the integration subset still needs stale-table protection.
 
 ## Phase 4: PR-B Verification / Cleanup
 
-- [ ] 4.1 Verify PR-B downgrade returns cleanly to R1 and `alembic heads` still reports a single head.
-- [ ] 4.2 Re-run `pytest -m "not integration"` and clean any trailing whitespace/import ordering drift before opening PR-B.
+- [x] 4.1 Verify PR-B downgrade returns cleanly to R1 and `alembic heads` still reports a single head.
+- [x] 4.2 Re-run `pytest -m "not integration"` and clean any trailing whitespace/import ordering drift before opening PR-B.
+
+## Phase 5: Pre-PR Blocker Remediation
+
+- [x] 5.1 Enforce tenant-scoped composite FKs for `vulnerabilities` → `scans` and `reports` → `assets`, plus parent `(id, tenant_id)` unique constraints.
+- [x] 5.2 Add disposable-database guard to `tests/integration/conftest.py::_clean_database()` and cover it with unit tests.
+  - Remediated 2026-06-26: `_is_safe_database_name()` now rejects `postgres`, `template0`, `template1`, production/app names, and embedded accidental matches like `contest`; only clearly test-token names such as `soc360_test`, `test_soc360`, and `test_db` are allowed.

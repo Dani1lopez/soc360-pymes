@@ -69,6 +69,94 @@ def _sanitize_output(text: str, db_url: str = "") -> str:
     return text
 
 
+# Matches the token 'test' as a distinct word, separated by underscores/hyphens
+# or by the start/end of the database name. This prevents accidental matches
+# like 'contest' or 'mytestdb' while allowing clear test names such as
+# 'soc360_test', 'test_soc360', 'test_db', and 'TEST'.
+_SAFE_TEST_TOKEN = re.compile(r"(?:^|[_-])test(?:[_-]|$)")
+
+
+def _is_safe_database_name(dbname: str) -> bool:
+    """Return True only when the database name clearly identifies a test DB.
+
+    Only names that contain the distinct token 'test' (case-insensitive) are
+    accepted. System databases such as 'postgres', 'template0', and 'template1',
+    production/application names, and empty names are all rejected.
+    """
+    if not dbname or not isinstance(dbname, str):
+        return False
+    normalized = dbname.strip().lower()
+    return bool(_SAFE_TEST_TOKEN.search(normalized))
+
+
+def _clean_database() -> None:
+    """Drop all tables in the public schema to ensure a pristine migration state.
+
+    Handles stale-table failures when the alembic_version stamp and actual
+    tables are out of sync (e.g. leftover tables from Base.metadata.create_all
+    or a previous interrupted run). Uses the migration user because it owns the
+    objects created by both Alembic and SQLAlchemy create-all paths.
+
+    Raises:
+        RuntimeError: if DATABASE_URL_MIGRATION is missing, unparseable, or
+            points to a database that is not in the disposable/test allowlist.
+    """
+    import asyncpg
+
+    db_url = os.environ.get("DATABASE_URL_MIGRATION", "")
+    if not db_url:
+        raise RuntimeError(
+            "DATABASE_URL_MIGRATION is not set. Refusing to clean database."
+        )
+
+    match = re.match(
+        r"postgresql\+asyncpg://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)",
+        db_url,
+    )
+    if not match:
+        raise RuntimeError(
+            "DATABASE_URL_MIGRATION is not a recognized postgresql+asyncpg URL. "
+            f"Refusing to clean database. URL (safe): {_db_url_for_log(db_url)}"
+        )
+
+    user, password, host, port, dbname = match.groups()
+    if not _is_safe_database_name(dbname):
+        raise RuntimeError(
+            f"Database name '{dbname}' does not look like a disposable test database. "
+            f"Refusing to drop tables. URL (safe): {_db_url_for_log(db_url)}"
+        )
+
+    async def _drop_all() -> None:
+        conn = await asyncpg.connect(
+            user=user,
+            password=password,
+            host=host,
+            port=int(port),
+            database=dbname,
+            timeout=5,
+        )
+        try:
+            await conn.execute(
+                """
+                DO $$ DECLARE
+                    r RECORD;
+                BEGIN
+                    FOR r IN (
+                        SELECT tablename FROM pg_tables
+                        WHERE schemaname = 'public'
+                    ) LOOP
+                        EXECUTE 'DROP TABLE IF EXISTS '
+                            || quote_ident(r.tablename) || ' CASCADE';
+                    END LOOP;
+                END $$;
+                """
+            )
+        finally:
+            await conn.close()
+
+    asyncio.run(_drop_all())
+
+
 def _run_alembic_upgrade(dry_run: bool = False, db_url: str = "") -> None:
     """Apply Alembic migrations via subprocess (avoids import-time side-effects).
 
@@ -176,6 +264,8 @@ def prepare_database():
             f"DB URL (safe): {_db_url_for_log(db_url)}. "
             f"Error: {e}"
         )
+
+    _clean_database()
 
     _run_alembic_upgrade(db_url=db_url)
 

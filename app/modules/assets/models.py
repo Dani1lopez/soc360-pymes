@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,6 +50,7 @@ class Asset(Base):
             "status IN ('active', 'inactive', 'archived')",
             name="chk_assets_status",
         ),
+        UniqueConstraint("id", "tenant_id", name="uq_assets_id_tenant_id"),
     )
 
     def __repr__(self) -> str:

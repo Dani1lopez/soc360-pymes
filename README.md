@@ -152,7 +152,42 @@ soc360-pymes/
 
 ## Quickstart
 
-**Prerequisites**: Docker, Python 3.12+
+**Prerequisites**: Docker, Python 3.12+, [uv](https://docs.astral.sh/uv/getting-started/installation/)
+
+### With uv (recommended)
+
+```bash
+# 1. Clone
+git clone https://github.com/Dani1lopez/soc360-pymes.git
+cd soc360-pymes
+
+# 2. Sync dependencies (creates .venv automatically)
+uv sync --extra dev
+
+# 3. Configure environment
+cp .env.example .env
+# Edit .env if needed (Docker exposes PostgreSQL on port 5433)
+
+# 4. Start services (PostgreSQL 16 + Redis 7)
+docker compose --profile dev up -d
+
+# 5. Wait for services to be healthy, then migrate
+uv run alembic upgrade head
+
+# 6. Seed database with demo data
+uv run python scripts/seed_db.py
+
+# 7. Run tests (500+ tests across 3 layers)
+uv run pytest -v
+
+# 8. Start dev server
+uv run uvicorn app.main:app --reload
+
+# 9. Verify it works
+curl http://localhost:8000/health
+```
+
+### With pip (legacy)
 
 ```bash
 # 1. Clone
@@ -214,14 +249,14 @@ Additional quality commands:
 
 ```bash
 # Linting
-ruff check app tests
-ruff format app tests
+uv run ruff check .
+uv run ruff format .
 
 # Type checking
-mypy app
+uv run mypy .
 
 # Full suite
-pytest -v
+uv run pytest -v
 ```
 
 Key testing patterns:

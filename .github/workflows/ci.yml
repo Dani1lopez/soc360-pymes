@@ -71,3 +71,69 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+  test-uv:
+    name: Tests (uv)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: soc360_pymes_test
+          POSTGRES_USER: soc360_app
+          POSTGRES_PASSWORD: soc360_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U soc360_app -d soc360_pymes_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ENVIRONMENT: development
+      POSTGRES_USER: soc360_app
+      POSTGRES_PASSWORD: soc360_test_password
+      POSTGRES_DB: soc360_pymes_test
+      DATABASE_URL: postgresql+asyncpg://soc360_app:soc360_test_password@localhost:5432/soc360_pymes_test
+      DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_app:soc360_test_password@localhost:5432/soc360_pymes_test
+      REDIS_URL: redis://localhost:6379/0
+      REDIS_PASSWORD: ""
+      SECRET_KEY: test-secret-key-for-ci-only-32chars
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      REFRESH_TOKEN_EXPIRE_DAYS: 7
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Check lockfile freshness
+        run: uv lock --check
+
+      - name: Sync dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Smoke test uv import surface
+        run: >
+          uv run python -c
+          "import uvicorn, sqlalchemy.ext.asyncio, redis.asyncio, celery, jose, passlib, asyncpg, cryptography, bcrypt, hiredis"
+
+      - name: Smoke test Celery CLI help
+        run: uv run celery --help
+
+      - name: Run tests
+        run: uv run pytest

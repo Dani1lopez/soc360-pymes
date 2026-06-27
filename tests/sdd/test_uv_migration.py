@@ -1,7 +1,10 @@
 import subprocess
 import tomllib
 import os
+import shutil
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -158,6 +161,9 @@ def test_ci_uv_job_has_celery_help_step():
 
 
 def test_uv_run_celery_help_runs():
+    if shutil.which("uv") is None:
+        pytest.skip("uv CLI is unavailable; this runtime smoke is covered by the test-uv CI job")
+
     result = subprocess.run(
         ["uv", "run", "celery", "--help"],
         cwd=ROOT,

@@ -1,3 +1,5 @@
+# Legacy: source of truth is pyproject.toml; kept for pip rollback path.
+#
 # ── Web Framework ──────────────────────────────────────────────
 fastapi==0.115.6
 uvicorn[standard]==0.32.1

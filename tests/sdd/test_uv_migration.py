@@ -136,15 +136,25 @@ def test_requirements_dev_has_legacy_header():
         assert pin in lines, f"{pin} must remain in requirements-dev.txt"
 
 
-def test_ci_workflow_has_parallel_uv_job():
+def test_ci_workflow_has_uv_job_only():
     ci_text = (ROOT / ".github/workflows/ci.yml").read_text()
-    assert "test-uv:" in ci_text, "CI must contain a test-uv job"
+    job_ids = []
+    in_jobs = False
+    for line in ci_text.splitlines():
+        if line == "jobs:":
+            in_jobs = True
+            continue
+        if in_jobs and line and not line.startswith(" "):
+            break
+        if in_jobs and line.startswith("  ") and not line.startswith("    ") and line.rstrip().endswith(":"):
+            job_ids.append(line.split(":", 1)[0].strip())
+
+    assert job_ids == ["test"], f"CI must contain only the canonical uv test job, found: {job_ids}"
+    assert "pip install -r requirements-dev.txt" not in ci_text, "Legacy pip install step must be removed"
     assert "astral-sh/setup-uv@v4" in ci_text
     assert "uv lock --check" in ci_text, "CI must verify uv.lock is fresh"
     assert "uv sync --frozen --extra dev" in ci_text
     assert "uv run pytest" in ci_text
-    # Pip job must remain intact.
-    assert "pip install -r requirements-dev.txt" in ci_text
 
 
 def test_ci_uv_job_has_import_smoke_step():

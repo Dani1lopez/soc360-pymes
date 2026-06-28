@@ -43,8 +43,8 @@ Adds 4 tables (assets, scans, vulnerabilities, reports) + RLS + indexes + tenant
 
 ### T-002: Config, exceptions, dependencies for F2
 **Priority**: must-have | **Depends on**: none
-Modify: `app/core/config.py`, `app/core/exceptions.py`, `app/dependencies.py`, `requirements.txt`
-Add Celery/scan/report config, domain exceptions, RBAC aliases, new pip deps.
+Modify: `app/core/config.py`, `app/core/exceptions.py`, `app/dependencies.py`, `pyproject.toml`
+Add Celery/scan/report config, domain exceptions, RBAC aliases, new dependencies.
 
 ### T-003: Vulnerable target Docker container
 **Priority**: must-have | **Depends on**: none

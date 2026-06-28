@@ -98,7 +98,7 @@ A new developer following Getting Started MUST clone, configure, and run all tes
 - [ ] Prerequisites listed explicitly (Docker, Python 3.12+, git)
 - [ ] `.env.example` referenced as `.env` template — no manual config file edits
 - [ ] Docker compose starts PostgreSQL 16 + Redis 7 with health checks
-- [ ] Commands provided in order: clone → .env → Docker → venv → dependencies → migrations → seed → tests → dev server
+- [ ] Commands provided in order: clone → .env → Docker → dependencies (via `uv sync`) → migrations → seed → tests → dev server
 - [ ] Dev server command (`uvicorn`) shown with default port; health endpoint (`GET /health`) documented
 - [ ] No external API keys required for basic setup (Groq key optional)
 

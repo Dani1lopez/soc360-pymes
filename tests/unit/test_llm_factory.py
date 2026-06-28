@@ -256,3 +256,76 @@ class TestGetLlmProviderDependency:
         from app.core.llm import get_llm_provider
 
         assert callable(get_llm_provider)
+
+
+class TestEdgeCases:
+    """Verify edge cases from the refactored generic factory."""
+
+    def test_empty_provider_name_raises_error(self):
+        """Empty provider name must raise LLMResponseError (spec R04)."""
+        from app.core.llm import _create_provider
+        from app.core.exceptions import LLMResponseError
+
+        with pytest.raises(LLMResponseError, match="empty"):
+            _create_provider("")
+
+    def test_empty_model_string_raises_error(self, monkeypatch):
+        """Explicitly-empty model field must raise LLMResponseError (spec R05c)."""
+        monkeypatch.setattr("app.core.llm.settings.OPENAI_MODEL", "")
+        from app.core.llm import _create_provider
+        from app.core.exceptions import LLMResponseError
+
+        with pytest.raises(LLMResponseError, match="Model"):
+            _create_provider("openai")
+
+    def test_empty_api_key_raises_error(self, monkeypatch):
+        """Empty API key for non-ollama must raise LLMResponseError (spec R06b)."""
+        monkeypatch.setattr("app.core.llm.settings.OPENAI_API_KEY", "")
+        from app.core.llm import _create_provider
+        from app.core.exceptions import LLMResponseError
+
+        with pytest.raises(LLMResponseError, match="API key"):
+            _create_provider("openai")
+
+    def test_anthropic_custom_base_url_override(self, monkeypatch):
+        """Custom ANTHROPIC_BASE_URL must override the class default (spec R07)."""
+        monkeypatch.setattr(
+            "app.core.llm.settings.ANTHROPIC_BASE_URL",
+            "https://custom.anthropic.example.com",
+        )
+        monkeypatch.setattr(
+            "app.core.llm.settings.ANTHROPIC_API_KEY",
+            "sk-ant-test-key-123456",
+        )
+        from app.core.llm import _create_provider
+
+        provider = _create_provider("anthropic")
+        assert provider._base_url == "https://custom.anthropic.example.com"
+
+    def test_ollama_url_normalize_adds_v1(self):
+        """URL without /v1 gets it appended (spec R08)."""
+        from app.core.llm import OpenAICompatProvider
+
+        result = OpenAICompatProvider._normalize_ollama_url("http://localhost:11434")
+        assert result == "http://localhost:11434/v1"
+
+    def test_ollama_url_normalize_passthrough(self):
+        """Already-correct URL passes through unchanged (spec R08)."""
+        from app.core.llm import OpenAICompatProvider
+
+        result = OpenAICompatProvider._normalize_ollama_url("http://localhost:11434/v1")
+        assert result == "http://localhost:11434/v1"
+
+    def test_ollama_url_normalize_trailing_slash(self):
+        """Trailing slash is stripped before /v1 append (spec R08)."""
+        from app.core.llm import OpenAICompatProvider
+
+        result = OpenAICompatProvider._normalize_ollama_url("http://localhost:11434/")
+        assert result == "http://localhost:11434/v1"
+
+    def test_ollama_url_normalize_already_has_v1_trailing_slash(self):
+        """URL ending with /v1/ is normalized to /v1 (no double slash)."""
+        from app.core.llm import OpenAICompatProvider
+
+        result = OpenAICompatProvider._normalize_ollama_url("http://localhost:11434/v1/")
+        assert result == "http://localhost:11434/v1"

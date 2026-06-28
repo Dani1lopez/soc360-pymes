@@ -89,10 +89,11 @@ def test_uv_lock_exists_and_is_tracked():
     assert ignored.returncode != 0, "uv.lock must not be ignored locally"
 
 
-def test_requirements_txt_has_legacy_header_and_unchanged_pins():
-    lines = (ROOT / "requirements.txt").read_text().splitlines()
-    header = "\n".join(lines[:5]).lower()
-    assert "legacy" in header or "pyproject.toml" in header
+def test_requirements_txt_is_removed_and_pins_moved_to_pyproject():
+    assert not (ROOT / "requirements.txt").exists(), "requirements.txt must be removed in PR-3"
+
+    with (ROOT / "pyproject.toml").open("rb") as f:
+        deps = tomllib.load(f)["project"]["dependencies"]
 
     original_pins = [
         "fastapi==0.115.6",
@@ -112,17 +113,18 @@ def test_requirements_txt_has_legacy_header_and_unchanged_pins():
         "email-validator==2.3.0",
     ]
     for pin in original_pins:
-        assert pin in lines, f"{pin} must remain in requirements.txt"
+        assert pin in deps, f"{pin} must be preserved in pyproject.toml dependencies"
 
-    # Order of runtime pins must be preserved (ignore comments/blank lines).
-    runtime_order = [line for line in lines if line and not line.startswith("#")]
+    # Order of runtime pins must be preserved.
+    runtime_order = [line for line in deps if line and not line.startswith("#")]
     assert runtime_order == original_pins, "runtime dependency order must not change"
 
 
-def test_requirements_dev_has_legacy_header():
-    lines = (ROOT / "requirements-dev.txt").read_text().splitlines()
-    header = "\n".join(lines[:5]).lower()
-    assert "legacy" in header or "pyproject.toml" in header
+def test_requirements_dev_is_removed_and_dev_pins_moved_to_pyproject():
+    assert not (ROOT / "requirements-dev.txt").exists(), "requirements-dev.txt must be removed in PR-3"
+
+    with (ROOT / "pyproject.toml").open("rb") as f:
+        dev = tomllib.load(f)["project"]["optional-dependencies"]["dev"]
 
     dev_pins = [
         "pytest==8.3.4",
@@ -133,7 +135,7 @@ def test_requirements_dev_has_legacy_header():
         "fakeredis==2.34.1",
     ]
     for pin in dev_pins:
-        assert pin in lines, f"{pin} must remain in requirements-dev.txt"
+        assert pin in dev, f"{pin} must be preserved in pyproject.toml dev optional dependencies"
 
 
 def test_ci_workflow_has_uv_job_only():

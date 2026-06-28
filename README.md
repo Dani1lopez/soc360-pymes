@@ -140,8 +140,6 @@ soc360-pymes/
 │   └── llm-abstraction.md      # LLM layer docs
 ├── docker-compose.yml
 ├── pytest.ini
-├── requirements.txt
-├── requirements-dev.txt
 ├── .env.example
 └── AGENTS.md
 ```
@@ -184,43 +182,6 @@ uv run pytest -v
 uv run uvicorn app.main:app --reload
 
 # 9. Verify it works
-curl http://localhost:8000/health
-```
-
-### With pip (legacy)
-
-```bash
-# 1. Clone
-git clone https://github.com/Dani1lopez/soc360-pymes.git
-cd soc360-pymes
-
-# 2. Virtual env
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-# 3. Install dependencies
-pip install -r requirements-dev.txt
-
-# 4. Configure environment
-cp .env.example .env
-# Edit .env if needed (Docker exposes PostgreSQL on port 5433)
-
-# 5. Start services (PostgreSQL 16 + Redis 7)
-docker compose --profile dev up -d
-
-# 6. Wait for services to be healthy, then migrate
-alembic upgrade head
-
-# 7. Seed database with demo data
-python scripts/seed_db.py
-
-# 8. Run tests (500+ tests across 3 layers)
-pytest -v
-
-# 9. Start dev server
-uvicorn app.main:app --reload
-
-# 10. Verify it works
 curl http://localhost:8000/health
 ```
 

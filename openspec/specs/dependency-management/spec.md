@@ -62,25 +62,31 @@ The system SHALL expose project commands through `uv run` for `pytest`, `ruff`, 
 - WHEN the developer runs `uv run celery --help` or `uv run python -c "import celery"`
 - THEN Celery SHALL be importable and its CLI SHALL print usage without requiring a broker or backend
 
-### Requirement: Legacy Pip Compatibility
+### Requirement: Legacy Requirements Files Removed
 
-The system SHALL keep `requirements.txt` and `requirements-dev.txt` functional during PR-1. The files SHALL remain verbatim and receive a legacy header.
+The system SHALL NOT keep `requirements.txt` or `requirements-dev.txt` in the repository after PR-3. All dependency declarations SHALL live in `pyproject.toml`, with the resolved tree locked in `uv.lock`.
 
-#### Scenario: Pip path and header remain intact
+#### Scenario: Requirements files are absent
 
-- GIVEN a fresh Python 3.12 virtual environment
-- WHEN `pip install -r requirements.txt` and `pip install -r requirements-dev.txt` run and the top of each file is read
-- THEN the application and tests SHALL work, and a legacy header SHALL point to `pyproject.toml`
+- GIVEN a fresh clone after PR-3
+- WHEN `git ls-files` runs
+- THEN `requirements.txt` and `requirements-dev.txt` SHALL NOT be listed
+
+#### Scenario: Pyproject preserves runtime and dev pins
+
+- GIVEN `pyproject.toml`
+- WHEN `[project.dependencies]` and `[project.optional-dependencies.dev]` are read
+- THEN all runtime and dev pins formerly declared in `requirements.txt` and `requirements-dev.txt` SHALL be present
 
 ### Requirement: Continuous Integration Parity
 
-CI SHALL run the existing pip job unchanged and a new uv job in parallel. The uv job SHALL use `astral-sh/setup-uv@v4`, `uv sync --frozen --extra dev`, and `uv run pytest`. Both SHALL pass.
+CI SHALL run only the canonical uv job. The workflow SHALL use `astral-sh/setup-uv@v4`, `uv lock --check`, `uv sync --frozen --extra dev`, and `uv run pytest`. No legacy pip install steps SHALL remain.
 
-#### Scenario: Parallel jobs pass
+#### Scenario: uv job passes
 
 - GIVEN a pull request is opened
 - WHEN the CI workflow executes
-- THEN the pip job and the uv job SHALL both succeed, with the uv job using `uv sync --frozen --extra dev` and `uv run pytest`
+- THEN the uv job SHALL succeed, validating lockfile freshness and running the test suite with `uv run pytest`
 
 ### Requirement: Docker and Compose Compatibility
 
@@ -110,10 +116,10 @@ The project SHALL declare a single target Python version. `.python-version` SHAL
 
 ### Requirement: Rollback Path
 
-The system SHALL remain reversible to the pip workflow by removing uv artifacts while keeping `requirements*.txt` unchanged.
+The system SHALL remain reversible to the pip workflow by reverting PR-3 (restoring `requirements*.txt` from git history) and removing uv artifacts.
 
 #### Scenario: Rollback restores pip
 
-- GIVEN the uv CI job, `pyproject.toml`, `.python-version`, `uv.lock`, and uv README blocks are removed
+- GIVEN the uv CI job, `pyproject.toml`, `.python-version`, `uv.lock`, and uv README blocks are removed and `requirements*.txt` are restored
 - WHEN the legacy pip install steps are followed
 - THEN the project SHALL install and run as before PR-1

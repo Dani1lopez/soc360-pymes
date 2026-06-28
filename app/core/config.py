@@ -3,6 +3,8 @@ from __future__ import annotations
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core._provider_names import _PROVIDER_NAMES
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -48,7 +50,20 @@ class Settings(BaseSettings):
     COHERE_API_KEY: str | None = None
     TOGETHER_API_KEY: str | None = None
     HUGGINGFACE_API_KEY: str | None = None
-    
+
+    # Per-provider model defaults (env-overridable via {NAME}_MODEL)
+    OPENAI_MODEL: str = "gpt-4o"
+    ANTHROPIC_MODEL: str = "claude-3-5-haiku-20241107"
+    GEMINI_MODEL: str = "gemini-2.0-flash"
+    MISTRAL_MODEL: str = "mistral-large-latest"
+    COHERE_MODEL: str = "command-r-plus"
+    TOGETHER_MODEL: str = "mistralai/Mistral-7B-Instruct-v0.3"
+    HUGGINGFACE_MODEL: str = "meta-llama/Llama-3.3-70B-Instruct"
+
+    # Per-provider base URL overrides (None = use provider class default)
+    ANTHROPIC_BASE_URL: str | None = None
+    GEMINI_BASE_URL: str | None = None
+
     # Event Bus (Redis Streams)
     EVENT_STREAM_PREFIX: str = "events"
     EVENT_CONSUMER_GROUP: str = "soc360-consumers"
@@ -123,12 +138,8 @@ class Settings(BaseSettings):
     @field_validator("LLM_PROVIDER")
     @classmethod
     def llm_provider_valid(cls, v: str) -> str:
-        allowed = {
-            "groq", "ollama", "openai", "anthropic",
-            "gemini", "mistral", "cohere", "together", "huggingface",
-        }
-        if v.lower() not in allowed:
-            raise ValueError(f"LLM_PROVIDER debe ser uno de: {sorted(allowed)}")
+        if v.lower() not in _PROVIDER_NAMES:
+            raise ValueError(f"LLM_PROVIDER debe ser uno de: {sorted(_PROVIDER_NAMES)}")
         return v.lower()
 
     @model_validator(mode="after")

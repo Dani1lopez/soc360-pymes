@@ -232,7 +232,6 @@ async def login(
     db: AsyncSession,
     redis: Redis,
     request_ip: str | None = None,
-    request_headers: dict | None = None,
     user_agent: str | None = None,
 ) -> tuple[TokenResponse, str]:
     """Autentica al usuario y delvuelve el access token + refresh token"""
@@ -252,7 +251,9 @@ async def login(
     await _check_tenant_active(user, db)
     
     await _clear_login_attempts(email, redis)
-    
+
+    user.last_login_at = datetime.now(timezone.utc)
+
     access_token, jti = create_access_token(
         user_id=str(user.id),
         tenant_id=str(user.tenant_id) if user.tenant_id else None,

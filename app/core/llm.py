@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import re
-from typing import ClassVar, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import Callable, ClassVar, Protocol, runtime_checkable
 
 import httpx
 
+from app.core._provider_names import _PROVIDER_NAMES
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.exceptions import (
@@ -42,99 +44,172 @@ def _redact_credentials(text: str) -> str:
 # Singleton cache: one provider instance per provider name, per process.
 _llm_singletons: dict[str, "LLMProvider"] = {}
 
-_PROVIDER_CLASSES: dict[str, type] = {}  # filled by _register_providers at import time
+_PROVIDER_REGISTRY: dict[str, "ProviderEntry"] = {}
+# filled by _register_providers() on first _create_provider call
+
+
+@dataclass(slots=True, frozen=True)
+class ProviderEntry:
+    """Single source of truth for one LLM provider's configuration."""
+
+    cls: type
+    api_key_attr: str | None
+    model_default: str
+    base_url_attr: str | None
+    base_url_default: str | None
+    url_normalizer: Callable[[str], str] | None
 
 
 def _register_providers() -> None:
-    """Register all concrete provider classes keyed by provider name."""
-    # OpenAI-compatible family (shared transport /v1/chat/completions)
-    for _name in (
-        "groq",
-        "ollama",
-        "openai",
-        "mistral",
-        "cohere",
-        "together",
-        "huggingface",
-    ):
-        _PROVIDER_CLASSES[_name] = OpenAICompatProvider
-    _PROVIDER_CLASSES["anthropic"] = AnthropicProvider
-    _PROVIDER_CLASSES["gemini"] = GeminiProvider
+    """Build the provider registry with all 9 supported providers.
+
+    Called lazily on first ``_create_provider()`` invocation.
+    Includes a drift assertion that catches mismatches between
+    ``_PROVIDER_NAMES`` (in ``_provider_names.py``) and the
+    registry keys at import time.
+    """
+    if _PROVIDER_REGISTRY:
+        return
+
+    _PROVIDER_REGISTRY.update({
+        "groq": ProviderEntry(
+            cls=OpenAICompatProvider, api_key_attr="GROQ_API_KEY",
+            model_default="llama-3.3-70b-versatile",
+            base_url_attr=None, base_url_default="https://api.groq.com/v1",
+            url_normalizer=None,
+        ),
+        "ollama": ProviderEntry(
+            cls=OpenAICompatProvider, api_key_attr=None,
+            model_default="llama3.2",
+            base_url_attr="OLLAMA_URL", base_url_default="http://localhost:11434",
+            url_normalizer=OpenAICompatProvider._normalize_ollama_url,
+        ),
+        "openai": ProviderEntry(
+            cls=OpenAICompatProvider, api_key_attr="OPENAI_API_KEY",
+            model_default="gpt-4o",
+            base_url_attr=None, base_url_default="https://api.openai.com/v1",
+            url_normalizer=None,
+        ),
+        "anthropic": ProviderEntry(
+            cls=AnthropicProvider, api_key_attr="ANTHROPIC_API_KEY",
+            model_default="claude-3-5-haiku-20241107",
+            base_url_attr="ANTHROPIC_BASE_URL", base_url_default=None,
+            url_normalizer=None,
+        ),
+        "gemini": ProviderEntry(
+            cls=GeminiProvider, api_key_attr="GEMINI_API_KEY",
+            model_default="gemini-2.0-flash",
+            base_url_attr="GEMINI_BASE_URL", base_url_default=None,
+            url_normalizer=None,
+        ),
+        "mistral": ProviderEntry(
+            cls=OpenAICompatProvider, api_key_attr="MISTRAL_API_KEY",
+            model_default="mistral-large-latest",
+            base_url_attr=None, base_url_default="https://api.mistral.ai/v1",
+            url_normalizer=None,
+        ),
+        "cohere": ProviderEntry(
+            cls=OpenAICompatProvider, api_key_attr="COHERE_API_KEY",
+            model_default="command-r-plus",
+            base_url_attr=None, base_url_default="https://api.cohere.ai/v1",
+            url_normalizer=None,
+        ),
+        "together": ProviderEntry(
+            cls=OpenAICompatProvider, api_key_attr="TOGETHER_API_KEY",
+            model_default="mistralai/Mistral-7B-Instruct-v0.3",
+            base_url_attr=None, base_url_default="https://api.together.xyz/v1",
+            url_normalizer=None,
+        ),
+        "huggingface": ProviderEntry(
+            cls=OpenAICompatProvider, api_key_attr="HUGGINGFACE_API_KEY",
+            model_default="meta-llama/Llama-3.3-70B-Instruct",
+            base_url_attr=None, base_url_default="https://api-inference.huggingface.co/v1",
+            url_normalizer=None,
+        ),
+    })
+
+    # Runtime assertion: catch drift between _provider_names.py and registry.
+    # If a developer adds a ProviderEntry but forgets to update _PROVIDER_NAMES,
+    # the validator rejects a valid provider — this assertion catches the mismatch
+    # at import time.
+    assert set(_PROVIDER_REGISTRY.keys()) == _PROVIDER_NAMES, (
+        f"Provider registry and _PROVIDER_NAMES are out of sync. "
+        f"Registry: {sorted(_PROVIDER_REGISTRY.keys())}. "
+        f"_PROVIDER_NAMES: {sorted(_PROVIDER_NAMES)}. "
+        f"Update app/core/_provider_names.py to match."
+    )
 
 
 def _create_provider(provider_name: str) -> "LLMProvider":
     """Create a new (uncached) provider instance for the given provider name.
 
+    Generic resolver — zero ``if/elif`` on provider name. All per-provider
+    configuration lives in ``ProviderEntry`` inside ``_PROVIDER_REGISTRY``.
+
     Raises
     ------
     LLMResponseError
-        If the provider name is not recognised.
+        If the provider name is empty, unknown, or required configuration
+        (model, API key) is missing.
     """
-    if not _PROVIDER_CLASSES:
+    # Normalize
+    name = provider_name.strip().lower()
+    if not name:
+        raise LLMResponseError("LLM provider name must not be empty")
+
+    if not _PROVIDER_REGISTRY:
         _register_providers()
 
-    provider_cls = _PROVIDER_CLASSES.get(provider_name)
-    if provider_cls is None:
+    entry = _PROVIDER_REGISTRY.get(name)
+    if entry is None:
         raise LLMResponseError(
-            f"Unknown LLM provider: {provider_name!r}. "
-            f"Supported: {sorted(_PROVIDER_CLASSES)}"
+            f"Unknown LLM provider: {name!r}. "
+            f"Supported: {sorted(_PROVIDER_REGISTRY)}"
         )
 
-    # -------------------------------------------------------------------------
-    # Per-provider configuration (model, api_key, base_url)
-    # -------------------------------------------------------------------------
-    if provider_name == "ollama":
-        base_url = getattr(settings, "OLLAMA_URL", "http://localhost:11434").rstrip("/")
-        if not base_url.endswith("/v1"):
-            base_url = f"{base_url}/v1"
-        api_key = ""  # Ollama has no auth
-        model = settings.OLLAMA_MODEL
-    elif provider_name == "groq":
-        base_url = "https://api.groq.com/v1"
-        api_key = settings.GROQ_API_KEY
-        model = settings.GROQ_MODEL
-    elif provider_name == "openai":
-        base_url = "https://api.openai.com/v1"
-        api_key = settings.OPENAI_API_KEY or ""
-        model = "gpt-4o"  # default; user can override via env
-    elif provider_name == "anthropic":
-        api_key = settings.ANTHROPIC_API_KEY or ""
-        model = "claude-3-5-haiku-20241107"  # default
-    elif provider_name == "gemini":
-        api_key = settings.GEMINI_API_KEY or ""
-        model = "gemini-2.0-flash"  # default
-    elif provider_name == "mistral":
-        base_url = "https://api.mistral.ai/v1"
-        api_key = settings.MISTRAL_API_KEY or ""
-        model = "mistral-large-latest"
-    elif provider_name == "cohere":
-        base_url = "https://api.cohere.ai/v1"
-        api_key = settings.COHERE_API_KEY or ""
-        model = "command-r-plus"
-    elif provider_name == "together":
-        base_url = "https://api.together.xyz/v1"
-        api_key = settings.TOGETHER_API_KEY or ""
-        model = "mistralai/Mistral-7B-Instruct-v0.3"
-    elif provider_name == "huggingface":
-        base_url = "https://api-inference.huggingface.co/v1"
-        api_key = settings.HUGGINGFACE_API_KEY or ""
-        model = "meta-llama/Llama-3.3-70B-Instruct"
-    else:
-        # Should not reach here (handled by _PROVIDER_CLASSES.get above)
-        raise LLMResponseError(f"Unsupported provider: {provider_name!r}")
+    # Model: convention {NAME}_MODEL, with explicit None vs empty-string handling.
+    # None  → use entry.model_default (env var not set at all)
+    # ""    → raise LLMResponseError  (env var explicitly set to empty)
+    # value → use it as-is
+    model = getattr(settings, f"{name.upper()}_MODEL", None)
+    if model is None:
+        model = entry.model_default
+    if not model:
+        raise LLMResponseError(f"Model not configured for provider {name!r}")
 
-    # -------------------------------------------------------------------------
-    # Instantiate the concrete class
-    # -------------------------------------------------------------------------
+    # API key: None attr = skip (ollama); None value = use "" (backcompat);
+    # explicitly empty string = error (spec R06b)
+    if entry.api_key_attr is not None:
+        api_key = getattr(settings, entry.api_key_attr, None)
+        if api_key is not None and not api_key:
+            raise LLMResponseError(
+                f"API key is required for provider {name!r} "
+                f"but {entry.api_key_attr} is empty"
+            )
+        if api_key is None:
+            api_key = ""
+    else:
+        api_key = ""
+
+    # Base URL: attr → Settings, else hardcoded; then normalizer
+    base_url: str | None = None
+    if entry.base_url_attr is not None:
+        base_url = getattr(settings, entry.base_url_attr, None) or entry.base_url_default
+    elif entry.base_url_default is not None:
+        base_url = entry.base_url_default
+
+    if base_url is not None and entry.url_normalizer is not None:
+        base_url = entry.url_normalizer(base_url)
+
     kwargs: dict[str, object] = dict(
         api_key=api_key,
         model=model,
         timeout=settings.LLM_TIMEOUT,
     )
-    if provider_name in ("groq", "ollama", "mistral", "cohere", "together", "huggingface", "openai"):
+    if base_url is not None:
         kwargs["base_url"] = base_url
 
-    return provider_cls(**kwargs)  # type: ignore[arg-type]
+    return entry.cls(**kwargs)  # type: ignore[arg-type]
 
 
 def get_llm_provider() -> "LLMProvider":
@@ -176,6 +251,19 @@ class OpenAICompatProvider:
 
     DEFAULT_BASE_URL: ClassVar[str] = "https://api.openai.com/v1"
     ENDPOINT: ClassVar[str] = "/chat/completions"
+
+    @staticmethod
+    def _normalize_ollama_url(url: str) -> str:
+        """Normalize an Ollama base URL to include the /v1 API path.
+
+        Strips trailing slashes and appends ``/v1`` if not already present,
+        so ``http://localhost:11434`` becomes ``http://localhost:11434/v1``.
+        Already-correct URLs (already ending in ``/v1``) pass through unchanged.
+        """
+        url = url.rstrip("/")
+        if not url.endswith("/v1"):
+            url = f"{url}/v1"
+        return url
 
     def __init__(
         self,
@@ -291,10 +379,12 @@ class AnthropicProvider:
         *,
         model: str,
         timeout: int = 30,
+        base_url: str | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
+        self._base_url = base_url or self.BASE_URL
 
     async def complete(
         self,
@@ -333,12 +423,12 @@ class AnthropicProvider:
         _llm_logger.debug(
             "LLM call: provider=Anthropic model=%s endpoint=%s",
             self._model,
-            _redact_credentials(self.BASE_URL),
+            _redact_credentials(self._base_url),
         )
 
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout)) as client:
-                response = await client.post(self.BASE_URL, json=payload, headers=headers)
+                response = await client.post(self._base_url, json=payload, headers=headers)
         except httpx.TimeoutException:
             _llm_logger.warning("LLM timeout: provider=Anthropic timeout=%ss", self._timeout)
             raise LLMTimeoutError(
@@ -395,10 +485,12 @@ class GeminiProvider:
         *,
         model: str,
         timeout: int = 30,
+        base_url: str | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
+        self._base_url = base_url or self.BASE_URL
 
     async def complete(
         self,
@@ -420,7 +512,7 @@ class GeminiProvider:
         LLMError
             For transport-level failures.
         """
-        url = f"{self.BASE_URL}/models/{self._model}:generateContent"
+        url = f"{self._base_url}/models/{self._model}:generateContent"
         headers = {
             "x-goog-api-key": self._api_key,
             "Content-Type": "application/json",

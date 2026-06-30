@@ -4,6 +4,7 @@ import uuid
 
 from redis.asyncio import Redis
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -64,18 +65,21 @@ async def create_user(data: UserCreate, db: AsyncSession) -> User:
         is_superadmin=data.is_superadmin,
     )
     db.add(user)
-    await db.flush()
+    # Wrap flush in IntegrityError handler to translate asyncpg pgcode '23505'
+    # (unique_violation) into a domain 409. `exc.orig.pgcode` is asyncpg-specific;
+    # using getattr with a default avoids silent mis-translation if the attribute
+    # is missing on a different driver. Any other IntegrityError propagates.
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        if getattr(exc.orig, "pgcode", None) == "23505":
+            await db.rollback()
+            raise UserError(
+                "El email ya está registrado", status_code=409
+            ) from exc
+        raise
     await db.refresh(user)
     return user
-
-
-async def get_user_by_id(
-    user_id: uuid.UUID,
-    db: AsyncSession,
-) -> User | None:
-    """Devuelve el usuario o None si no existe"""
-    result = await db.execute(select(User).where(User.id == user_id))
-    return result.scalar_one_or_none()
 
 
 async def get_user_by_email(
@@ -109,15 +113,27 @@ async def list_users(
 
 
 async def update_user(
-    user_id: uuid.UUID,
+    current_user: User,
+    target: User,
     data: UserUpdate,
     db: AsyncSession,
     redis: Redis,
 ) -> User:
-    """Actualiza campos del usuario"""
-    user = await get_user_by_id(user_id, db)
-    if user is None:
-        raise UserError("Usuario no encontrado", status_code=404)
+    """Update a pre-checked user row (R02, R04, RK-7).
+
+    The router passes in the User row already validated by the
+    `get_user_for_admin_*` Depends. This function is auth-clean: it
+    only applies field changes and (if deactivating) revokes tokens.
+
+    NOTE: The router MUST obtain `target` via the cross-tenant Depends,
+    not via `get_user_internal` — the Depends guarantees the
+    cross-tenant pre-check ran. A hand-constructed User row would
+    bypass the check.
+    """
+    if not current_user.is_superadmin and target.tenant_id != current_user.tenant_id:
+        raise UserError("Permisos insuficientes", status_code=403)
+    user_id = target.id
+    user = target
 
     update_data = data.model_dump(exclude_unset=True)
 
@@ -159,17 +175,27 @@ async def update_user(
 
 
 async def deactivate_user(
-    user_id: uuid.UUID,
+    current_user: User,
+    target: User,
     db: AsyncSession,
     redis: Redis,
 ) -> None:
-    """Desactiva el usuario y revoca todas sus sesiones activas"""
-    user = await get_user_by_id(user_id, db)
-    if user is None:
-        raise UserError("Usuario no encontrado", status_code=404)
-    if not user.is_active:
+    """Deactivate a pre-checked user row (R03, R04, RK-7).
+
+    The router passes in the User row already validated by the
+    `get_user_for_admin_*` Depends. This function is auth-clean: it
+    only flips `is_active` and revokes tokens.
+
+    NOTE: The router MUST obtain `target` via the cross-tenant Depends,
+    not via `get_user_internal`.
+    """
+    if not current_user.is_superadmin and target.tenant_id != current_user.tenant_id:
+        raise UserError("Permisos insuficientes", status_code=403)
+    user_id = target.id
+
+    if not target.is_active:
         raise UserError("El usuario ya está desactivado", status_code=409)
-    user.is_active = False
+    target.is_active = False
     await db.flush()
 
     # Revocar todos los refresh tokens del usuario (DB)

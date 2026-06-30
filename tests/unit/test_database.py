@@ -86,6 +86,73 @@ class TestSetTenantContextParameterized:
             await set_tenant_context(mock_db, None, is_superadmin=False)
 
 
+class TestSetTenantContextSuperadminCombinedSQL:
+    """Verify set_tenant_context superadmin branch uses a SINGLE combined roundtrip.
+
+    This guards against session poisoning across pooled connections: a superadmin
+    query that follows a regular tenant query on the same connection would be
+    silently filtered by the previous tenant's RLS policy unless we explicitly
+    clear `app.current_tenant` in the SAME roundtrip that elevates privileges.
+    """
+
+    @pytest.mark.asyncio
+    async def test_set_tenant_context_superadmin_clears_tenant(self):
+        """When is_superadmin=True, set_tenant_context must also clear
+        app.current_tenant to prevent RLS session poisoning across
+        pooled connections."""
+        from app.core.database import set_tenant_context
+
+        mock_db = AsyncMock()
+        mock_db.execute.return_value = MagicMock()
+
+        await set_tenant_context(db=mock_db, tenant_id="abc-123", is_superadmin=True)
+
+        # Single roundtrip — both set_config calls combined into one query
+        assert mock_db.execute.call_count == 1, (
+            f"Expected 1 roundtrip combining both set_config calls, "
+            f"got {mock_db.execute.call_count}"
+        )
+
+        # The combined SQL must set BOTH is_superadmin=true AND current_tenant=''
+        sql = str(mock_db.execute.call_args_list[0][0][0])
+        assert "app.is_superadmin" in sql
+        assert "'true'" in sql
+        assert "app.current_tenant" in sql
+        assert "''" in sql
+
+    @pytest.mark.asyncio
+    async def test_set_tenant_context_regular_user_sets_tenant(self):
+        """When is_superadmin=False, set_tenant_context sets the tenant_id
+        via bind parameter and sets is_superadmin to 'false' in a second
+        roundtrip. Regular users MUST NOT get is_superadmin='true'."""
+        from app.core.database import set_tenant_context
+
+        mock_db = AsyncMock()
+
+        await set_tenant_context(
+            db=mock_db, tenant_id="tenant-xyz", is_superadmin=False
+        )
+
+        # Two roundtrips: one for current_tenant (bind param), one for is_superadmin='false'
+        assert mock_db.execute.call_count == 2
+
+        # First call sets current_tenant via bind parameter (NO string interpolation)
+        first_sql = str(mock_db.execute.call_args_list[0][0][0])
+        assert "app.current_tenant" in first_sql
+        assert ":tenant_id" in first_sql
+        # The literal tenant value must NOT be interpolated
+        assert "tenant-xyz" not in first_sql
+        # But the bind params must include it
+        first_params = mock_db.execute.call_args_list[0][0][1]
+        assert first_params == {"tenant_id": "tenant-xyz"}
+
+        # Second call sets is_superadmin to 'false' (NOT 'true')
+        second_sql = str(mock_db.execute.call_args_list[1][0][0])
+        assert "app.is_superadmin" in second_sql
+        assert "'false'" in second_sql
+        assert "'true'" not in second_sql
+
+
 def call_call_sql(call_args) -> str:
     """Extract SQL string from mock.call_args."""
     # call_args: tuple((args, kwargs)) — positional args[0] = SQL text object

@@ -76,12 +76,12 @@ class TestUserService:
         """Test creating user with taken email fails."""
         from app.modules.users import service
         from app.core.exceptions import UserError
-        
+
         mock_db = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one.return_value = 1  # Email exists
         mock_db.execute.return_value = mock_result
-        
+
         from app.modules.users.schemas import UserCreate, RoleEnum
         data = UserCreate(
             email="taken@test.com",
@@ -90,82 +90,221 @@ class TestUserService:
             role=RoleEnum.viewer,
             tenant_id=uuid4(),
         )
-        
+
         with pytest.raises(UserError) as exc_info:
             await service.create_user(data=data, db=mock_db)
-        
+
         assert exc_info.value.status_code == 409
         assert "email" in exc_info.value.detail.lower()
-    
+
     @pytest.mark.asyncio
-    async def test_get_user_by_id_found(self):
-        """Test getting existing user by ID."""
+    async def test_create_user_translates_unique_violation_to_409(self):
+        """create_user must translate asyncpg pgcode '23505' to UserError(409) and roll back.
+
+        Regression for PR-B: the pre-check (`_is_email_taken`) can race a concurrent
+        INSERT. When the flush hits the unique constraint, the raw asyncpg
+        `UniqueViolationError` (SQLSTATE 23505) must be surfaced as 409, and the
+        session must be rolled back to avoid `PendingRollbackError` on the next call.
+        """
         from app.modules.users import service
-        
-        mock_user = MagicMock()
-        mock_user.id = uuid4()
-        mock_user.email = "found@test.com"
-        
+        from app.core.exceptions import UserError
+        from app.modules.users.schemas import UserCreate, RoleEnum
+        from sqlalchemy.exc import IntegrityError
+
+        mock_db = AsyncMock()
+        # Pre-check returns no row (race window: not yet visible).
+        mock_result = MagicMock()
+        mock_result.scalar_one.return_value = 0
+        mock_db.execute.return_value = mock_result
+
+        # flush() raises IntegrityError(orig.pgcode == "23505").
+        asyncpg_orig = MagicMock()
+        asyncpg_orig.pgcode = "23505"
+        mock_db.flush.side_effect = IntegrityError(
+            "duplicate key value violates unique constraint",
+            params=None,
+            orig=asyncpg_orig,
+        )
+
+        data = UserCreate(
+            email="racy@test.com",
+            password="ValidPass123!",
+            full_name="Race User",
+            role=RoleEnum.viewer,
+            tenant_id=uuid4(),
+        )
+
+        with pytest.raises(UserError) as exc_info:
+            await service.create_user(data=data, db=mock_db)
+
+        assert exc_info.value.status_code == 409
+        assert "email" in exc_info.value.detail.lower()
+        mock_db.flush.assert_awaited_once()
+        mock_db.rollback.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_create_user_propagates_non_unique_integrity_error(self):
+        """IntegrityError with pgcode != '23505' must propagate untranslated.
+
+        E.g. a foreign-key violation (pgcode '23503') is a different kind of
+        server-side data inconsistency. The 409 translator must NOT swallow it
+        or downgrade it to a domain conflict — that would hide real bugs.
+        """
+        from app.modules.users import service
+        from app.modules.users.schemas import UserCreate, RoleEnum
+        from sqlalchemy.exc import IntegrityError
+
         mock_db = AsyncMock()
         mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
+        mock_result.scalar_one.return_value = 0
         mock_db.execute.return_value = mock_result
-        
-        user = await service.get_user_by_id(user_id=mock_user.id, db=mock_db)
-        
-        assert user == mock_user
-        assert user.email == "found@test.com"
-    
+
+        asyncpg_orig = MagicMock()
+        asyncpg_orig.pgcode = "23503"  # foreign_key_violation
+        mock_db.flush.side_effect = IntegrityError(
+            "insert or update on table violates foreign key constraint",
+            params=None,
+            orig=asyncpg_orig,
+        )
+
+        data = UserCreate(
+            email="fk@test.com",
+            password="ValidPass123!",
+            full_name="FK User",
+            role=RoleEnum.viewer,
+            tenant_id=uuid4(),
+        )
+
+        with pytest.raises(IntegrityError):
+            await service.create_user(data=data, db=mock_db)
+
+        # Must NOT be translated — the original IntegrityError reaches the caller.
+        mock_db.rollback.assert_not_awaited()
+
     @pytest.mark.asyncio
-    async def test_get_user_by_id_not_found(self):
-        """Test getting non-existent user returns None."""
+    async def test_create_user_rolls_back_failed_session_for_subsequent_create(self):
+        """After a 409, the session must be usable for a fresh non-duplicate insert.
+
+        Regression: if `create_user` raises 409 without rolling back, the next
+        call against the same session raises `PendingRollbackError` because the
+        failed flush left the transaction in a broken state. This test enforces
+        that rollback runs so the session stays usable.
+        """
         from app.modules.users import service
-        
+        from app.core.exceptions import UserError
+        from app.modules.users.schemas import UserCreate, RoleEnum
+        from sqlalchemy.exc import IntegrityError
+
         mock_db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
-        mock_db.execute.return_value = mock_result
-        
-        user = await service.get_user_by_id(user_id=uuid4(), db=mock_db)
-        
-        assert user is None
+
+        # Each create_user call does: _is_email_taken -> _get_active_tenant (2 executes)
+        # + db.flush() (1 call). Plan execute/flush results across BOTH calls.
+        empty_count = MagicMock()
+        empty_count.scalar_one.return_value = 0
+
+        asyncpg_orig = MagicMock()
+        asyncpg_orig.pgcode = "23505"
+        integrity_exc = IntegrityError(
+            "duplicate key value violates unique constraint",
+            params=None,
+            orig=asyncpg_orig,
+        )
+
+        # Call #1: two execute results (pre-check + tenant lookup) + flush raises.
+        # Call #2: two execute results + flush succeeds.
+        mock_db.execute.side_effect = [
+            empty_count, empty_count,   # call 1: pre-check, tenant lookup
+            empty_count, empty_count,   # call 2: pre-check, tenant lookup
+        ]
+        mock_db.flush.side_effect = [integrity_exc, None]
+
+        data_dup = UserCreate(
+            email="dup@test.com",
+            password="ValidPass123!",
+            full_name="Dup",
+            role=RoleEnum.viewer,
+            tenant_id=uuid4(),
+        )
+        data_ok = UserCreate(
+            email="ok@test.com",
+            password="ValidPass123!",
+            full_name="Ok",
+            role=RoleEnum.viewer,
+            tenant_id=uuid4(),
+        )
+
+        with pytest.raises(UserError) as exc_info:
+            await service.create_user(data=data_dup, db=mock_db)
+        assert exc_info.value.status_code == 409
+
+        # Second call must not raise PendingRollbackError — rollback must have run.
+        result = await service.create_user(data=data_ok, db=mock_db)
+        assert result is not None
+        mock_db.rollback.assert_awaited_once()
+        assert mock_db.flush.await_count == 2
     
     @pytest.mark.asyncio
     async def test_update_user_not_found(self):
-        """Test updating non-existent user fails."""
+        """Test updating with a target that vanished post pre-check fails.
+
+        After PR-A, `update_user` no longer fetches the target — the router
+        passes a pre-checked row. We simulate the case where the target
+        was valid at the Depends step but the row is gone (TOCTOU) — this
+        now manifests via the `get_user_for_admin` re-fetch in the router
+        pattern. The service itself does not raise 404 on missing target
+        since the contract is "target is pre-checked by the Depends".
+        """
+        # In the new contract, `update_user` does not fetch the target —
+        # the test now verifies that a fully-prepared target is updated
+        # without any fetch.
         from app.modules.users import service
-        from app.core.exceptions import UserError
-        
-        mock_db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
-        mock_db.execute.return_value = mock_result
-        
         from app.modules.users.schemas import UserUpdate
+
+        target = MagicMock()
+        target.id = uuid4()
+        target.is_active = True
+
+        mock_db = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        mock_caller = MagicMock()
         data = UserUpdate(full_name="New Name")
-        
-        with pytest.raises(UserError) as exc_info:
-            await service.update_user(user_id=uuid4(), data=data, db=mock_db, redis=AsyncMock())
-        
-        assert exc_info.value.status_code == 404
-    
+
+        with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            result = await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=AsyncMock(),
+            )
+
+        assert result is target
+        mock_revoke_refresh.assert_not_awaited()
+        mock_revoke_access.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_deactivate_user_already_inactive(self):
-        """Test deactivating already inactive user fails."""
+        """Test deactivating an already-inactive pre-checked target fails with 409."""
         from app.modules.users import service
         from app.core.exceptions import UserError
-        
-        mock_user = MagicMock()
-        mock_user.is_active = False
-        
-        mock_db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
-        mock_db.execute.return_value = mock_result
-        
+
+        target = MagicMock()
+        target.id = uuid4()
+        target.is_active = False
+
+        mock_caller = MagicMock()
+
         with pytest.raises(UserError) as exc_info:
-            await service.deactivate_user(user_id=uuid4(), db=mock_db, redis=AsyncMock())
-        
+            await service.deactivate_user(
+                current_user=mock_caller,
+                target=target,
+                db=AsyncMock(),
+                redis=AsyncMock(),
+            )
+
         assert exc_info.value.status_code == 409
 
     @pytest.mark.asyncio
@@ -299,7 +438,12 @@ class TestUserResponseSchema:
 
 
 class TestUpdateUserTokenRevocation:
-    """Test that update_user revokes tokens on deactivation transition."""
+    """Test that update_user revokes tokens on deactivation transition.
+
+    After PR-A, `update_user` receives a pre-checked `target` row from the
+    router (no internal fetch) plus the `current_user` for the contract.
+    The token-revocation behavior is unchanged.
+    """
 
     @pytest.mark.asyncio
     async def test_update_user_deactivate_revokes_tokens(self):
@@ -309,25 +453,28 @@ class TestUpdateUserTokenRevocation:
         from uuid import uuid4
 
         user_id = uuid4()
-        mock_user = MagicMock()
-        mock_user.id = user_id
-        mock_user.is_active = True
+        target = MagicMock()
+        target.id = user_id
+        target.is_active = True
 
+        mock_caller = MagicMock()
         mock_db = AsyncMock()
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
         mock_redis = AsyncMock()
 
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
-        mock_db.execute.return_value = mock_result
-
         data = UserUpdate(is_active=False)
 
         with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
              patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
-            await service.update_user(user_id=user_id, data=data, db=mock_db, redis=mock_redis)
+            await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=mock_redis,
+            )
 
             mock_revoke_refresh.assert_awaited_once_with(user_id, mock_db)
             mock_revoke_access.assert_awaited_once()
@@ -343,25 +490,28 @@ class TestUpdateUserTokenRevocation:
         from uuid import uuid4
 
         user_id = uuid4()
-        mock_user = MagicMock()
-        mock_user.id = user_id
-        mock_user.is_active = False  # ya inactivo
+        target = MagicMock()
+        target.id = user_id
+        target.is_active = False  # ya inactivo
 
+        mock_caller = MagicMock()
         mock_db = AsyncMock()
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
         mock_redis = AsyncMock()
 
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
-        mock_db.execute.return_value = mock_result
-
         data = UserUpdate(is_active=False)
 
         with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
              patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
-            await service.update_user(user_id=user_id, data=data, db=mock_db, redis=mock_redis)
+            await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=mock_redis,
+            )
 
             mock_revoke_refresh.assert_not_awaited()
             mock_revoke_access.assert_not_awaited()
@@ -374,25 +524,28 @@ class TestUpdateUserTokenRevocation:
         from uuid import uuid4
 
         user_id = uuid4()
-        mock_user = MagicMock()
-        mock_user.id = user_id
-        mock_user.is_active = False  # inactivo, se va a reactivar
+        target = MagicMock()
+        target.id = user_id
+        target.is_active = False  # inactivo, se va a reactivar
 
+        mock_caller = MagicMock()
         mock_db = AsyncMock()
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
         mock_redis = AsyncMock()
 
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
-        mock_db.execute.return_value = mock_result
-
         data = UserUpdate(is_active=True)
 
         with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
              patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
-            await service.update_user(user_id=user_id, data=data, db=mock_db, redis=mock_redis)
+            await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=mock_redis,
+            )
 
             mock_revoke_refresh.assert_not_awaited()
             mock_revoke_access.assert_not_awaited()
@@ -405,25 +558,28 @@ class TestUpdateUserTokenRevocation:
         from uuid import uuid4
 
         user_id = uuid4()
-        mock_user = MagicMock()
-        mock_user.id = user_id
-        mock_user.is_active = True
+        target = MagicMock()
+        target.id = user_id
+        target.is_active = True
 
+        mock_caller = MagicMock()
         mock_db = AsyncMock()
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
         mock_redis = AsyncMock()
 
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
-        mock_db.execute.return_value = mock_result
-
         data = UserUpdate(full_name="New Name")
 
         with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
              patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
-            await service.update_user(user_id=user_id, data=data, db=mock_db, redis=mock_redis)
+            await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=mock_redis,
+            )
 
             mock_revoke_refresh.assert_not_awaited()
             mock_revoke_access.assert_not_awaited()

@@ -186,7 +186,7 @@ async def test_change_password_wrong_current(
         },
         headers=admin_a_headers,
     )
-    assert resp.status_code in (400, 401)
+    assert resp.status_code == 400
 
 
 async def test_change_password_weak_new(

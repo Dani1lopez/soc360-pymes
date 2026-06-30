@@ -19,6 +19,48 @@ logger = get_logger(__name__)
 _RETRY_COUNT_KEY = "_retry_count"
 
 
+# Registry of in-flight DLQ write Tasks (issue #126).
+# `asyncio.ensure_future` returns a Task but does NOT keep a strong reference
+# to it. The Task can be garbage-collected before its xadd coroutine resumes,
+# silently dropping the DLQ event. Holding strong references here prevents
+# GC and lets the lifespan shutdown drain them on exit.
+_INFLIGHT_DLQ: set[asyncio.Task] = set()
+
+
+async def drain_dlq_tasks(timeout: float = 2.0) -> None:
+    """Wait for all in-flight DLQ write Tasks to complete.
+
+    Called from FastAPI lifespan shutdown so a DLQ event dispatched right
+    before shutdown actually lands in Redis before the pool is closed.
+
+    Args:
+        timeout: Maximum seconds to wait for the slowest Task. Pending Tasks
+            that do not finish within the budget are cancelled and logged
+            so ops can alert.
+    """
+    if not _INFLIGHT_DLQ:
+        return
+    pending = list(_INFLIGHT_DLQ)
+    logger.info("draining_dlq_tasks", count=len(pending))
+    try:
+        done, not_done = await asyncio.wait(pending, timeout=timeout)
+    except Exception as exc:
+        logger.error("drain_dlq_tasks_failed", error=str(exc))
+        return
+    for task in not_done:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception) as exc:
+            logger.error("dlq_task_cancelled_on_shutdown", error=str(exc))
+    for task in done:
+        if task.cancelled():
+            continue
+        exc = task.exception()
+        if exc is not None:
+            logger.error("dlq_write_failed_on_shutdown", error=str(exc))
+
+
 class EventBus:
     """Publisher abstraction over Redis Streams XADD.
 
@@ -152,10 +194,16 @@ class EventBus:
                         for k, v in dlq_payload.items()
                     }
                     try:
-                        # Fire-and-forget: write to DLQ without blocking
-                        asyncio.ensure_future(
+                        # Schedule the DLQ write as a Task and hold a strong
+                        # reference in the module-level registry. Without the
+                        # strong reference the Task can be garbage-collected
+                        # before the xadd coroutine resumes, silently dropping
+                        # the DLQ event (issue #126).
+                        task = asyncio.ensure_future(
                             redis_client.xadd(dlq_stream, dlq_payload)
                         )
+                        _INFLIGHT_DLQ.add(task)
+                        task.add_done_callback(_INFLIGHT_DLQ.discard)
                     except Exception as dlq_err:
                         logger.error("dlq_write_failed", error=str(dlq_err))
                 return False

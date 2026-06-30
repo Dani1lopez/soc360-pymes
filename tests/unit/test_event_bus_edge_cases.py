@@ -268,3 +268,202 @@ class TestEventConsumerPendingEdgeCases:
         pending = await consumer.read_pending()
         assert len(pending) == 0
         await client.aclose()
+
+
+class TestEventBusDLQTaskRegistry:
+    """Regression tests for issue #126 — DLQ fire-and-forget was not durable.
+
+    Root cause: `asyncio.ensure_future` returns a Task with no strong
+    reference, so the Task can be garbage-collected before the xadd
+    coroutine resumes. The fix keeps a strong reference in a module-level
+    `_INFLIGHT_DLQ` set and exposes `drain_dlq_tasks` for lifespan shutdown.
+    """
+
+    @pytest.mark.asyncio
+    async def test_dlq_write_lands_in_stream(self):
+        """DLQ event must actually land in Redis (no silent GC drop).
+
+        Exhausts retries on a failing handler, then verifies the DLQ stream
+        has exactly one entry.
+        """
+        import asyncio
+
+        from app.event_bus import EventBus, drain_dlq_tasks
+        from app.core.config import settings
+
+        client = FakeRedis()
+        try:
+            bad_data = {
+                "event_type": "auth.login",
+                "user_id": "u-dlq-1",
+                "_retry_count": settings.EVENT_MAX_RETRIES,
+            }
+
+            with patch.object(
+                EventBus, "_handle_auth_login",
+                side_effect=RuntimeError("handler boom"),
+            ):
+                result = EventBus._dispatch_event(
+                    "auth.login", bad_data, redis_client=client
+                )
+            assert result is False
+
+            # The DLQ write is scheduled as a Task; drain it before reading.
+            await drain_dlq_tasks(timeout=2.0)
+
+            dlq_key = f"{settings.EVENT_STREAM_PREFIX}:dlq:auth.login"
+            entries = await client.xrange(dlq_key)
+            assert len(entries) == 1
+            _, fields = entries[0]
+            decoded = {
+                (k.decode() if isinstance(k, bytes) else k):
+                (v.decode() if isinstance(v, bytes) else v)
+                for k, v in fields.items()
+            }
+            assert decoded.get("_dlq_reason") == "handler boom"
+            assert decoded.get("user_id") == "u-dlq-1"
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_dlq_task_registry_keeps_strong_reference(self):
+        """In-flight DLQ Tasks must remain in the registry until done.
+
+        Without the registry, asyncio's GC could drop the Task before xadd
+        runs. The registry set MUST still contain the Task immediately after
+        dispatch, and MUST remove it via done_callback once finished.
+        """
+        import asyncio
+
+        from app.event_bus import EventBus, _INFLIGHT_DLQ, drain_dlq_tasks
+        from app.core.config import settings
+
+        client = FakeRedis()
+        try:
+            # Snapshot the set so we can isolate this test's contributions.
+            before = set(_INFLIGHT_DLQ)
+
+            bad_data = {
+                "event_type": "auth.login",
+                "user_id": "u-registry",
+                "_retry_count": settings.EVENT_MAX_RETRIES,
+            }
+            with patch.object(
+                EventBus, "_handle_auth_login",
+                side_effect=RuntimeError("boom"),
+            ):
+                EventBus._dispatch_event(
+                    "auth.login", bad_data, redis_client=client
+                )
+
+            # Right after dispatch, the registry should have at least one new
+            # Task (the DLQ xadd). The set is non-empty until drain completes.
+            during = _INFLIGHT_DLQ - before
+            assert len(during) >= 1, (
+                f"Expected a DLQ Task in registry, got set diff: {during}"
+            )
+            assert all(isinstance(t, asyncio.Task) for t in during)
+
+            await drain_dlq_tasks(timeout=2.0)
+            after = _INFLIGHT_DLQ - before
+            assert after == set(), (
+                f"Registry should be empty after drain, still has: {after}"
+            )
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_dlq_survives_gc_pressure(self):
+        """DLQ write must succeed even under aggressive garbage collection.
+
+        Simulates a real workload where the event_bus's local `task` variable
+        goes out of scope. Without the registry the Task is collectable; with
+        the registry it must still complete.
+        """
+        import asyncio
+        import gc
+
+        from app.event_bus import EventBus, drain_dlq_tasks
+        from app.core.config import settings
+
+        client = FakeRedis()
+        try:
+            for i in range(20):
+                bad_data = {
+                    "event_type": "auth.login",
+                    "user_id": f"u-gc-{i}",
+                    "_retry_count": settings.EVENT_MAX_RETRIES,
+                }
+                with patch.object(
+                    EventBus, "_handle_auth_login",
+                    side_effect=RuntimeError(f"boom-{i}"),
+                ):
+                    EventBus._dispatch_event(
+                        "auth.login", bad_data, redis_client=client
+                    )
+                gc.collect()  # pressure: force generation collection
+
+            await drain_dlq_tasks(timeout=5.0)
+
+            dlq_key = f"{settings.EVENT_STREAM_PREFIX}:dlq:auth.login"
+            entries = await client.xrange(dlq_key)
+            assert len(entries) == 20, (
+                f"Expected 20 DLQ entries after GC pressure, got {len(entries)}"
+            )
+        finally:
+            await client.aclose()
+
+
+class TestDrainDlqTasks:
+    """Unit tests for the drain_dlq_tasks shutdown helper."""
+
+    @pytest.mark.asyncio
+    async def test_drain_noop_when_registry_empty(self):
+        """drain_dlq_tasks must be a no-op when nothing is in-flight."""
+        from app.event_bus import drain_dlq_tasks, _INFLIGHT_DLQ
+
+        # Ensure registry is empty for the test
+        _INFLIGHT_DLQ.clear()
+        # Should return immediately, no exception
+        await drain_dlq_tasks(timeout=0.5)
+
+    @pytest.mark.asyncio
+    async def test_drain_waits_for_pending_tasks(self):
+        """drain_dlq_tasks must await pending tasks to completion."""
+        import asyncio
+
+        from app.event_bus import _INFLIGHT_DLQ, drain_dlq_tasks
+
+        completed = []
+
+        async def _slow_task() -> None:
+            await asyncio.sleep(0.05)
+            completed.append(1)
+
+        task = asyncio.create_task(_slow_task())
+        _INFLIGHT_DLQ.add(task)
+        task.add_done_callback(_INFLIGHT_DLQ.discard)
+
+        await drain_dlq_tasks(timeout=2.0)
+        assert completed == [1]
+        assert _INFLIGHT_DLQ == set()
+
+    @pytest.mark.asyncio
+    async def test_drain_cancels_tasks_exceeding_timeout(self):
+        """drain_dlq_tasks must cancel and log tasks that exceed the budget."""
+        import asyncio
+
+        from app.event_bus import _INFLIGHT_DLQ, drain_dlq_tasks
+
+        async def _very_slow_task() -> None:
+            await asyncio.sleep(10)
+
+        task = asyncio.create_task(_very_slow_task())
+        _INFLIGHT_DLQ.add(task)
+        task.add_done_callback(_INFLIGHT_DLQ.discard)
+
+        # Short budget forces cancellation
+        await drain_dlq_tasks(timeout=0.1)
+        # The Task was cancelled and removed from the registry
+        assert task.cancelled() or task.done()
+        assert _INFLIGHT_DLQ == set()

@@ -301,7 +301,7 @@ async def test_admin_a_never_access_tenant_b_resources(
     
     # Intentar ver tenant B
     resp = await client.get(f"/api/v1/tenants/{TENANT_B_ID}", headers=admin_a_headers)
-    assert resp.status_code == 404
+    assert resp.status_code == 403
 
 
 async def test_list_users_no_cross_tenant_leak(

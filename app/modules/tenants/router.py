@@ -5,7 +5,12 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, status, Query
 
 from app.core.exceptions import TenantError
-from app.dependencies import DBDep, CurrentUserDep, SuperadminDep, RedisDep
+from app.dependencies import (
+    DBDep,
+    SuperadminDep,
+    RedisDep,
+    TenantForAdminGetDep,
+)
 from app.modules.tenants import schemas, service
 
 
@@ -57,23 +62,15 @@ async def list_tenants(
     summary="Obtener tenant por id",
 )
 async def get_tenant(
-    tenant_id: UUID,
-    db: DBDep,
-    current_user: CurrentUserDep,
+    tenant: TenantForAdminGetDep,
 ) -> schemas.TenantResponse:
-    if not current_user.is_superadmin:
-        if current_user.tenant_id != tenant_id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Tenant no encontrado",
-            )
+    """Obtiene un tenant por id.
 
-    tenant = await service.get_tenant_by_id(tenant_id, db)
-    if tenant is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Tenant no encontrado",
-        )
+    The cross-tenant pre-check fires inside the Depends (R01 tenants,
+    RK-6 unified 403 contract). Cross-tenant access returns 403 with
+    a `cross_tenant_access_blocked` log line. The Depends handles both
+    the pre-check and the 404-on-missing-row case.
+    """
     return schemas.TenantResponse.model_validate(tenant)
 
 

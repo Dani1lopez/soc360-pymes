@@ -7,7 +7,15 @@ from fastapi import APIRouter, HTTPException, Query, status
 from app.core.exceptions import UserError
 from app.core.logging import get_logger
 from app.core.security import has_minimum_role
-from app.dependencies import AdminDep, DBWithTenantDep, CurrentUserDep, RedisDep
+from app.dependencies import (
+    AdminDep,
+    DBWithTenantDep,
+    CurrentUserDep,
+    RedisDep,
+    UserForAdminGetDep,
+    UserForAdminPatchDep,
+    UserForAdminDeleteDep,
+)
 from app.modules.users import service
 from app.modules.users.models import User
 from app.modules.users.schemas import RoleEnum, UserCreate, UserResponse, UserUpdate
@@ -88,53 +96,32 @@ async def list_users(
 
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(
-    user_id: uuid.UUID,
-    current_user: CurrentUserDep,
-    db: DBWithTenantDep,
+    user: UserForAdminGetDep,
 ) -> User:
-    """Obtiene un usuario por ID"""
-    user = await service.get_user_by_id(user_id=user_id, db=db)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Usuario no encontrado",
-        )
+    """Obtiene un usuario por ID.
 
-    #El propio usuario siempre puede verse a sí mismo
-    if user.id == current_user.id:
-        return user
-
-    if current_user.is_superadmin:
-        return user
-
-    if(
-        has_minimum_role(current_user.role, "admin")
-        and user.tenant_id == current_user.tenant_id
-    ):
-        return user
-
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Permisos insuficientes",
-    )
+    The cross-tenant pre-check fires inside the Depends (R01, R04, R05).
+    A same-tenant admin or the user themselves can read; cross-tenant
+    access returns 403 with a `cross_tenant_access_blocked` log line.
+    """
+    return user
 
 
 @router.patch("/{user_id}", response_model=UserResponse)
 async def update_user(
-    user_id: uuid.UUID,
     body: UserUpdate,
     current_user: CurrentUserDep,
+    target: UserForAdminPatchDep,
     db: DBWithTenantDep,
     redis: RedisDep,
 ) -> User:
-    """Actualiza un usuario"""
-    target = await service.get_user_by_id(user_id=user_id, db=db)
-    if target is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Usuario no encontrado",
-        )
+    """Actualiza un usuario.
 
+    The cross-tenant pre-check fires inside the Depends (R02, R04, R05).
+    The in-router policy checks (self-deactivation 409, role hierarchy
+    403, admin-modifies-superadmin 403) STAY HERE — they are policy
+    rules, not tenant rules.
+    """
     is_self = target.id == current_user.id
 
     if current_user.is_superadmin:
@@ -153,11 +140,6 @@ async def update_user(
             )
 
     elif has_minimum_role(current_user.role, "admin"):
-        if target.tenant_id != current_user.tenant_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Solo puedes modificar usuarios de tu propio tenant",
-            )
         if target.is_superadmin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -181,41 +163,41 @@ async def update_user(
         )
 
     try:
-        user = await service.update_user(user_id=user_id, data=body, db=db, redis=redis)
+        user = await service.update_user(
+            current_user=current_user,
+            target=target,
+            data=body,
+            db=db,
+            redis=redis,
+        )
     except UserError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
-    logger.info("user_updated", user_id=str(user_id), updated_by=str(current_user.id))
+    logger.info("user_updated", user_id=str(target.id), updated_by=str(current_user.id))
     return user
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def deactivate_user(
-    user_id: uuid.UUID,
+    current_user: AdminDep,
+    target: UserForAdminDeleteDep,
     db: DBWithTenantDep,
     redis: RedisDep,
-    current_user: AdminDep,
 ) -> None:
-    """Desactiva un usuario y revoca todas sus sesiones"""
-    if user_id == current_user.id:
+    """Desactiva un usuario y revoca todas sus sesiones.
+
+    The cross-tenant pre-check fires inside the Depends (R03, R04, R05).
+    The in-router policy checks (self-deactivation 409, superadmin
+    deactivation 403, admin-deactivates-admin 403) STAY HERE — they
+    are policy rules, not tenant rules.
+    """
+    if target.id == current_user.id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="No puedes desactivarte a ti mismo",
         )
 
-    target = await service.get_user_by_id(user_id=user_id, db=db)
-    if target is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Usuario no encontrado",
-        )
-
     if not current_user.is_superadmin:
-        if target.tenant_id != current_user.tenant_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Solo puedes desactivar usuarios de tu propio tenant",
-            )
         if target.is_superadmin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -228,8 +210,13 @@ async def deactivate_user(
             )
 
     try:
-        await service.deactivate_user(user_id=user_id, db=db, redis=redis)
+        await service.deactivate_user(
+            current_user=current_user,
+            target=target,
+            db=db,
+            redis=redis,
+        )
     except UserError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
-    logger.info("user_deactivated", user_id=str(user_id), deactivated_by=str(current_user.id))
+    logger.info("user_deactivated", user_id=str(target.id), deactivated_by=str(current_user.id))

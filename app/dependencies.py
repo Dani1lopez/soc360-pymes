@@ -6,7 +6,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated, TypeAlias, AsyncGenerator
 
@@ -87,6 +87,16 @@ async def get_current_user(
             detail="Token revocado",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    # Temporarily elevate to superadmin so RLS allows the user lookup.
+    # set_tenant_context will re-set the correct tenant context below.
+    # Single roundtrip combines both set_config calls.
+    await db.execute(
+        text(
+            "SELECT "
+            "set_config('app.is_superadmin', 'true', true), "
+            "set_config('app.current_tenant', '', true)"
+        )
+    )
     result = await db.execute(
         select(User, Tenant)
         .outerjoin(Tenant, User.tenant_id == Tenant.id)

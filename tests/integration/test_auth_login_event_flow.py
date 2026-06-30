@@ -69,7 +69,6 @@ async def test_auth_login_event_appears_in_redis_stream():
                                         db=mock_db,
                                         redis=fake_redis,
                                         request_ip="203.0.113.50",
-                                        request_headers={"user-agent": "IntegrationTest/1.0"},
                                     )
 
     # --- Verify login succeeded ---

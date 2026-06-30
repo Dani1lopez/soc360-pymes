@@ -24,7 +24,8 @@ def strip_ansi_codes(text: str) -> str:
 class TestEventBusHandler:
     """Test event dispatch and handling in event_bus.py."""
 
-    def test_handler_logs_auth_login_event(self, caplog):
+    @pytest.mark.asyncio
+    async def test_handler_logs_auth_login_event(self, caplog):
         """_dispatch_event MUST log auth.login events with structured fields."""
         from app.event_bus import EventBus
         from app.event_schemas import AuthLoginEvent
@@ -55,7 +56,7 @@ class TestEventBusHandler:
         caplog.clear()
         with caplog.at_level(logging.INFO, logger="app.event_bus"):
             # Actually call the dispatch to test it logs correctly
-            EventBus._dispatch_event("auth.login", payload)
+            await EventBus._dispatch_event("auth.login", payload)
 
         # Verify logger was called with auth.login_event_consumed message
         # structlog's ConsoleRenderer formats as: "auth.login_event_consumed ..."
@@ -64,7 +65,8 @@ class TestEventBusHandler:
             for r in caplog.records
         ), f"Expected auth.login_event_consumed in logs, got: {[r.message for r in caplog.records]}"
 
-    def test_handler_is_idempotent(self, caplog):
+    @pytest.mark.asyncio
+    async def test_handler_is_idempotent(self, caplog):
         """_dispatch_event MUST be callable multiple times without error."""
         from app.event_bus import EventBus
         from app.event_schemas import AuthLoginEvent
@@ -92,14 +94,15 @@ class TestEventBusHandler:
         caplog.clear()
         with caplog.at_level(logging.INFO, logger="app.event_bus"):
             # Call dispatch twice - must not raise
-            EventBus._dispatch_event("auth.login", payload)
-            EventBus._dispatch_event("auth.login", payload)
+            await EventBus._dispatch_event("auth.login", payload)
+            await EventBus._dispatch_event("auth.login", payload)
 
         # Both calls should log successfully (structlog logs each one)
         login_logs = [r for r in caplog.records if "auth.login_event_consumed" in (r.message or "")]
         assert len(login_logs) >= 1, f"Expected at least 1 log entry, got: {[r.message for r in caplog.records]}"
 
-    def test_malformed_event_does_not_raise(self, caplog):
+    @pytest.mark.asyncio
+    async def test_malformed_event_does_not_raise(self, caplog):
         """_dispatch_event MUST NOT raise on malformed events."""
         from app.event_bus import EventBus
 
@@ -115,14 +118,15 @@ class TestEventBusHandler:
         with caplog.at_level(logging.WARNING, logger="app.event_bus"):
             # dispatch_event must NOT raise - it catches all exceptions
             try:
-                EventBus._dispatch_event("auth.login", malformed_data)
+                await EventBus._dispatch_event("auth.login", malformed_data)
             except Exception as exc:
                 pytest.fail(f"_dispatch_event raised {exc} instead of catching it")
 
         # No exception means the test passes - the malformed data is handled gracefully
         # (handler uses .get() defaults so no validation error is raised)
 
-    def test_unknown_event_type_does_not_raise(self, caplog):
+    @pytest.mark.asyncio
+    async def test_unknown_event_type_does_not_raise(self, caplog):
         """_dispatch_event MUST NOT raise for unknown event types."""
         from app.event_bus import EventBus
 
@@ -130,7 +134,7 @@ class TestEventBusHandler:
         with caplog.at_level(logging.DEBUG, logger="app.event_bus"):
             # Unknown event type must not raise
             try:
-                EventBus._dispatch_event("unknown.event", {"key": "value"})
+                await EventBus._dispatch_event("unknown.event", {"key": "value"})
             except Exception as exc:
                 pytest.fail(f"_dispatch_event raised {exc} for unknown event type")
 
@@ -168,7 +172,7 @@ class TestEventBusHandler:
         caplog.clear()
         with caplog.at_level(logging.INFO, logger="app.event_bus"):
             # Call dispatch with auth.login event type
-            EventBus._dispatch_event("auth.login", payload)
+            await EventBus._dispatch_event("auth.login", payload)
 
         # Must route to _handle_auth_login and log the event
         assert any(
@@ -186,7 +190,8 @@ class TestEventBusHandler:
 class TestConsumerHandlerIntegration:
     """Integration-style tests for handler within consumer context."""
 
-    def test_handler_receives_all_payload_fields(self, caplog):
+    @pytest.mark.asyncio
+    async def test_handler_receives_all_payload_fields(self, caplog):
         """_handle_auth_login MUST log all fields from the payload."""
         from app.event_bus import EventBus
         from app.event_schemas import AuthLoginEvent
@@ -216,7 +221,7 @@ class TestConsumerHandlerIntegration:
 
         caplog.clear()
         with caplog.at_level(logging.INFO, logger="app.event_bus"):
-            EventBus._dispatch_event("auth.login", payload)
+            await EventBus._dispatch_event("auth.login", payload)
 
         # Verify structlog captured the auth.login_event_consumed message
         login_record = next(

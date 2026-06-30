@@ -47,7 +47,16 @@ async def lifespan(app: FastAPI):
                 pending = await consumer.read_pending()
                 for msg in pending:
                     from app.event_bus import EventBus
-                    EventBus._dispatch_event("auth.login", msg.get("data", {}), redis_client)
+                    # Normalize message_id (Redis returns bytes) and pass it
+                    # to dispatch so the retry counter is persisted (issue #127).
+                    raw_msg_id = msg["message_id"]
+                    msg_id = raw_msg_id.decode() if isinstance(raw_msg_id, bytes) else raw_msg_id
+                    await EventBus._dispatch_event(
+                        "auth.login",
+                        msg.get("data", {}),
+                        redis_client,
+                        message_id=msg_id,
+                    )
                     await consumer.ack(msg["message_id"])
             except Exception:
                 logger.exception("event_consumer_loop_error")

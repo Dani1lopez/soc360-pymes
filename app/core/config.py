@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     EVENT_STREAM_MAXLEN: int = 100000
     EVENT_STREAM_MAXAGE_SECONDS: int = 604800
     EVENT_PENDING_LAG_THRESHOLD: int = 100
+    # TTL for the per-message retry counter hash (issue #127). Stale keys from
+    # crashed processes are reclaimed automatically after this many seconds.
+    EVENT_RETRY_TTL_SECONDS: int = 86400
 
     #Redis
     REDIS_PASSWORD: str | None = None

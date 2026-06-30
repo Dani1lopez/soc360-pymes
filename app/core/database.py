@@ -46,12 +46,33 @@ async def set_tenant_context(
     tenant_id: UUID | None,
     is_superadmin: bool = False,
 ) -> None:
-    """Activa RLS para la transacción actual. SET LOCAL se limpia solo al hacer el commit"""
+    """Apply RLS context for the current request.
+
+    Sets the Postgres session variables that drive RLS policies:
+    - `app.current_tenant` — the tenant_id of the requester (or '' if superadmin)
+    - `app.is_superadmin` — whether the requester bypasses RLS
+
+    When `is_superadmin=True`, this function ALSO clears any previous
+    `app.current_tenant` value to prevent session poisoning across pooled
+    connections. This is critical: without the clear, a superadmin query
+    that follows a regular tenant query on the same connection would be
+    silently filtered by the previous tenant's RLS policy.
+
+    Both set_config calls run in a single roundtrip to minimize latency.
+    """
     if not is_superadmin and tenant_id is None:
         raise ValueError("tenant_id requerido para usuarios no superadmin")
-    
+
     if is_superadmin:
-        await db.execute(text("SELECT set_config('app.is_superadmin', 'true', true)"))
+        # Single roundtrip: set superadmin flag AND clear current_tenant to prevent
+        # session poisoning across pooled connections.
+        await db.execute(
+            text(
+                "SELECT "
+                "set_config('app.is_superadmin', 'true', true), "
+                "set_config('app.current_tenant', '', true)"
+            )
+        )
     else:
         await db.execute(
             text("SELECT set_config('app.current_tenant', :tenant_id, true)"),

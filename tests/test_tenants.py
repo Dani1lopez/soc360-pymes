@@ -159,10 +159,11 @@ async def test_get_tenant_admin_own_tenant(client: AsyncClient, admin_a_headers,
     assert resp.status_code == 200
 
 
-async def test_get_tenant_admin_cross_tenant_returns_404(client: AsyncClient, admin_a_headers, seed_data):
-    # Admin de tenant A no puede ver tenant B — devuelve 404 (no 403) para no revelar existencia
+async def test_get_tenant_admin_cross_tenant_returns_403(client: AsyncClient, admin_a_headers, seed_data):
+    # Admin de tenant A no puede ver tenant B — devuelve 403 (contrato unificado RK-6).
+    # El 403 distingue el evento en los logs de audit (vs 404 que oculta la existencia).
     resp = await client.get(f"/api/v1/tenants/{TENANT_B_ID}", headers=admin_a_headers)
-    assert resp.status_code == 404
+    assert resp.status_code == 403
 
 
 async def test_get_tenant_not_found(client: AsyncClient, superadmin_headers, seed_data):

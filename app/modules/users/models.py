@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import uuid
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import UUID
 from typing import TYPE_CHECKING
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -30,6 +30,8 @@ class User(Base):
             "role IN ('viewer', 'analyst', 'ingestor', 'admin', 'superadmin')",
             name="chk_valid_role",
         ),
+        Index("ix_users_tenant_active", "tenant_id", "is_active"),
+        Index("ix_users_email_lower", func.lower("email")),
     )
     
     id: Mapped[uuid.UUID] = mapped_column(

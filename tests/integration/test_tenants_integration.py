@@ -34,7 +34,9 @@ async def test_rls_admin_a_cannot_access_tenant_b_details(
 ):
     """Admin A no puede ver detalles del tenant B."""
     resp = await client.get(f"/api/v1/tenants/{TENANT_B_ID}", headers=admin_a_headers)
-    assert resp.status_code == 404, "Debería devolver 404 (no revelar existencia)"
+    assert resp.status_code == 403, (
+        "Cross-tenant tenant access MUST return 403 (unified contract, RK-6)."
+    )
 
 
 async def test_rls_admin_a_cannot_see_tenant_b_users_in_list(
@@ -403,4 +405,4 @@ async def test_cross_tenant_isolation_complete(
     
     # Admin B no puede ver detalles de tenant A
     resp = await client.get(f"/api/v1/tenants/{TENANT_A_ID}", headers=admin_b_headers)
-    assert resp.status_code == 404
+    assert resp.status_code == 403

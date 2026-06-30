@@ -98,74 +98,142 @@ class TestUserService:
         assert "email" in exc_info.value.detail.lower()
     
     @pytest.mark.asyncio
-    async def test_get_user_by_id_found(self):
-        """Test getting existing user by ID."""
+    async def test_get_user_internal_found(self):
+        """Test getting existing user by ID via the system path (no pre-check)."""
         from app.modules.users import service
-        
+
         mock_user = MagicMock()
         mock_user.id = uuid4()
         mock_user.email = "found@test.com"
-        
+
         mock_db = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_user
         mock_db.execute.return_value = mock_result
-        
-        user = await service.get_user_by_id(user_id=mock_user.id, db=mock_db)
-        
+
+        user = await service.get_user_internal(target_id=mock_user.id, db=mock_db)
+
         assert user == mock_user
         assert user.email == "found@test.com"
-    
+
     @pytest.mark.asyncio
-    async def test_get_user_by_id_not_found(self):
-        """Test getting non-existent user returns None."""
+    async def test_get_user_internal_not_found(self):
+        """Test get_user_internal returns None for non-existent user (no pre-check)."""
         from app.modules.users import service
-        
+
         mock_db = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute.return_value = mock_result
-        
-        user = await service.get_user_by_id(user_id=uuid4(), db=mock_db)
-        
+
+        user = await service.get_user_internal(target_id=uuid4(), db=mock_db)
+
         assert user is None
-    
+
     @pytest.mark.asyncio
-    async def test_update_user_not_found(self):
-        """Test updating non-existent user fails."""
+    async def test_get_user_for_admin_found(self):
+        """Test get_user_for_admin returns the pre-checked row (TOCTOU re-fetch)."""
         from app.modules.users import service
-        from app.core.exceptions import UserError
-        
-        mock_db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
-        mock_db.execute.return_value = mock_result
-        
-        from app.modules.users.schemas import UserUpdate
-        data = UserUpdate(full_name="New Name")
-        
-        with pytest.raises(UserError) as exc_info:
-            await service.update_user(user_id=uuid4(), data=data, db=mock_db, redis=AsyncMock())
-        
-        assert exc_info.value.status_code == 404
-    
-    @pytest.mark.asyncio
-    async def test_deactivate_user_already_inactive(self):
-        """Test deactivating already inactive user fails."""
-        from app.modules.users import service
-        from app.core.exceptions import UserError
-        
+
         mock_user = MagicMock()
-        mock_user.is_active = False
-        
+        mock_user.id = uuid4()
+        mock_user.email = "found@test.com"
+
         mock_db = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_user
         mock_db.execute.return_value = mock_result
-        
+
+        mock_caller = MagicMock()
+
+        user = await service.get_user_for_admin(
+            current_user=mock_caller, target_id=mock_user.id, db=mock_db
+        )
+
+        assert user == mock_user
+
+    @pytest.mark.asyncio
+    async def test_get_user_for_admin_raises_404_when_row_vanishes(self):
+        """Test get_user_for_admin raises 404 if row vanished between pre-check and call."""
+        from app.modules.users import service
+        from app.core.exceptions import UserError
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute.return_value = mock_result
+
+        mock_caller = MagicMock()
+
         with pytest.raises(UserError) as exc_info:
-            await service.deactivate_user(user_id=uuid4(), db=mock_db, redis=AsyncMock())
-        
+            await service.get_user_for_admin(
+                current_user=mock_caller, target_id=uuid4(), db=mock_db
+            )
+
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_update_user_not_found(self):
+        """Test updating with a target that vanished post pre-check fails.
+
+        After PR-A, `update_user` no longer fetches the target — the router
+        passes a pre-checked row. We simulate the case where the target
+        was valid at the Depends step but the row is gone (TOCTOU) — this
+        now manifests via the `get_user_for_admin` re-fetch in the router
+        pattern. The service itself does not raise 404 on missing target
+        since the contract is "target is pre-checked by the Depends".
+        """
+        # In the new contract, `update_user` does not fetch the target —
+        # the test now verifies that a fully-prepared target is updated
+        # without any fetch.
+        from app.modules.users import service
+        from app.modules.users.schemas import UserUpdate
+
+        target = MagicMock()
+        target.id = uuid4()
+        target.is_active = True
+
+        mock_db = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        mock_caller = MagicMock()
+        data = UserUpdate(full_name="New Name")
+
+        with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            result = await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=AsyncMock(),
+            )
+
+        assert result is target
+        mock_revoke_refresh.assert_not_awaited()
+        mock_revoke_access.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_deactivate_user_already_inactive(self):
+        """Test deactivating an already-inactive pre-checked target fails with 409."""
+        from app.modules.users import service
+        from app.core.exceptions import UserError
+
+        target = MagicMock()
+        target.id = uuid4()
+        target.is_active = False
+
+        mock_caller = MagicMock()
+
+        with pytest.raises(UserError) as exc_info:
+            await service.deactivate_user(
+                current_user=mock_caller,
+                target=target,
+                db=AsyncMock(),
+                redis=AsyncMock(),
+            )
+
         assert exc_info.value.status_code == 409
 
     @pytest.mark.asyncio
@@ -299,7 +367,12 @@ class TestUserResponseSchema:
 
 
 class TestUpdateUserTokenRevocation:
-    """Test that update_user revokes tokens on deactivation transition."""
+    """Test that update_user revokes tokens on deactivation transition.
+
+    After PR-A, `update_user` receives a pre-checked `target` row from the
+    router (no internal fetch) plus the `current_user` for the contract.
+    The token-revocation behavior is unchanged.
+    """
 
     @pytest.mark.asyncio
     async def test_update_user_deactivate_revokes_tokens(self):
@@ -309,25 +382,28 @@ class TestUpdateUserTokenRevocation:
         from uuid import uuid4
 
         user_id = uuid4()
-        mock_user = MagicMock()
-        mock_user.id = user_id
-        mock_user.is_active = True
+        target = MagicMock()
+        target.id = user_id
+        target.is_active = True
 
+        mock_caller = MagicMock()
         mock_db = AsyncMock()
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
         mock_redis = AsyncMock()
 
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
-        mock_db.execute.return_value = mock_result
-
         data = UserUpdate(is_active=False)
 
         with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
              patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
-            await service.update_user(user_id=user_id, data=data, db=mock_db, redis=mock_redis)
+            await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=mock_redis,
+            )
 
             mock_revoke_refresh.assert_awaited_once_with(user_id, mock_db)
             mock_revoke_access.assert_awaited_once()
@@ -343,25 +419,28 @@ class TestUpdateUserTokenRevocation:
         from uuid import uuid4
 
         user_id = uuid4()
-        mock_user = MagicMock()
-        mock_user.id = user_id
-        mock_user.is_active = False  # ya inactivo
+        target = MagicMock()
+        target.id = user_id
+        target.is_active = False  # ya inactivo
 
+        mock_caller = MagicMock()
         mock_db = AsyncMock()
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
         mock_redis = AsyncMock()
 
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
-        mock_db.execute.return_value = mock_result
-
         data = UserUpdate(is_active=False)
 
         with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
              patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
-            await service.update_user(user_id=user_id, data=data, db=mock_db, redis=mock_redis)
+            await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=mock_redis,
+            )
 
             mock_revoke_refresh.assert_not_awaited()
             mock_revoke_access.assert_not_awaited()
@@ -374,25 +453,28 @@ class TestUpdateUserTokenRevocation:
         from uuid import uuid4
 
         user_id = uuid4()
-        mock_user = MagicMock()
-        mock_user.id = user_id
-        mock_user.is_active = False  # inactivo, se va a reactivar
+        target = MagicMock()
+        target.id = user_id
+        target.is_active = False  # inactivo, se va a reactivar
 
+        mock_caller = MagicMock()
         mock_db = AsyncMock()
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
         mock_redis = AsyncMock()
 
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
-        mock_db.execute.return_value = mock_result
-
         data = UserUpdate(is_active=True)
 
         with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
              patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
-            await service.update_user(user_id=user_id, data=data, db=mock_db, redis=mock_redis)
+            await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=mock_redis,
+            )
 
             mock_revoke_refresh.assert_not_awaited()
             mock_revoke_access.assert_not_awaited()
@@ -405,25 +487,28 @@ class TestUpdateUserTokenRevocation:
         from uuid import uuid4
 
         user_id = uuid4()
-        mock_user = MagicMock()
-        mock_user.id = user_id
-        mock_user.is_active = True
+        target = MagicMock()
+        target.id = user_id
+        target.is_active = True
 
+        mock_caller = MagicMock()
         mock_db = AsyncMock()
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
         mock_redis = AsyncMock()
 
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
-        mock_db.execute.return_value = mock_result
-
         data = UserUpdate(full_name="New Name")
 
         with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
              patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
-            await service.update_user(user_id=user_id, data=data, db=mock_db, redis=mock_redis)
+            await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=mock_redis,
+            )
 
             mock_revoke_refresh.assert_not_awaited()
             mock_revoke_access.assert_not_awaited()

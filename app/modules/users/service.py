@@ -69,12 +69,39 @@ async def create_user(data: UserCreate, db: AsyncSession) -> User:
     return user
 
 
-async def get_user_by_id(
-    user_id: uuid.UUID,
+async def get_user_for_admin(
+    current_user: User,
+    target_id: uuid.UUID,
+    db: AsyncSession,
+) -> User:
+    """Pre-checked user read for admin endpoints (R04, OQ-3).
+
+    Caller (a Depends) has already elevated the session and verified
+    that the target row's tenant_id matches current_user.tenant_id.
+    This function re-fetches under the caller's tenant context to
+    re-hydrate the row and detect a TOCTOU window (target row vanished
+    between pre-check and this call).
+
+    Raises UserError(404) if the row is no longer visible.
+    """
+    _ = current_user  # contract: target was pre-checked by the Depends
+    result = await db.execute(select(User).where(User.id == target_id))
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise UserError("Usuario no encontrado", status_code=404)
+    return row
+
+
+async def get_user_internal(
+    target_id: uuid.UUID,
     db: AsyncSession,
 ) -> User | None:
-    """Devuelve el usuario o None si no existe"""
-    result = await db.execute(select(User).where(User.id == user_id))
+    """System/superadmin read. NO pre-check (R04, OQ-3).
+
+    Trusts the caller — used by the superadmin branch of the cross-tenant
+    Depends and by any future system-level code (background jobs, admin tools).
+    """
+    result = await db.execute(select(User).where(User.id == target_id))
     return result.scalar_one_or_none()
 
 
@@ -109,15 +136,26 @@ async def list_users(
 
 
 async def update_user(
-    user_id: uuid.UUID,
+    current_user: User,
+    target: User,
     data: UserUpdate,
     db: AsyncSession,
     redis: Redis,
 ) -> User:
-    """Actualiza campos del usuario"""
-    user = await get_user_by_id(user_id, db)
-    if user is None:
-        raise UserError("Usuario no encontrado", status_code=404)
+    """Update a pre-checked user row (R02, R04, RK-7).
+
+    The router passes in the User row already validated by the
+    `get_user_for_admin_*` Depends. This function is auth-clean: it
+    only applies field changes and (if deactivating) revokes tokens.
+
+    NOTE: The router MUST obtain `target` via the cross-tenant Depends,
+    not via `get_user_internal` — the Depends guarantees the
+    cross-tenant pre-check ran. A hand-constructed User row would
+    bypass the check.
+    """
+    _ = current_user  # contract: target was pre-checked by the Depends
+    user_id = target.id
+    user = target
 
     update_data = data.model_dump(exclude_unset=True)
 
@@ -159,17 +197,26 @@ async def update_user(
 
 
 async def deactivate_user(
-    user_id: uuid.UUID,
+    current_user: User,
+    target: User,
     db: AsyncSession,
     redis: Redis,
 ) -> None:
-    """Desactiva el usuario y revoca todas sus sesiones activas"""
-    user = await get_user_by_id(user_id, db)
-    if user is None:
-        raise UserError("Usuario no encontrado", status_code=404)
-    if not user.is_active:
+    """Deactivate a pre-checked user row (R03, R04, RK-7).
+
+    The router passes in the User row already validated by the
+    `get_user_for_admin_*` Depends. This function is auth-clean: it
+    only flips `is_active` and revokes tokens.
+
+    NOTE: The router MUST obtain `target` via the cross-tenant Depends,
+    not via `get_user_internal`.
+    """
+    _ = current_user  # contract: target was pre-checked by the Depends
+    user_id = target.id
+
+    if not target.is_active:
         raise UserError("El usuario ya está desactivado", status_code=409)
-    user.is_active = False
+    target.is_active = False
     await db.flush()
 
     # Revocar todos los refresh tokens del usuario (DB)

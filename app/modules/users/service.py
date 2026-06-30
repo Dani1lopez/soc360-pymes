@@ -4,6 +4,7 @@ import uuid
 
 from redis.asyncio import Redis
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -64,7 +65,19 @@ async def create_user(data: UserCreate, db: AsyncSession) -> User:
         is_superadmin=data.is_superadmin,
     )
     db.add(user)
-    await db.flush()
+    # Wrap flush in IntegrityError handler to translate asyncpg pgcode '23505'
+    # (unique_violation) into a domain 409. `exc.orig.pgcode` is asyncpg-specific;
+    # using getattr with a default avoids silent mis-translation if the attribute
+    # is missing on a different driver. Any other IntegrityError propagates.
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        if getattr(exc.orig, "pgcode", None) == "23505":
+            await db.rollback()
+            raise UserError(
+                "El email ya está registrado", status_code=409
+            ) from exc
+        raise
     await db.refresh(user)
     return user
 

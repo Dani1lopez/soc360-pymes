@@ -76,12 +76,12 @@ class TestUserService:
         """Test creating user with taken email fails."""
         from app.modules.users import service
         from app.core.exceptions import UserError
-        
+
         mock_db = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one.return_value = 1  # Email exists
         mock_db.execute.return_value = mock_result
-        
+
         from app.modules.users.schemas import UserCreate, RoleEnum
         data = UserCreate(
             email="taken@test.com",
@@ -90,12 +90,158 @@ class TestUserService:
             role=RoleEnum.viewer,
             tenant_id=uuid4(),
         )
-        
+
         with pytest.raises(UserError) as exc_info:
             await service.create_user(data=data, db=mock_db)
-        
+
         assert exc_info.value.status_code == 409
         assert "email" in exc_info.value.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_create_user_translates_unique_violation_to_409(self):
+        """create_user must translate asyncpg pgcode '23505' to UserError(409) and roll back.
+
+        Regression for PR-B: the pre-check (`_is_email_taken`) can race a concurrent
+        INSERT. When the flush hits the unique constraint, the raw asyncpg
+        `UniqueViolationError` (SQLSTATE 23505) must be surfaced as 409, and the
+        session must be rolled back to avoid `PendingRollbackError` on the next call.
+        """
+        from app.modules.users import service
+        from app.core.exceptions import UserError
+        from app.modules.users.schemas import UserCreate, RoleEnum
+        from sqlalchemy.exc import IntegrityError
+
+        mock_db = AsyncMock()
+        # Pre-check returns no row (race window: not yet visible).
+        mock_result = MagicMock()
+        mock_result.scalar_one.return_value = 0
+        mock_db.execute.return_value = mock_result
+
+        # flush() raises IntegrityError(orig.pgcode == "23505").
+        asyncpg_orig = MagicMock()
+        asyncpg_orig.pgcode = "23505"
+        mock_db.flush.side_effect = IntegrityError(
+            "duplicate key value violates unique constraint",
+            params=None,
+            orig=asyncpg_orig,
+        )
+
+        data = UserCreate(
+            email="racy@test.com",
+            password="ValidPass123!",
+            full_name="Race User",
+            role=RoleEnum.viewer,
+            tenant_id=uuid4(),
+        )
+
+        with pytest.raises(UserError) as exc_info:
+            await service.create_user(data=data, db=mock_db)
+
+        assert exc_info.value.status_code == 409
+        assert "email" in exc_info.value.detail.lower()
+        mock_db.flush.assert_awaited_once()
+        mock_db.rollback.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_create_user_propagates_non_unique_integrity_error(self):
+        """IntegrityError with pgcode != '23505' must propagate untranslated.
+
+        E.g. a foreign-key violation (pgcode '23503') is a different kind of
+        server-side data inconsistency. The 409 translator must NOT swallow it
+        or downgrade it to a domain conflict — that would hide real bugs.
+        """
+        from app.modules.users import service
+        from app.modules.users.schemas import UserCreate, RoleEnum
+        from sqlalchemy.exc import IntegrityError
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one.return_value = 0
+        mock_db.execute.return_value = mock_result
+
+        asyncpg_orig = MagicMock()
+        asyncpg_orig.pgcode = "23503"  # foreign_key_violation
+        mock_db.flush.side_effect = IntegrityError(
+            "insert or update on table violates foreign key constraint",
+            params=None,
+            orig=asyncpg_orig,
+        )
+
+        data = UserCreate(
+            email="fk@test.com",
+            password="ValidPass123!",
+            full_name="FK User",
+            role=RoleEnum.viewer,
+            tenant_id=uuid4(),
+        )
+
+        with pytest.raises(IntegrityError):
+            await service.create_user(data=data, db=mock_db)
+
+        # Must NOT be translated — the original IntegrityError reaches the caller.
+        mock_db.rollback.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_user_rolls_back_failed_session_for_subsequent_create(self):
+        """After a 409, the session must be usable for a fresh non-duplicate insert.
+
+        Regression: if `create_user` raises 409 without rolling back, the next
+        call against the same session raises `PendingRollbackError` because the
+        failed flush left the transaction in a broken state. This test enforces
+        that rollback runs so the session stays usable.
+        """
+        from app.modules.users import service
+        from app.core.exceptions import UserError
+        from app.modules.users.schemas import UserCreate, RoleEnum
+        from sqlalchemy.exc import IntegrityError
+
+        mock_db = AsyncMock()
+
+        # Each create_user call does: _is_email_taken -> _get_active_tenant (2 executes)
+        # + db.flush() (1 call). Plan execute/flush results across BOTH calls.
+        empty_count = MagicMock()
+        empty_count.scalar_one.return_value = 0
+
+        asyncpg_orig = MagicMock()
+        asyncpg_orig.pgcode = "23505"
+        integrity_exc = IntegrityError(
+            "duplicate key value violates unique constraint",
+            params=None,
+            orig=asyncpg_orig,
+        )
+
+        # Call #1: two execute results (pre-check + tenant lookup) + flush raises.
+        # Call #2: two execute results + flush succeeds.
+        mock_db.execute.side_effect = [
+            empty_count, empty_count,   # call 1: pre-check, tenant lookup
+            empty_count, empty_count,   # call 2: pre-check, tenant lookup
+        ]
+        mock_db.flush.side_effect = [integrity_exc, None]
+
+        data_dup = UserCreate(
+            email="dup@test.com",
+            password="ValidPass123!",
+            full_name="Dup",
+            role=RoleEnum.viewer,
+            tenant_id=uuid4(),
+        )
+        data_ok = UserCreate(
+            email="ok@test.com",
+            password="ValidPass123!",
+            full_name="Ok",
+            role=RoleEnum.viewer,
+            tenant_id=uuid4(),
+        )
+
+        with pytest.raises(UserError) as exc_info:
+            await service.create_user(data=data_dup, db=mock_db)
+        assert exc_info.value.status_code == 409
+
+        # Second call must not raise PendingRollbackError — rollback must have run.
+        result = await service.create_user(data=data_ok, db=mock_db)
+        assert result is not None
+        mock_db.rollback.assert_awaited_once()
+        assert mock_db.flush.await_count == 2
     
     @pytest.mark.asyncio
     async def test_update_user_not_found(self):

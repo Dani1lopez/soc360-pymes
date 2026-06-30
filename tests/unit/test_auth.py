@@ -134,6 +134,102 @@ class TestAuthService:
         # Verify the refresh token was revoked
         assert mock_refresh_token.revoked_at is not None
 
+    @pytest.mark.asyncio
+    async def test_login_elevates_to_superadmin_for_rls_bootstrap(self):
+        """Regression #125: login() must call set_tenant_context(..., is_superadmin=True)
+        before any RLS-protected query, because the email-based user lookup cannot
+        know the tenant at bootstrap. Without this, RLS returns 0 rows and login
+        fails in production with a 401 that masks the real cause.
+        """
+        from app.modules.auth import service
+
+        mock_user = MagicMock()
+        mock_user.id = "user-123"
+        mock_user.email = "test@example.com"
+        mock_user.hashed_password = "hashed_password"
+        mock_user.tenant_id = "tenant-123"
+        mock_user.role = "admin"
+        mock_user.is_superadmin = False
+        mock_user.is_active = True
+
+        mock_db = AsyncMock()
+        mock_redis = AsyncMock()
+
+        with patch.object(service, '_check_account_lockout', return_value=None), \
+             patch.object(service, '_get_active_user', return_value=mock_user), \
+             patch('app.modules.auth.service.verify_password', return_value=True), \
+             patch.object(service, '_check_tenant_active', return_value=None), \
+             patch.object(service, '_clear_login_attempts', return_value=None), \
+             patch('app.modules.auth.service.create_access_token', return_value=("access_token", "jti-123")), \
+             patch.object(service, '_create_refresh_token', return_value="refresh_token"), \
+             patch('app.modules.auth.service.set_tenant_context', new=AsyncMock()) as mock_set_ctx:
+            await service.login(
+                email="test@example.com",
+                password="password",
+                db=mock_db,
+                redis=mock_redis,
+            )
+
+        # The fix: set_tenant_context must be called exactly once with
+        # tenant_id=None and is_superadmin=True to bootstrap RLS bypass.
+        mock_set_ctx.assert_awaited_once()
+        call_kwargs = mock_set_ctx.await_args.kwargs
+        assert call_kwargs.get("tenant_id") is None, (
+            f"login() must bootstrap with tenant_id=None; got {call_kwargs.get('tenant_id')!r}"
+        )
+        assert call_kwargs.get("is_superadmin") is True, (
+            f"login() must bootstrap with is_superadmin=True to bypass RLS; "
+            f"got is_superadmin={call_kwargs.get('is_superadmin')!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_refresh_tokens_elevates_to_superadmin_for_rls_bootstrap(self):
+        """Regression #125: refresh_tokens() must call set_tenant_context(..., is_superadmin=True)
+        before the RefreshToken SELECT, because the lookup is by token_hash and
+        no tenant context is available at this point.
+        """
+        from app.modules.auth import service
+        from app.core.exceptions import AuthError
+        from uuid import UUID
+
+        mock_user = MagicMock()
+        mock_user.id = UUID("00000000-0000-0000-0000-000000000001")
+        mock_user.tenant_id = UUID("00000000-0000-0000-0000-000000000002")
+        mock_user.role = "admin"
+        mock_user.is_superadmin = False
+        mock_user.is_active = True
+
+        mock_db = AsyncMock()
+        mock_redis = AsyncMock()
+
+        # Mock the RefreshToken SELECT to return a valid record
+        mock_record = MagicMock()
+        mock_record.user_id = mock_user.id
+        mock_record.revoked_at = None
+
+        async def fake_scalar(stmt):
+            return mock_record
+
+        mock_db.scalar = fake_scalar
+        mock_db.in_transaction = MagicMock(return_value=True)
+
+        with patch('app.modules.auth.service.create_access_token', return_value=("access_token", "new-jti")), \
+             patch('app.modules.auth.service.track_jti', new=AsyncMock()), \
+             patch('app.modules.auth.service._get_active_user_by_id', new=AsyncMock(return_value=mock_user)), \
+             patch('app.modules.auth.service._check_tenant_active', new=AsyncMock()), \
+             patch('app.modules.auth.service._create_refresh_token', new=AsyncMock(return_value="new_refresh")), \
+             patch('app.modules.auth.service.set_tenant_context', new=AsyncMock()) as mock_set_ctx:
+            await service.refresh_tokens(
+                refresh_token="some_refresh_token",
+                db=mock_db,
+                redis=mock_redis,
+            )
+
+        mock_set_ctx.assert_awaited_once()
+        call_kwargs = mock_set_ctx.await_args.kwargs
+        assert call_kwargs.get("tenant_id") is None
+        assert call_kwargs.get("is_superadmin") is True
+
 
 class TestAuthRouterHelpers:
     """Test auth router helper functions."""

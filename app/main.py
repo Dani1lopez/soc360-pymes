@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.middleware import HTTPSRedirectMiddleware, SecurityHeadersMiddleware
 from app.core.redis import ping_redis, close_pool, get_redis_client
-from app.event_bus import EventConsumer
+from app.event_bus import EventConsumer, drain_dlq_tasks
 from app.modules.auth.router import router as auth_router
 from app.modules.tenants.router import router as tenants_router
 from app.modules.users.router import router as users_router
@@ -63,6 +63,10 @@ async def lifespan(app: FastAPI):
         await asyncio.wait_for(task, timeout=5.0)
     except asyncio.TimeoutError:
         task.cancel()
+    # Drain any in-flight DLQ write tasks before closing the Redis pool
+    # (issue #126). A bounded timeout prevents a slow write from blocking
+    # shutdown forever.
+    await drain_dlq_tasks(timeout=2.0)
     await close_pool()
     logger.info("soc360.shutdown")
 

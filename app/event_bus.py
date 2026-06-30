@@ -19,6 +19,31 @@ logger = get_logger(__name__)
 _RETRY_COUNT_KEY = "_retry_count"
 
 
+# Module-level registry of in-flight DLQ write tasks. Holding a strong
+# reference here is what prevents the GC from collecting the asyncio.Task
+# returned by `asyncio.ensure_future` before the underlying xadd coroutine
+# completes — see issue #126.
+_INFLIGHT_DLQ: set[asyncio.Task] = set()
+
+
+async def drain_dlq_tasks(timeout: float = 2.0) -> None:
+    """Wait for any in-flight DLQ write tasks to complete.
+
+    Called from the lifespan shutdown path so a fast app shutdown does not
+    lose the last DLQ entry. Uses a bounded timeout so a hung Redis write
+    cannot block the shutdown forever.
+    """
+    if not _INFLIGHT_DLQ:
+        return
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*list(_INFLIGHT_DLQ), return_exceptions=True),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        logger.error("dlq_drain_timeout", pending=len(_INFLIGHT_DLQ), timeout=timeout)
+
+
 class EventBus:
     """Publisher abstraction over Redis Streams XADD.
 
@@ -139,25 +164,37 @@ class EventBus:
                     retry_count=retry_count,
                     error=str(exc),
                 )
-                if redis_client is not None:
-                    dlq_stream = f"{settings.EVENT_STREAM_PREFIX}:dlq:{event_type}"
-                    dlq_payload = {
-                        **data,
-                        "_dlq_reason": str(exc),
-                        "_dlq_timestamp": str(__import__("datetime").datetime.now(__import__("datetime").timezone.utc)),
-                    }
-                    # Convert all values to strings for Redis
-                    dlq_payload = {
-                        k: str(v) if hasattr(v, "__str__") else v
-                        for k, v in dlq_payload.items()
-                    }
-                    try:
-                        # Fire-and-forget: write to DLQ without blocking
-                        asyncio.ensure_future(
-                            redis_client.xadd(dlq_stream, dlq_payload)
-                        )
-                    except Exception as dlq_err:
-                        logger.error("dlq_write_failed", error=str(dlq_err))
+                if redis_client is None:
+                    # No Redis client available — the DLQ entry would be lost
+                    # forever. Surface this as a CRITICAL so ops can alert.
+                    logger.critical(
+                        "dlq_skipped_no_redis_client",
+                        event_type=event_type,
+                        retry_count=retry_count,
+                    )
+                    return False
+                dlq_stream = f"{settings.EVENT_STREAM_PREFIX}:dlq:{event_type}"
+                dlq_payload = {
+                    **data,
+                    "_dlq_reason": str(exc),
+                    "_dlq_timestamp": str(__import__("datetime").datetime.now(__import__("datetime").timezone.utc)),
+                }
+                # Convert all values to strings for Redis
+                dlq_payload = {
+                    k: str(v) if hasattr(v, "__str__") else v
+                    for k, v in dlq_payload.items()
+                }
+                # Schedule the DLQ write as a Task and hold a strong reference
+                # in the module-level registry. Without this strong reference
+                # the Task can be garbage-collected before the xadd coroutine
+                # resumes, silently dropping the event (issue #126).
+                task = asyncio.ensure_future(
+                    redis_client.xadd(dlq_stream, dlq_payload)
+                )
+                _INFLIGHT_DLQ.add(task)
+                task.add_done_callback(_INFLIGHT_DLQ.discard)
+                # The xadd errors will surface as the task's exception; the
+                # done callback in lifespan drain reports them.
                 return False
 
     @staticmethod

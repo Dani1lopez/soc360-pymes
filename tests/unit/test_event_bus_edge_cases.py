@@ -8,6 +8,7 @@ Extends test_event_bus.py coverage with:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -101,6 +102,122 @@ class TestEventBusDispatchRouting:
         # Must be callable with (event_type, data)
         result = EventBus._dispatch_event("auth.login", {})
         assert result is True  # Returns True on success (no handler = success)
+
+    @pytest.mark.asyncio
+    async def test_dlq_write_lands_in_stream(self, caplog):
+        """Regression #126: exhausted retries MUST actually write the event to the DLQ stream.
+
+        Before the fix, the XADD was wrapped in `asyncio.ensure_future` without
+        a strong reference, so the task could be GC'd before completing. This
+        test proves the event ends up in the DLQ stream and is not lost.
+        """
+        from app.event_bus import EventBus, drain_dlq_tasks
+        from app.core.config import settings
+
+        bad_data = {
+            "event_type": "auth.login",
+            "user_id": str(uuid.uuid4()),
+            "email_hash": "a" * 32,
+            "ip_prefix": "1.2.3.0/24",
+            "user_agent": None,
+            "tenant_id": str(uuid.uuid4()),
+            "_retry_count": settings.EVENT_MAX_RETRIES,
+        }
+
+        client = FakeRedis()
+        try:
+            with patch.object(EventBus, "_handle_auth_login", side_effect=RuntimeError("handler boom")):
+                result = EventBus._dispatch_event("auth.login", bad_data, redis_client=client)
+            assert result is False
+
+            # The fix holds a strong reference to the task; drain it so we can
+            # inspect the stream deterministically.
+            await drain_dlq_tasks(timeout=2.0)
+
+            dlq_stream = f"{settings.EVENT_STREAM_PREFIX}:dlq:auth.login"
+            entries = await client.xrange(dlq_stream)
+            assert len(entries) == 1, f"Expected 1 DLQ entry, got {len(entries)}"
+
+            _, fields = entries[0]
+            decoded = {k.decode() if isinstance(k, bytes) else k:
+                       v.decode() if isinstance(v, bytes) else v
+                       for k, v in fields.items()}
+
+            # The original payload fields must be preserved
+            assert decoded["user_id"] == bad_data["user_id"]
+            assert decoded["email_hash"] == bad_data["email_hash"]
+            # DLQ metadata must be added
+            assert "_dlq_reason" in decoded
+            assert "handler boom" in decoded["_dlq_reason"]
+            assert "_dlq_timestamp" in decoded
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_dlq_no_redis_client_logs_critical(self, caplog):
+        """Regression #126: missing redis client MUST log CRITICAL, not silently skip.
+
+        Before the fix, the `if redis_client is not None` guard silently returned
+        False without any log. The fix logs a CRITICAL so the event loss is
+        observable in production.
+        """
+        from app.event_bus import EventBus
+        from app.core.config import settings
+
+        bad_data = {
+            "event_type": "auth.login",
+            "user_id": str(uuid.uuid4()),
+            "email_hash": "a" * 32,
+            "tenant_id": str(uuid.uuid4()),
+            "_retry_count": settings.EVENT_MAX_RETRIES,
+        }
+
+        caplog.clear()
+        with caplog.at_level(logging.CRITICAL, logger="app.event_bus"):
+            with patch.object(EventBus, "_handle_auth_login", side_effect=RuntimeError("boom")):
+                result = EventBus._dispatch_event("auth.login", bad_data, redis_client=None)
+
+        assert result is False
+        assert any(
+            "dlq_skipped_no_redis_client" in (r.message or "")
+            for r in caplog.records
+        ), f"Expected CRITICAL log 'dlq_skipped_no_redis_client', got: {[r.message for r in caplog.records]}"
+
+    @pytest.mark.asyncio
+    async def test_dlq_survives_gc_pressure(self):
+        """Regression #126: 50 DLQ writes with gc.collect() between each must all land.
+
+        Reproduces the original issue's failure mode: a tight loop with GC
+        pressure should not lose any events because the tasks are strongly
+        referenced by the module-level registry.
+        """
+        import gc
+        from app.event_bus import EventBus, drain_dlq_tasks
+        from app.core.config import settings
+
+        client = FakeRedis()
+        try:
+            for i in range(50):
+                bad_data = {
+                    "event_type": "auth.login",
+                    "user_id": f"user-{i}",
+                    "email_hash": "a" * 32,
+                    "tenant_id": str(uuid.uuid4()),
+                    "_retry_count": settings.EVENT_MAX_RETRIES,
+                }
+                with patch.object(EventBus, "_handle_auth_login", side_effect=RuntimeError("boom")):
+                    EventBus._dispatch_event("auth.login", bad_data, redis_client=client)
+                gc.collect()
+                # Yield to let the event loop run the scheduled tasks.
+                await asyncio.sleep(0)
+
+            await drain_dlq_tasks(timeout=5.0)
+
+            dlq_stream = f"{settings.EVENT_STREAM_PREFIX}:dlq:auth.login"
+            entries = await client.xrange(dlq_stream)
+            assert len(entries) == 50, f"Expected 50 DLQ entries, got {len(entries)}"
+        finally:
+            await client.aclose()
 
 
 class TestEventBusPublishSerialization:

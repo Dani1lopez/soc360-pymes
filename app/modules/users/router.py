@@ -97,6 +97,7 @@ async def list_users(
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(
     user: UserForAdminGetDep,
+    current_user: CurrentUserDep,
 ) -> User:
     """Obtiene un usuario por ID.
 
@@ -104,7 +105,20 @@ async def get_user(
     A same-tenant admin or the user themselves can read; cross-tenant
     access returns 403 with a `cross_tenant_access_blocked` log line.
     """
-    return user
+    # Self-read is always allowed
+    if user.id == current_user.id:
+        return user
+    # Superadmin can read anyone
+    if current_user.is_superadmin:
+        return user
+    # Otherwise, same-tenant admin can read (Depends already verified
+    # tenant match, so we only need the role check here)
+    if has_minimum_role(current_user.role, "admin"):
+        return user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Permisos insuficientes",
+    )
 
 
 @router.patch("/{user_id}", response_model=UserResponse)

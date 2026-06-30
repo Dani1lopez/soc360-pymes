@@ -69,42 +69,6 @@ async def create_user(data: UserCreate, db: AsyncSession) -> User:
     return user
 
 
-async def get_user_for_admin(
-    current_user: User,
-    target_id: uuid.UUID,
-    db: AsyncSession,
-) -> User:
-    """Pre-checked user read for admin endpoints (R04, OQ-3).
-
-    Caller (a Depends) has already elevated the session and verified
-    that the target row's tenant_id matches current_user.tenant_id.
-    This function re-fetches under the caller's tenant context to
-    re-hydrate the row and detect a TOCTOU window (target row vanished
-    between pre-check and this call).
-
-    Raises UserError(404) if the row is no longer visible.
-    """
-    _ = current_user  # contract: target was pre-checked by the Depends
-    result = await db.execute(select(User).where(User.id == target_id))
-    row = result.scalar_one_or_none()
-    if row is None:
-        raise UserError("Usuario no encontrado", status_code=404)
-    return row
-
-
-async def get_user_internal(
-    target_id: uuid.UUID,
-    db: AsyncSession,
-) -> User | None:
-    """System/superadmin read. NO pre-check (R04, OQ-3).
-
-    Trusts the caller — used by the superadmin branch of the cross-tenant
-    Depends and by any future system-level code (background jobs, admin tools).
-    """
-    result = await db.execute(select(User).where(User.id == target_id))
-    return result.scalar_one_or_none()
-
-
 async def get_user_by_email(
     email: str,
     db: AsyncSession,
@@ -153,7 +117,8 @@ async def update_user(
     cross-tenant pre-check ran. A hand-constructed User row would
     bypass the check.
     """
-    _ = current_user  # contract: target was pre-checked by the Depends
+    if not current_user.is_superadmin and target.tenant_id != current_user.tenant_id:
+        raise UserError("Permisos insuficientes", status_code=403)
     user_id = target.id
     user = target
 
@@ -211,7 +176,8 @@ async def deactivate_user(
     NOTE: The router MUST obtain `target` via the cross-tenant Depends,
     not via `get_user_internal`.
     """
-    _ = current_user  # contract: target was pre-checked by the Depends
+    if not current_user.is_superadmin and target.tenant_id != current_user.tenant_id:
+        raise UserError("Permisos insuficientes", status_code=403)
     user_id = target.id
 
     if not target.is_active:

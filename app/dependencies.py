@@ -227,14 +227,6 @@ async def _get_user_for_admin(
             )
         return row
 
-    if current_user.tenant_id is None:
-        # Defensive: `get_current_user` already 401s this case, but we
-        # mirror the same defensive branch for safety.
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permisos insuficientes",
-        )
-
     # Non-superadmin cross-tenant pre-check: elevate to read the row,
     # compare tenant_id, restore canonical context. Modeled on
     # `get_current_user` SET LOCAL pair (lines 93-99 of this file).
@@ -333,13 +325,6 @@ async def _get_tenant_for_admin(
                 detail="Tenant no encontrado",
             )
         return row
-
-    if current_user.tenant_id is None:
-        # Defensive: get_current_user guarantees this is unreachable.
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permisos insuficientes",
-        )
 
     if tenant_id != current_user.tenant_id:
         _log_cross_tenant_attempt(

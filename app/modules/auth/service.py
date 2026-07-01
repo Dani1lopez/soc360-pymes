@@ -24,6 +24,7 @@ from app.modules.auth.models import RefreshToken
 from app.modules.users.models import User
 from app.modules.tenants.models import Tenant
 from app.modules.auth.schemas import TokenResponse
+from app.core.database import set_tenant_context
 from app.core.exceptions import AuthError, ServiceUnavailableError
 from app.core.pii import hash_email, mask_ip
 from app.core.redis import check_redis_healthy
@@ -237,8 +238,14 @@ async def login(
     """Autentica al usuario y delvuelve el access token + refresh token"""
     if not await check_redis_healthy(redis):
         raise ServiceUnavailableError()
+    # Bootstrap RLS context: at login time we don't know the tenant yet, so we
+    # temporarily elevate to superadmin to allow the email-based user lookup.
+    # Mirrors the same pattern in app.dependencies.get_current_user.
+    # The SET LOCAL is transaction-scoped and is reset on commit/rollback,
+    # so it cannot leak across requests.
+    await set_tenant_context(db, tenant_id=None, is_superadmin=True)
     await _check_account_lockout(email, redis)
-    
+
     user = await _get_active_user(email, db)
     
     if not verify_password(password, user.hashed_password):
@@ -295,6 +302,11 @@ async def refresh_tokens(
     """Invalida el anterior y genera uno nuevo"""
     if not await check_redis_healthy(redis):
         raise ServiceUnavailableError()
+    # Bootstrap RLS context: refresh tokens are looked up by token_hash, not by
+    # tenant, so we temporarily elevate to superadmin to allow the lookup.
+    # Mirrors the login() pattern in this module and get_current_user in
+    # app.dependencies. The SET LOCAL is transaction-scoped.
+    await set_tenant_context(db, tenant_id=None, is_superadmin=True)
     token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
     async def _rotate_refresh_token() -> tuple[User, str]:
         stmt = (

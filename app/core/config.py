@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: str | None = None
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_MAX_CONNECTIONS: int = 20
+    # Startup ping retry — rides out transient Redis blips during lifespan (issue #128)
+    REDIS_STARTUP_MAX_ATTEMPTS: int = 3
+    REDIS_STARTUP_BACKOFF_BASE_SECONDS: float = 1.0
     
     #CORS
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]

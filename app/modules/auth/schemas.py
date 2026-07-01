@@ -30,6 +30,16 @@ class ChangePasswordRequest(BaseModel):
 
     @field_validator("new_password")
     @classmethod
+    def validate_new_password_bytes(cls, v: str) -> str:
+        """Reject passwords over bcrypt's 72-byte input limit."""
+        if len(v.encode("utf-8")) > 72:
+            raise ValueError(
+                "Password exceeds 72 bytes (UTF-8). Choose a shorter password."
+            )
+        return v
+
+    @field_validator("new_password")
+    @classmethod
     def validate_strength(cls, v: str) -> str:
         if len(v) < 12:
             raise ValueError("La contraseña debe de tener al menos 12 caracteres")

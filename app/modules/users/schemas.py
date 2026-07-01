@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from app.core.types import EmailStr
 
 
@@ -23,6 +23,16 @@ class UserCreate(BaseModel):
     role: RoleEnum = Field(..., description="Rol del usuario")
     tenant_id: uuid.UUID | None = Field(None, description="None solo si is_superadmin=True")
     is_superadmin: bool = Field(False)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_bytes(cls, v: str) -> str:
+        """Reject passwords over bcrypt's 72-byte input limit."""
+        if len(v.encode("utf-8")) > 72:
+            raise ValueError(
+                "Password exceeds 72 bytes (UTF-8). Choose a shorter password."
+            )
+        return v
     
     @model_validator(mode="after")
     def check_superadmin_consistency(self) -> UserCreate:

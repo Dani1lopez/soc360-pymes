@@ -71,11 +71,17 @@ class Settings(BaseSettings):
     EVENT_STREAM_MAXLEN: int = 100000
     EVENT_STREAM_MAXAGE_SECONDS: int = 604800
     EVENT_PENDING_LAG_THRESHOLD: int = 100
+    # TTL for the per-message retry counter hash (issue #127). Stale keys from
+    # crashed processes are reclaimed automatically after this many seconds.
+    EVENT_RETRY_TTL_SECONDS: int = 86400
 
     #Redis
     REDIS_PASSWORD: str | None = None
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_MAX_CONNECTIONS: int = 20
+    # Startup ping retry — rides out transient Redis blips during lifespan (issue #128)
+    REDIS_STARTUP_MAX_ATTEMPTS: int = 3
+    REDIS_STARTUP_BACKOFF_BASE_SECONDS: float = 1.0
     
     #CORS
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]

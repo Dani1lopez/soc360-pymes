@@ -8,8 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.middleware import HTTPSRedirectMiddleware, SecurityHeadersMiddleware
-from app.core.redis import ping_redis, close_pool, get_redis_client
-from app.event_bus import EventConsumer
+from app.core.redis import ping_redis_with_retry, close_pool, get_redis_client
+from app.event_bus import EventConsumer, drain_dlq_tasks
 from app.modules.auth.router import router as auth_router
 from app.modules.tenants.router import router as tenants_router
 from app.modules.users.router import router as users_router
@@ -25,9 +25,14 @@ async def lifespan(app: FastAPI):
     #Inicialización de servicios al arrancar
     logger.info("soc360.startup", environment=settings.ENVIRONMENT)
 
-    #Verificar Redis
-    if not await ping_redis():
-        raise RuntimeError("No se puede conectar a Redis")
+    #Verificar Redis — retry on transient blips (issue #128)
+    if not await ping_redis_with_retry(
+        max_attempts=settings.REDIS_STARTUP_MAX_ATTEMPTS,
+        backoff_base_seconds=settings.REDIS_STARTUP_BACKOFF_BASE_SECONDS,
+    ):
+        raise RuntimeError(
+            f"No se pudo conectar a Redis tras {settings.REDIS_STARTUP_MAX_ATTEMPTS} intentos"
+        )
     logger.info("soc360.redis_connected")
 
     # Start event consumer background task
@@ -47,7 +52,16 @@ async def lifespan(app: FastAPI):
                 pending = await consumer.read_pending()
                 for msg in pending:
                     from app.event_bus import EventBus
-                    EventBus._dispatch_event("auth.login", msg.get("data", {}), redis_client)
+                    # Normalize message_id (Redis returns bytes) and pass it
+                    # to dispatch so the retry counter is persisted (issue #127).
+                    raw_msg_id = msg["message_id"]
+                    msg_id = raw_msg_id.decode() if isinstance(raw_msg_id, bytes) else raw_msg_id
+                    await EventBus._dispatch_event(
+                        "auth.login",
+                        msg.get("data", {}),
+                        redis_client,
+                        message_id=msg_id,
+                    )
                     await consumer.ack(msg["message_id"])
             except Exception:
                 logger.exception("event_consumer_loop_error")
@@ -63,6 +77,10 @@ async def lifespan(app: FastAPI):
         await asyncio.wait_for(task, timeout=5.0)
     except asyncio.TimeoutError:
         task.cancel()
+    # Drain DLQ write Tasks so events dispatched right before shutdown
+    # actually land in Redis (issue #126). Must run BEFORE close_pool(),
+    # otherwise the redis client is closed before the DLQ xadd can flush.
+    await drain_dlq_tasks(timeout=2.0)
     await close_pool()
     logger.info("soc360.shutdown")
 

@@ -19,6 +19,61 @@ logger = get_logger(__name__)
 _RETRY_COUNT_KEY = "_retry_count"
 
 
+# Field name used inside the per-message retry hash (issue #127).
+_RETRY_HASH_FIELD = "retry_count"
+
+
+def _retry_key(event_type: str, message_id: str) -> str:
+    """Build the per-message retry counter Redis key.
+
+    Event-type prefix avoids collisions if the same message_id is ever reused
+    across streams (e.g. stream MAXLEN trimming that produces a recycled id).
+    """
+    return f"event_retry:{event_type}:{message_id}"
+
+
+# Registry of in-flight DLQ write Tasks (issue #126).
+# `asyncio.ensure_future` returns a Task but does NOT keep a strong reference
+# to it. The Task can be garbage-collected before its xadd coroutine resumes,
+# silently dropping the DLQ event. Holding strong references here prevents
+# GC and lets the lifespan shutdown drain them on exit.
+_INFLIGHT_DLQ: set[asyncio.Task] = set()
+
+
+async def drain_dlq_tasks(timeout: float = 2.0) -> None:
+    """Wait for all in-flight DLQ write Tasks to complete.
+
+    Called from FastAPI lifespan shutdown so a DLQ event dispatched right
+    before shutdown actually lands in Redis before the pool is closed.
+
+    Args:
+        timeout: Maximum seconds to wait for the slowest Task. Pending Tasks
+            that do not finish within the budget are cancelled and logged
+            so ops can alert.
+    """
+    if not _INFLIGHT_DLQ:
+        return
+    pending = list(_INFLIGHT_DLQ)
+    logger.info("draining_dlq_tasks", count=len(pending))
+    try:
+        done, not_done = await asyncio.wait(pending, timeout=timeout)
+    except Exception as exc:
+        logger.error("drain_dlq_tasks_failed", error=str(exc))
+        return
+    for task in not_done:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception) as exc:
+            logger.error("dlq_task_cancelled_on_shutdown", error=str(exc))
+    for task in done:
+        if task.cancelled():
+            continue
+        exc = task.exception()
+        if exc is not None:
+            logger.error("dlq_write_failed_on_shutdown", error=str(exc))
+
+
 class EventBus:
     """Publisher abstraction over Redis Streams XADD.
 
@@ -94,7 +149,12 @@ class EventBus:
         )
 
     @staticmethod
-    def _dispatch_event(event_type: str, data: dict, redis_client: Redis | None = None) -> bool:
+    async def _dispatch_event(
+        event_type: str,
+        data: dict,
+        redis_client: Redis | None = None,
+        message_id: str | None = None,
+    ) -> bool:
         """Dispatch a consumed event to the appropriate handler by event_type.
 
         This method is idempotent, non-throwing, and extensible.
@@ -103,30 +163,96 @@ class EventBus:
         Retry logic: If handler raises an exception, retries up to EVENT_MAX_RETRIES times.
         After retry exhaustion, moves event to Dead Letter Queue (DLQ) stream.
 
+        Issue #127: the retry count is persisted to a Redis hash keyed by
+        `event_retry:{event_type}:{message_id}` so it survives consumer
+        restarts, fail-overs, and rebalances. If `message_id` is not provided
+        (e.g. unit tests), the function falls back to the in-memory data dict
+        for backward compatibility.
+
         Args:
             event_type: The dot-namespaced event type, e.g. "auth.login".
             data: The event payload dict as read from Redis stream.
-            redis_client: Optional Redis client for DLQ operations.
+            redis_client: Optional Redis client for DLQ operations and the
+                persistent retry counter.
+            message_id: Optional Redis stream message id (e.g. "1234-0").
+                When provided with a redis_client, the retry count is read
+                from and written to a persistent Redis hash instead of the
+                local data dict.
 
         Returns:
             True if handler succeeded (or no handler exists), False if moved to DLQ.
         """
-        retry_count = int(data.get(_RETRY_COUNT_KEY, 0))
+        # Resolve the source of truth for the retry count. When we have a
+        # message_id and a redis_client, read the persisted counter so it
+        # survives consumer restarts. Otherwise fall back to the in-memory
+        # data dict (backward compat for tests that don't provide message_id).
+        use_persistent = bool(redis_client and message_id)
+        if use_persistent:
+            try:
+                persisted = await redis_client.hget(
+                    _retry_key(event_type, message_id), _RETRY_HASH_FIELD
+                )
+                retry_count = int(persisted) if persisted is not None else 0
+            except Exception as exc:
+                logger.warning(
+                    "retry_count_read_failed_fallback_in_memory",
+                    event_type=event_type,
+                    error=str(exc),
+                )
+                retry_count = int(data.get(_RETRY_COUNT_KEY, 0))
+        else:
+            retry_count = int(data.get(_RETRY_COUNT_KEY, 0))
+
+        async def _cleanup_retry_key() -> None:
+            """Best-effort DEL of the persistent retry counter."""
+            if not use_persistent:
+                return
+            try:
+                await redis_client.delete(_retry_key(event_type, message_id))
+            except Exception as exc:
+                logger.warning(
+                    "retry_count_cleanup_failed",
+                    event_type=event_type,
+                    error=str(exc),
+                )
 
         try:
             if event_type == "auth.login":
                 EventBus._handle_auth_login(data)
             else:
                 logger.debug("no_handler_for_event_type", event_type=event_type)
-            return True  # Success
+            # Success: clear the persistent counter so a recycled message_id
+            # starts fresh.
+            await _cleanup_retry_key()
+            return True
         except Exception as exc:
             if retry_count < settings.EVENT_MAX_RETRIES:
-                # Retry: increment counter and re-raise to let caller re-queue
-                data[_RETRY_COUNT_KEY] = retry_count + 1
+                # Retry: persist the incremented counter so it survives a
+                # consumer restart. Fall back to in-memory if Redis is down.
+                if use_persistent:
+                    try:
+                        key = _retry_key(event_type, message_id)
+                        # HINCRBY is atomic; refresh TTL on each increment.
+                        new_count = await redis_client.hincrby(
+                            key, _RETRY_HASH_FIELD, 1
+                        )
+                        await redis_client.expire(
+                            key, settings.EVENT_RETRY_TTL_SECONDS
+                        )
+                        retry_count = new_count
+                    except Exception as redis_exc:
+                        logger.warning(
+                            "retry_count_write_failed_fallback_in_memory",
+                            event_type=event_type,
+                            error=str(redis_exc),
+                        )
+                        data[_RETRY_COUNT_KEY] = retry_count + 1
+                else:
+                    data[_RETRY_COUNT_KEY] = retry_count + 1
                 logger.warning(
                     "event_handler_retry",
                     event_type=event_type,
-                    retry_count=retry_count + 1,
+                    retry_count=retry_count,
                     max_retries=settings.EVENT_MAX_RETRIES,
                     error=str(exc),
                 )
@@ -139,6 +265,9 @@ class EventBus:
                     retry_count=retry_count,
                     error=str(exc),
                 )
+                # Clear the persistent counter so a recycled message_id
+                # doesn't immediately re-DLQ.
+                await _cleanup_retry_key()
                 if redis_client is not None:
                     dlq_stream = f"{settings.EVENT_STREAM_PREFIX}:dlq:{event_type}"
                     dlq_payload = {
@@ -152,10 +281,16 @@ class EventBus:
                         for k, v in dlq_payload.items()
                     }
                     try:
-                        # Fire-and-forget: write to DLQ without blocking
-                        asyncio.ensure_future(
+                        # Schedule the DLQ write as a Task and hold a strong
+                        # reference in the module-level registry. Without the
+                        # strong reference the Task can be garbage-collected
+                        # before the xadd coroutine resumes, silently dropping
+                        # the DLQ event (issue #126).
+                        task = asyncio.ensure_future(
                             redis_client.xadd(dlq_stream, dlq_payload)
                         )
+                        _INFLIGHT_DLQ.add(task)
+                        task.add_done_callback(_INFLIGHT_DLQ.discard)
                     except Exception as dlq_err:
                         logger.error("dlq_write_failed", error=str(dlq_err))
                 return False

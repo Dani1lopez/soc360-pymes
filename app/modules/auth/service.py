@@ -28,6 +28,8 @@ from app.core.database import set_tenant_context
 from app.core.exceptions import AuthError, ServiceUnavailableError
 from app.core.pii import hash_email, mask_ip
 from app.core.redis import check_redis_healthy
+from app.event_bus import EventBus
+from app.event_schemas import AuthLoginEvent
 
 MAX_ACTIVE_SESSIONS = 5
 REFRESH_TOKEN_EXPIRE_DAYS = 7
@@ -273,7 +275,6 @@ async def login(
     # Publish auth.login event (non-blocking on failure)
     try:
         event_bus = await get_event_bus()
-        from app.event_schemas import AuthLoginEvent
         await event_bus.publish(AuthLoginEvent(
             event_id=uuid4(),
             tenant_id=user.tenant_id,

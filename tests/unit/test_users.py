@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 
@@ -9,52 +11,56 @@ class TestUserSchemas:
     """Test user schema validation."""
     
     def test_user_create_validates_superadmin_consistency(self):
-        """Test UserCreate validates superadmin fields."""
-        from app.modules.users.schemas import UserCreate, RoleEnum
-        
-        # Superadmin with tenant - should fail
-        with pytest.raises(ValueError, match="superadmin no puede pertenecer"):
+        """Test public and internal user create schema boundaries."""
+        from app.modules.users.schemas import RoleEnum, UserCreate, UserInternalCreate
+
+        with pytest.raises(ValueError, match="Extra inputs"):
             UserCreate(
                 email="test@test.com",
                 password="ValidPass123!",
                 full_name="Test User",
                 role=RoleEnum.superadmin,
-                tenant_id=uuid4(),
+                tenant_id=None,
                 is_superadmin=True,
             )
-        
-        # Normal user without tenant - should fail
-        with pytest.raises(ValueError, match="usuario normal debe tener"):
+
+        with pytest.raises(ValueError, match="debe tener tenant_id"):
             UserCreate(
                 email="test@test.com",
                 password="ValidPass123!",
                 full_name="Test User",
-                role=RoleEnum.admin,
+                role=RoleEnum.viewer,
                 tenant_id=None,
-                is_superadmin=False,
             )
-        
-        # Superadmin with wrong role - should fail
-        with pytest.raises(ValueError, match="is_superadmin=True requiere"):
-            UserCreate(
-                email="test@test.com",
-                password="ValidPass123!",
-                full_name="Test User",
-                role=RoleEnum.admin,
-                tenant_id=None,
-                is_superadmin=True,
-            )
-        
-        # Valid normal user
+
         valid = UserCreate(
             email="test@test.com",
             password="ValidPass123!",
             full_name="Test User",
             role=RoleEnum.admin,
             tenant_id=uuid4(),
-            is_superadmin=False,
         )
         assert valid.email == "test@test.com"
+
+        internal_superadmin = UserInternalCreate(
+            email="super@test.com",
+            password="ValidPass123!",
+            full_name="Super User",
+            role=RoleEnum.superadmin,
+            tenant_id=None,
+            is_superadmin=True,
+        )
+        assert internal_superadmin.is_superadmin is True
+
+        with pytest.raises(ValueError, match="is_superadmin=True requiere"):
+            UserInternalCreate(
+                email="test@test.com",
+                password="ValidPass123!",
+                full_name="Test User",
+                role=RoleEnum.admin,
+                tenant_id=None,
+                is_superadmin=True,
+            )
     
     def test_user_update_prevents_superadmin_assignment(self):
         """Test UserUpdate prevents assigning superadmin role."""
@@ -66,6 +72,68 @@ class TestUserSchemas:
         # Valid update
         valid = UserUpdate(full_name="New Name")
         assert valid.full_name == "New Name"
+
+
+class TestUserApiValidation:
+    """Test user API request validation without database dependencies."""
+
+    @pytest.mark.asyncio
+    async def test_create_user_rejects_is_superadmin_field(self):
+        """POST /users rejects the public is_superadmin input field."""
+        from httpx import ASGITransport, AsyncClient
+
+        from app.dependencies import get_current_user, get_db_with_tenant
+        from app.main import create_app
+        from app.modules.users import service
+
+        app = create_app()
+        tenant_id = uuid4()
+        created_user = SimpleNamespace(
+            id=uuid4(),
+            tenant_id=None,
+            email="blocked_super@soc360.test",
+            full_name="Blocked Super",
+            role="superadmin",
+            is_active=True,
+            is_superadmin=True,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        current_user = SimpleNamespace(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            role="superadmin",
+            is_superadmin=True,
+        )
+
+        async def override_get_current_user():
+            return current_user
+
+        async def override_get_db_with_tenant():
+            yield AsyncMock()
+
+        app.dependency_overrides[get_current_user] = override_get_current_user
+        app.dependency_overrides[get_db_with_tenant] = override_get_db_with_tenant
+
+        with patch.object(service, "create_user", new=AsyncMock(return_value=created_user)) as mock_create_user:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
+                resp = await client.post(
+                    "/api/v1/users/",
+                    json={
+                        "email": "blocked_super@soc360.test",
+                        "password": "SuperPass123!",
+                        "full_name": "Blocked Super",
+                        "role": "superadmin",
+                        "tenant_id": None,
+                        "is_superadmin": True,
+                    },
+                )
+
+        assert resp.status_code == 422
+        mock_create_user.assert_not_awaited()
 
 
 class TestUserService:

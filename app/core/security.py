@@ -192,9 +192,7 @@ async def revoke_all_user_access_tokens(
         try:
             await pipe.execute()
         except Exception:
-            from app.core.logging import get_logger
-            _logger = get_logger(__name__)
-            _logger.exception(
+            logger.exception(
                 "redis_pipeline_failed",
                 extra={"user_id": user_id, "jtis_count": len(jti_strs)},
             )

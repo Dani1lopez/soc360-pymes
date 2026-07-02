@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.middleware import HTTPSRedirectMiddleware, SecurityHeadersMiddleware
 from app.core.redis import ping_redis, close_pool, get_redis_client
-from app.event_bus import EventConsumer, drain_dlq_tasks
+from app.event_bus import EventBus, EventConsumer, drain_dlq_tasks
 from app.modules.auth.router import router as auth_router
 from app.modules.tenants.router import router as tenants_router
 from app.modules.users.router import router as users_router
@@ -46,7 +46,6 @@ async def lifespan(app: FastAPI):
             try:
                 pending = await consumer.read_pending()
                 for msg in pending:
-                    from app.event_bus import EventBus
                     EventBus._dispatch_event("auth.login", msg.get("data", {}), redis_client)
                     await consumer.ack(msg["message_id"])
             except Exception:

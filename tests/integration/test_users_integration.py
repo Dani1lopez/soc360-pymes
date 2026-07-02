@@ -210,7 +210,7 @@ async def test_user_cannot_change_own_role(client: AsyncClient, analyst_a_header
         json={"role": "admin"},
         headers=analyst_a_headers,
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 403
 
 
 async def test_user_cannot_deactivate_self(client: AsyncClient, analyst_a_headers, seed_data):

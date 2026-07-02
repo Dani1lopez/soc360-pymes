@@ -11,6 +11,7 @@ from passlib.context import CryptContext
 from redis.asyncio import Redis
 
 from app.core.config import settings
+from app.core.exceptions import UserError
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -33,6 +34,18 @@ _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def hash_password(plain: str) -> str:
     return _pwd_context.hash(plain)
+
+
+def validate_password_length(password: str) -> None:
+    """Service-level backstop for bcrypt's 72-byte password input limit."""
+    if len(password.encode("utf-8")) > 72:
+        raise UserError(
+            {
+                "code": "password_too_long",
+                "message": "Password exceeds 72 bytes (UTF-8). Choose a shorter password.",
+            },
+            status_code=400,
+        )
 
 
 def verify_password(plain: str, hashed: str) -> bool:

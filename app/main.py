@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.middleware import HTTPSRedirectMiddleware, SecurityHeadersMiddleware
-from app.core.redis import ping_redis, close_pool, get_redis_client
+from app.core.redis import ping_redis_with_retry, close_pool, get_redis_client
 from app.event_bus import EventConsumer, drain_dlq_tasks
 from app.modules.auth.router import router as auth_router
 from app.modules.tenants.router import router as tenants_router
@@ -25,9 +25,14 @@ async def lifespan(app: FastAPI):
     #Inicialización de servicios al arrancar
     logger.info("soc360.startup", environment=settings.ENVIRONMENT)
 
-    #Verificar Redis
-    if not await ping_redis():
-        raise RuntimeError("No se puede conectar a Redis")
+    #Verificar Redis — retry on transient blips (issue #128)
+    if not await ping_redis_with_retry(
+        max_attempts=settings.REDIS_STARTUP_MAX_ATTEMPTS,
+        backoff_base_seconds=settings.REDIS_STARTUP_BACKOFF_BASE_SECONDS,
+    ):
+        raise RuntimeError(
+            f"No se pudo conectar a Redis tras {settings.REDIS_STARTUP_MAX_ATTEMPTS} intentos"
+        )
     logger.info("soc360.redis_connected")
 
     # Start event consumer background task

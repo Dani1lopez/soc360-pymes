@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from datetime import datetime, timezone, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from redis.asyncio import Redis
 from sqlalchemy import select, update, func, text
@@ -275,7 +275,7 @@ async def login(
         event_bus = await get_event_bus()
         from app.event_schemas import AuthLoginEvent
         await event_bus.publish(AuthLoginEvent(
-            event_id=__import__("uuid").uuid4(),
+            event_id=uuid4(),
             tenant_id=user.tenant_id,
             user_id=str(user.id),
             email_hash=hash_email(user.email),

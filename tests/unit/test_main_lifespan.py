@@ -8,6 +8,58 @@ import pytest
 from fakeredis.aioredis import FakeRedis
 
 
+@pytest.mark.asyncio
+async def test_cancellation_closes_redis_once(monkeypatch):
+    """SIGTERM (task.cancel) must close the Redis client exactly once and drain the pool.
+
+    This is the canonical test for issue #129. It covers 4 invariants in a single
+    function: (1) the loop starts via create_task, (2) SIGTERM arrives via task.cancel,
+    (3) the finally block calls aclose exactly once (close_calls == [1]), and
+    (4) the connection pool has no leaked connections (_created_connections == 0).
+    """
+    from app.main import _consumer_loop
+
+    fakeredis_client = FakeRedis()
+    close_calls = []
+    monkeypatch.setattr(
+        fakeredis_client,
+        "aclose",
+        AsyncMock(side_effect=lambda: close_calls.append(1)),
+    )
+
+    # Mock the consumer to do nothing (no pending messages, no acks)
+    mock_consumer = MagicMock()
+    mock_consumer.read_pending = AsyncMock(return_value=[])
+    mock_consumer.ack = AsyncMock()
+
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(
+        _consumer_loop(
+            redis_client=fakeredis_client,
+            consumer=mock_consumer,
+            stop_event=stop_event,
+        )
+    )
+    await asyncio.sleep(0.05)  # let it spin once
+
+    # SIGTERM arrives
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # aclose was awaited exactly once
+    assert close_calls == [1], f"aclose must be called exactly once, got {close_calls}"
+    # No leaked connections in the pool
+    created_connections = getattr(
+        fakeredis_client.connection_pool,
+        "_created_connections",
+        len(fakeredis_client.connection_pool._in_use_connections),
+    )
+    assert created_connections == 0, (
+        "Connection pool must be drained (no leaked connections)"
+    )
+
+
 class TestLifespanConsumerLifecycle:
     """Validate that the FastAPI lifespan starts/stops the event consumer correctly."""
 

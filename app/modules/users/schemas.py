@@ -17,12 +17,13 @@ class RoleEnum(str, Enum):
 
 
 class UserCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     email: EmailStr = Field(..., description="Email unico del usuario")
     password: str = Field(..., min_length=12, max_length=128)
     full_name: str = Field(..., min_length=1, max_length=255)
     role: RoleEnum = Field(..., description="Rol del usuario")
-    tenant_id: uuid.UUID | None = Field(None, description="None solo si is_superadmin=True")
-    is_superadmin: bool = Field(False)
+    tenant_id: uuid.UUID | None = Field(..., description="Tenant requerido para creación pública")
 
     @field_validator("password")
     @classmethod
@@ -35,7 +36,19 @@ class UserCreate(BaseModel):
         return v
     
     @model_validator(mode="after")
-    def check_superadmin_consistency(self) -> UserCreate:
+    def check_public_user_consistency(self) -> UserCreate:
+        if self.tenant_id is None:
+            raise ValueError("Un usuario debe tener tenant_id")
+        if self.role == RoleEnum.superadmin:
+            raise ValueError("role='superadmin' requiere creación interna")
+        return self
+
+
+class UserInternalCreate(UserCreate):
+    is_superadmin: bool = False
+
+    @model_validator(mode="after")
+    def check_public_user_consistency(self) -> UserInternalCreate:
         if self.is_superadmin and self.tenant_id is not None:
             raise ValueError("Un superadmin no puede pertenecer a un tenant")
         if not self.is_superadmin and self.tenant_id is None:

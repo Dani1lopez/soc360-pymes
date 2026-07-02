@@ -41,11 +41,6 @@ async def create_user(
 ) -> User:
     """Crea un nuevo usuario"""
     if not current_user.is_superadmin:
-        if body.is_superadmin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Solo los superadmins pueden crear otros superadmin",
-            )
         if body.tenant_id != current_user.tenant_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

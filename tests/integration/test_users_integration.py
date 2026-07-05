@@ -690,7 +690,7 @@ async def test_mass_assignment_rejected(
 # ---------------------------------------------------------------------------
 
 async def test_concurrent_user_create_same_email_returns_409(
-    client: AsyncClient, admin_a_headers, seed_data
+    db_session, admin_a_headers, seed_data
 ):
     """Race condition: dos requests simultáneos con el mismo email.
 
@@ -699,8 +699,32 @@ async def test_concurrent_user_create_same_email_returns_409(
 
     Esto prueba el branch de IntegrityError en create_user() que de otra forma
     nunca se ejecutaría en tests secuenciales.
+
+    Cada request usa su propio httpx.AsyncClient para evitar el race condition
+    del client compartido (httpx no soporta concurrencia real en un mismo client).
     """
     import asyncio
+    from httpx import ASGITransport
+    from fakeredis.aioredis import FakeRedis
+    from app.main import create_app
+    from app.core.redis import get_redis
+    from app.dependencies import get_db, get_db_with_tenant
+
+    app = create_app()
+    fake_redis = FakeRedis()
+
+    async def override_get_db():
+        yield db_session
+
+    async def override_get_db_with_tenant():
+        yield db_session
+
+    async def override_get_redis():
+        yield fake_redis
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_db_with_tenant] = override_get_db_with_tenant
+    app.dependency_overrides[get_redis] = override_get_redis
 
     email = f"race-condition-{uuid.uuid4()}@test.test"
     payload = {
@@ -711,11 +735,16 @@ async def test_concurrent_user_create_same_email_returns_409(
         "tenant_id": TENANT_A_ID,
     }
 
-    async def create_user():
-        return await client.post("/api/v1/users/", json=payload, headers=admin_a_headers)
-
-    # Ejecutar dos requests simultáneamente
-    results = await asyncio.gather(create_user(), create_user(), return_exceptions=True)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client1, AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client2:
+        results = await asyncio.gather(
+            client1.post("/api/v1/users/", json=payload, headers=admin_a_headers),
+            client2.post("/api/v1/users/", json=payload, headers=admin_a_headers),
+            return_exceptions=True,
+        )
 
     # Filtrar excepciones reales (no HTTP responses)
     responses = [r for r in results if not isinstance(r, Exception)]

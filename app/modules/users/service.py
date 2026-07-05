@@ -9,7 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import UserError
-from app.core.security import hash_password, revoke_all_user_access_tokens
+from app.core.security import (
+    hash_password,
+    revoke_all_user_access_tokens,
+    validate_password_length,
+)
 from app.modules.auth.service import _revoke_all_user_tokens
 from app.modules.tenants.models import Tenant
 from app.modules.users.models import User
@@ -54,6 +58,8 @@ async def create_user(data: UserCreate, db: AsyncSession) -> User:
     
     if not data.is_superadmin and data.tenant_id is not None:
         await _get_active_tenant(db, data.tenant_id)
+
+    validate_password_length(data.password)
     
     user = User(
         tenant_id=data.tenant_id,

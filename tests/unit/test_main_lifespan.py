@@ -8,6 +8,58 @@ import pytest
 from fakeredis.aioredis import FakeRedis
 
 
+@pytest.mark.asyncio
+async def test_cancellation_closes_redis_once(monkeypatch):
+    """SIGTERM (task.cancel) must close the Redis client exactly once and drain the pool.
+
+    This is the canonical test for issue #129. It covers 4 invariants in a single
+    function: (1) the loop starts via create_task, (2) SIGTERM arrives via task.cancel,
+    (3) the finally block calls aclose exactly once (close_calls == [1]), and
+    (4) the connection pool has no leaked connections (_created_connections == 0).
+    """
+    from app.main import _consumer_loop
+
+    fakeredis_client = FakeRedis()
+    close_calls = []
+    monkeypatch.setattr(
+        fakeredis_client,
+        "aclose",
+        AsyncMock(side_effect=lambda: close_calls.append(1)),
+    )
+
+    # Mock the consumer to do nothing (no pending messages, no acks)
+    mock_consumer = MagicMock()
+    mock_consumer.read_pending = AsyncMock(return_value=[])
+    mock_consumer.ack = AsyncMock()
+
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(
+        _consumer_loop(
+            redis_client=fakeredis_client,
+            consumer=mock_consumer,
+            stop_event=stop_event,
+        )
+    )
+    await asyncio.sleep(0.05)  # let it spin once
+
+    # SIGTERM arrives
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # aclose was awaited exactly once
+    assert close_calls == [1], f"aclose must be called exactly once, got {close_calls}"
+    # No leaked connections in the pool
+    created_connections = getattr(
+        fakeredis_client.connection_pool,
+        "_created_connections",
+        len(fakeredis_client.connection_pool._in_use_connections),
+    )
+    assert created_connections == 0, (
+        "Connection pool must be drained (no leaked connections)"
+    )
+
+
 class TestLifespanConsumerLifecycle:
     """Validate that the FastAPI lifespan starts/stops the event consumer correctly."""
 
@@ -39,7 +91,7 @@ class TestLifespanConsumerLifecycle:
             coro.close()
             return MagicMock(done=True)
 
-        with patch("app.main.ping_redis", AsyncMock(return_value=True)):
+        with patch("app.main.ping_redis_with_retry", AsyncMock(return_value=True)):
             with patch("app.main.get_redis_client", AsyncMock(return_value=mock_redis)):
                 with patch("app.main.EventConsumer", MockEventConsumer):
                     with patch("app.main.asyncio.Event") as MockEvent:
@@ -95,7 +147,7 @@ class TestLifespanConsumerLifecycle:
             coro.close()
             return MagicMock(done=True)
 
-        with patch("app.main.ping_redis", AsyncMock(return_value=True)):
+        with patch("app.main.ping_redis_with_retry", AsyncMock(return_value=True)):
             with patch("app.main.get_redis_client", AsyncMock(return_value=mock_redis)):
                 with patch("app.main.EventConsumer"):
                     with patch("app.main.asyncio.create_task", side_effect=make_fake_task):
@@ -114,12 +166,12 @@ class TestLifespanConsumerLifecycle:
 
     @pytest.mark.asyncio
     async def test_lifespan_raises_if_redis_unavailable(self):
-        """Lifespan MUST raise RuntimeError if Redis ping fails on startup."""
+        """Lifespan MUST raise RuntimeError if all Redis ping attempts fail on startup."""
         from app.main import lifespan
 
-        with patch("app.main.ping_redis", AsyncMock(return_value=False)):
+        with patch("app.main.ping_redis_with_retry", AsyncMock(return_value=False)):
             app = MagicMock()
-            with pytest.raises(RuntimeError, match="No se puede conectar a Redis"):
+            with pytest.raises(RuntimeError, match="No se pudo conectar a Redis"):
                 async with lifespan(app):
                     pass  # Should not reach here
 
@@ -135,7 +187,7 @@ class TestLifespanConsumerLifecycle:
             coro.close()
             return MagicMock(done=True)
 
-        with patch("app.main.ping_redis", AsyncMock(return_value=True)):
+        with patch("app.main.ping_redis_with_retry", AsyncMock(return_value=True)):
             with patch("app.main.get_redis_client", AsyncMock(return_value=mock_redis)):
                 with patch("app.main.EventConsumer"):
                     with patch("app.main.asyncio.create_task", side_effect=fake_create_task):
@@ -146,5 +198,47 @@ class TestLifespanConsumerLifecycle:
                                     async with lifespan(app):
                                         pass
                                     assert mock_close_pool.called, "close_pool must be called on shutdown"
+
+        await mock_redis.aclose()
+
+    @pytest.mark.asyncio
+    async def test_lifespan_survives_transient_redis_outage_via_retry(self):
+        """Lifespan MUST survive a transient Redis blip via ping retry (issue #128).
+
+        Mocks the inner `app.core.redis.ping_redis` to fail the first 2 calls and
+        succeed on the 3rd, simulating a Redis rolling restart during boot. The
+        real `ping_redis_with_retry` (called by the lifespan) is what drives the
+        retry loop; we patch the underlying ping to make it flaky and patch
+        `asyncio.sleep` so the test is fast.
+        """
+        from app.main import lifespan
+
+        mock_redis = FakeRedis()
+        ping_call_count = 0
+
+        async def flaky_inner_ping():
+            nonlocal ping_call_count
+            ping_call_count += 1
+            return ping_call_count >= 3  # First 2 fail, 3rd succeeds
+
+        def fake_create_task(coro, *, name=None):
+            coro.close()
+            return MagicMock(done=True)
+
+        with patch("app.core.redis.ping_redis", flaky_inner_ping):
+            with patch("app.core.redis.asyncio.sleep", AsyncMock()):
+                with patch("app.main.get_redis_client", AsyncMock(return_value=mock_redis)):
+                    with patch("app.main.EventConsumer"):
+                        with patch("app.main.asyncio.create_task", side_effect=fake_create_task):
+                            with patch("app.main.asyncio.wait_for", AsyncMock()):
+                                with patch("app.main.asyncio.Event", return_value=MagicMock()):
+                                    with patch("app.main.close_pool", AsyncMock()):
+                                        app = MagicMock()
+                                        # Should NOT raise: ping_redis_with_retry succeeds on 3rd attempt
+                                        async with lifespan(app):
+                                            pass
+                                        assert ping_call_count == 3, (
+                                            f"Expected 3 ping attempts before success, got {ping_call_count}"
+                                        )
 
         await mock_redis.aclose()

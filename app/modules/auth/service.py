@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from datetime import datetime, timezone, timedelta
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from redis.asyncio import Redis
@@ -15,6 +16,7 @@ from app.core.security import (
     create_access_token,
     verify_password,
     hash_password,
+    validate_password_length,
     revoke_access_token,
     track_jti,
     untrack_jti,
@@ -35,6 +37,9 @@ LOGIN_ATTEMPTS_WINDOW_SECONDS = 900
 LOGIN_ATTEMPTS_MAX = 10
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from app.event_bus import EventBus
 
 
 async def get_event_bus() -> "EventBus":
@@ -413,6 +418,7 @@ async def change_password(
             detail="La contraseña actual es incorrecta.",
         )
     
+    validate_password_length(new_password)
     user.hashed_password = hash_password(new_password)
     
     await _revoke_all_user_tokens(user_id, db)

@@ -19,6 +19,26 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 #Evita timeouts de firewalls que cierran conexiones inactivas
+# Per-connection safety nets (issue #134): statement_timeout kills runaway
+# queries; lock_timeout prevents indefinite waits on row/table locks.
+# asyncpg forwards server_settings to PostgreSQL in the startup packet so
+# every connection inherits these limits automatically.
+
+
+def _build_connect_args(stmt_timeout_ms: int, lock_timeout_ms: int) -> dict:
+    """Build asyncpg connect_args with server_settings for timeouts.
+
+    Extracted as a pure function so it can be tested without reloading the
+    module or monkeypatching SQLAlchemy internals.
+    """
+    return {
+        "server_settings": {
+            "statement_timeout": str(stmt_timeout_ms),
+            "lock_timeout": str(lock_timeout_ms),
+        },
+    }
+
+
 engine: AsyncEngine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.ENVIRONMENT == "development",
@@ -27,6 +47,10 @@ engine: AsyncEngine = create_async_engine(
     max_overflow=20,
     pool_timeout=30,
     pool_recycle=1800,
+    connect_args=_build_connect_args(
+        settings.DB_STATEMENT_TIMEOUT_MS,
+        settings.DB_LOCK_TIMEOUT_MS,
+    ),
 )
 
 #expire_on_commit=False: necesario en async - lazy loading no existe

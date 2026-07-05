@@ -4,11 +4,12 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from redis.asyncio import Redis
 
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.middleware import HTTPSRedirectMiddleware, SecurityHeadersMiddleware
-from app.core.redis import ping_redis, close_pool, get_redis_client
+from app.core.redis import ping_redis_with_retry, close_pool, get_redis_client
 from app.event_bus import EventConsumer, drain_dlq_tasks
 from app.modules.auth.router import router as auth_router
 from app.modules.tenants.router import router as tenants_router
@@ -20,14 +21,52 @@ logger = get_logger(__name__)
 APP_VERSION = "0.1.0"
 
 
+async def _consumer_loop(
+    *,
+    redis_client: Redis,
+    consumer: EventConsumer,
+    stop_event: asyncio.Event,
+) -> None:
+    """Background loop that processes events until stop_event is set.
+
+    Closes the Redis client exactly once on exit (normal, exception, or cancellation).
+    Re-raises asyncio.CancelledError so the asyncio task machinery handles it correctly.
+    """
+    try:
+        while not stop_event.is_set():
+            try:
+                pending = await consumer.read_pending()
+                for msg in pending:
+                    from app.event_bus import EventBus
+
+                    EventBus._dispatch_event("auth.login", msg.get("data", {}), redis_client)
+                    await consumer.ack(msg["message_id"])
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                # Re-raise immediately so the outer try/finally still runs.
+                raise
+            except Exception:
+                # Log unexpected errors and back off; do not busy-loop.
+                logger.exception("event_consumer_loop_error")
+                await asyncio.sleep(1)
+    finally:
+        # Always close the redis client, even on cancellation or exception.
+        await redis_client.aclose()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     #Inicialización de servicios al arrancar
     logger.info("soc360.startup", environment=settings.ENVIRONMENT)
 
-    #Verificar Redis
-    if not await ping_redis():
-        raise RuntimeError("No se puede conectar a Redis")
+    #Verificar Redis — retry on transient blips (issue #128)
+    if not await ping_redis_with_retry(
+        max_attempts=settings.REDIS_STARTUP_MAX_ATTEMPTS,
+        backoff_base_seconds=settings.REDIS_STARTUP_BACKOFF_BASE_SECONDS,
+    ):
+        raise RuntimeError(
+            f"No se pudo conectar a Redis tras {settings.REDIS_STARTUP_MAX_ATTEMPTS} intentos"
+        )
     logger.info("soc360.redis_connected")
 
     # Start event consumer background task
@@ -40,20 +79,14 @@ async def lifespan(app: FastAPI):
     )
     stop_event = asyncio.Event()
 
-    async def _consumer_loop() -> None:
-        """Background loop that processes events until stop_event is set."""
-        while not stop_event.is_set():
-            try:
-                pending = await consumer.read_pending()
-                for msg in pending:
-                    from app.event_bus import EventBus
-                    EventBus._dispatch_event("auth.login", msg.get("data", {}), redis_client)
-                    await consumer.ack(msg["message_id"])
-            except Exception:
-                logger.exception("event_consumer_loop_error")
-            await asyncio.sleep(1)
-
-    task = asyncio.create_task(_consumer_loop(), name="event-consumer")
+    task = asyncio.create_task(
+        _consumer_loop(
+            redis_client=redis_client,
+            consumer=consumer,
+            stop_event=stop_event,
+        ),
+        name="event-consumer",
+    )
 
     yield
 

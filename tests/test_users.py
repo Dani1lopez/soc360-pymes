@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 from httpx import AsyncClient
 
 from tests.conftest import (
@@ -66,7 +65,7 @@ async def test_create_user_admin_ok(client: AsyncClient, admin_a_headers, seed_d
     assert resp.json()["tenant_id"] == TENANT_A_ID
 
 
-async def test_create_user_superadmin_can_create_superadmin(client: AsyncClient, superadmin_headers, seed_data):
+async def test_create_user_superadmin_field_rejected_for_superadmin(client: AsyncClient, superadmin_headers, seed_data):
     resp = await client.post(
         "/api/v1/users/",
         json={
@@ -79,8 +78,7 @@ async def test_create_user_superadmin_can_create_superadmin(client: AsyncClient,
         },
         headers=superadmin_headers,
     )
-    assert resp.status_code == 201
-    assert resp.json()["is_superadmin"] is True
+    assert resp.status_code == 422
 
 
 async def test_create_user_admin_cannot_create_superadmin(client: AsyncClient, admin_a_headers, seed_data):
@@ -96,7 +94,7 @@ async def test_create_user_admin_cannot_create_superadmin(client: AsyncClient, a
         },
         headers=admin_a_headers,
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 422
 
 
 async def test_create_user_admin_cannot_create_admin(client: AsyncClient, admin_a_headers, seed_data):
@@ -183,7 +181,6 @@ async def test_create_user_normal_without_tenant_id_rejected(client: AsyncClient
             "full_name": "Sin Tenant",
             "role": "viewer",
             "tenant_id": None,
-            "is_superadmin": False,
         },
         headers=superadmin_headers,
     )

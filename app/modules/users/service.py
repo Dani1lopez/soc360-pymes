@@ -17,7 +17,7 @@ from app.core.security import (
 from app.modules.auth.service import _revoke_all_user_tokens
 from app.modules.tenants.models import Tenant
 from app.modules.users.models import User
-from app.modules.users.schemas import UserCreate, UserUpdate
+from app.modules.users.schemas import UserCreate, UserInternalCreate, UserUpdate
 
 
 async def _is_email_taken(
@@ -51,16 +51,18 @@ async def _get_active_tenant(
     return tenant
 
 
-async def create_user(data: UserCreate, db: AsyncSession) -> User:
+async def create_user(data: UserCreate | UserInternalCreate, db: AsyncSession) -> User:
     """Crea un nuevo usuario"""
     if await _is_email_taken(db, data.email):
         raise UserError("El email ya está registrado", status_code=409)
-    
-    if not data.is_superadmin and data.tenant_id is not None:
+
+    is_superadmin = getattr(data, "is_superadmin", False)
+
+    if not is_superadmin and data.tenant_id is not None:
         await _get_active_tenant(db, data.tenant_id)
 
     validate_password_length(data.password)
-    
+
     user = User(
         tenant_id=data.tenant_id,
         email=data.email.lower().strip(),
@@ -68,7 +70,7 @@ async def create_user(data: UserCreate, db: AsyncSession) -> User:
         full_name=data.full_name,
         role=data.role.value,
         is_active=True,
-        is_superadmin=data.is_superadmin,
+        is_superadmin=is_superadmin,
     )
     db.add(user)
     # Wrap flush in IntegrityError handler to translate asyncpg pgcode '23505'

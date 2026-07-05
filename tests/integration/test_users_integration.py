@@ -5,7 +5,6 @@ from httpx import AsyncClient
 from tests.conftest import (
     TENANT_A_ID,
     TENANT_B_ID,
-    SUPERADMIN_ID,
     ADMIN_A_ID,
     ANALYST_A_ID,
     VIEWER_A_ID,
@@ -39,7 +38,7 @@ async def test_superadmin_can_create_any_role(
 async def test_superadmin_can_create_another_superadmin(
     client: AsyncClient, superadmin_headers, seed_data
 ):
-    """Superadmin puede crear otro superadmin."""
+    """Superadmin no puede crear otro superadmin via POST público."""
     resp = await client.post(
         "/api/v1/users/",
         json={
@@ -52,9 +51,7 @@ async def test_superadmin_can_create_another_superadmin(
         },
         headers=superadmin_headers,
     )
-    assert resp.status_code == 201
-    assert resp.json()["role"] == "superadmin"
-    assert resp.json()["is_superadmin"] is True
+    assert resp.status_code == 422
 
 
 async def test_admin_can_create_viewer_analyst_but_not_admin(
@@ -517,7 +514,7 @@ async def test_cross_tenant_user_creation_prevention(
         },
         headers=admin_a_headers,
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------

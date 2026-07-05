@@ -405,35 +405,45 @@ class EventConsumer:
         if not pending_entries:
             return []
 
-        result = []
+        # Batch XCLAIM: claim all pending messages in a single round-trip
+        # instead of O(n) individual XCLAIM calls (issue #100).
+        # This reduces Redis round-trips from N to 1 for N pending messages.
+        msg_ids = []
         for entry in pending_entries:
-            # entry is a dict with: "message_id", "consumer", "time_since_delivered", "times_delivered"
             msg_id = entry["message_id"]
             msg_id_str = msg_id.decode() if isinstance(msg_id, bytes) else msg_id
+            msg_ids.append(msg_id_str)
 
-            # Use XCLAIM to get the message content without changing pending state
-            # XCLAIM just reads the message, doesn't re-deliver it
-            try:
-                claimed = await self.redis_client.xclaim(
-                    stream_key,
-                    self.group_name,
-                    self.consumer_name,
-                    min_idle_time=0,  # 0 means claim regardless of idle time
-                    message_ids=[msg_id_str],
-                )
-                if claimed:
-                    for cid, fields in claimed:
-                        str_fields = {
-                            k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
-                            for k, v in fields.items()
-                        }
-                        result.append({
-                            "message_id": cid if isinstance(cid, bytes) else cid.encode(),
-                            "data": str_fields,
-                        })
-            except Exception:
-                # XCLAIM may fail if message is already acked or deleted
-                pass
+        result = []
+        try:
+            # Single XCLAIM call with all message_ids (batch operation)
+            claimed = await self.redis_client.xclaim(
+                stream_key,
+                self.group_name,
+                self.consumer_name,
+                min_idle_time=0,  # 0 means claim regardless of idle time
+                message_ids=msg_ids,
+            )
+            if claimed:
+                for cid, fields in claimed:
+                    str_fields = {
+                        k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                        for k, v in fields.items()
+                    }
+                    result.append({
+                        "message_id": cid if isinstance(cid, bytes) else cid.encode(),
+                        "data": str_fields,
+                    })
+        except Exception:
+            # XCLAIM may fail if messages are already acked or deleted.
+            # Log for observability but don't crash — the consumer loop
+            # will retry on the next iteration.
+            logger.warning(
+                "batch_xclaim_failed",
+                event_type=self.event_type,
+                consumer_name=self.consumer_name,
+                message_count=len(msg_ids),
+            )
         return result
 
     async def read_new(self, block: int = 5000) -> list[dict]:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from httpx import AsyncClient
 
 from tests.conftest import (
@@ -681,3 +683,47 @@ async def test_mass_assignment_rejected(
     resp = await client.get(f"/api/v1/users/{ANALYST_A_ID}", headers=admin_a_headers)
     assert resp.status_code == 200
     assert resp.json()["is_superadmin"] is False, "El campo is_superadmin no debería haberse aplicado"
+
+
+# ---------------------------------------------------------------------------
+# ISSUE #142: EMAIL-409 RACE CONDITION TEST
+# ---------------------------------------------------------------------------
+
+async def test_concurrent_user_create_same_email_returns_409(
+    client: AsyncClient, admin_a_headers, seed_data
+):
+    """Race condition: dos requests simultáneos con el mismo email.
+
+    El primero debería crear el usuario (201), el segundo debería fallar con 409
+    porque el IntegrityError handler traduce pgcode 23505 a UserError(409).
+
+    Esto prueba el branch de IntegrityError en create_user() que de otra forma
+    nunca se ejecutaría en tests secuenciales.
+    """
+    import asyncio
+
+    email = f"race-condition-{uuid.uuid4()}@test.test"
+    payload = {
+        "email": email,
+        "password": "Password123!",
+        "full_name": "Race Condition User",
+        "role": "viewer",
+        "tenant_id": TENANT_A_ID,
+    }
+
+    async def create_user():
+        return await client.post("/api/v1/users/", json=payload, headers=admin_a_headers)
+
+    # Ejecutar dos requests simultáneamente
+    results = await asyncio.gather(create_user(), create_user(), return_exceptions=True)
+
+    # Filtrar excepciones reales (no HTTP responses)
+    responses = [r for r in results if not isinstance(r, Exception)]
+    assert len(responses) == 2, f"Se esperaban 2 responses, got {len(responses)}"
+
+    status_codes = sorted([r.status_code for r in responses])
+    # Uno debe ser 201 (creado), el otro 409 (conflicto)
+    assert status_codes == [201, 409], (
+        f"Se esperaba [201, 409] en algún orden, got {status_codes}. "
+        f"Responses: {[r.text for r in responses]}"
+    )

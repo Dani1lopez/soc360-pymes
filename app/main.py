@@ -20,6 +20,14 @@ logger = get_logger(__name__)
 
 APP_VERSION = "0.1.0"
 
+# Maximum milliseconds XREADGROUP blocks waiting for new messages (issue #133).
+# Replaces the old asyncio.sleep(1) busy-poll.
+_XREADGROUP_BLOCK_MS: int = 5000
+
+# Backoff after an unexpected error in the consumer loop.
+# Intentionally short — just enough to avoid a tight spin if Redis is flaky.
+_ERROR_BACKOFF_SECONDS: float = 0.1
+
 
 async def _consumer_loop(
     *,
@@ -29,14 +37,32 @@ async def _consumer_loop(
 ) -> None:
     """Background loop that processes events until stop_event is set.
 
-    Closes the Redis client exactly once on exit (normal, exception, or cancellation).
-    Re-raises asyncio.CancelledError so the asyncio task machinery handles it correctly.
+    Recovery + blocking read pattern (issue #133):
+      1. Each iteration first drains pending (unacked) messages via
+         ``read_pending()`` so messages stranded by a previous crash are
+         not lost.
+      2. When no pending messages remain, ``read_new(block=_XREADGROUP_BLOCK_MS)``
+         blocks for up to 5 s waiting for new messages — eliminating the
+         old 1 s busy-poll.
+
+    Closes the Redis client exactly once on exit (normal, exception, or
+    cancellation).  Re-raises asyncio.CancelledError so the asyncio task
+    machinery handles it correctly.
     """
     try:
         while not stop_event.is_set():
             try:
+                # Step 1 — recover any pending (unacked) messages first.
+                # read_pending() is non-blocking; when there are no pending
+                # entries the XPENDING call returns an empty list quickly.
                 pending = await consumer.read_pending()
-                for msg in pending:
+                if pending:
+                    messages = pending
+                else:
+                    # Step 2 — no pending work; block for new messages.
+                    messages = await consumer.read_new(block=_XREADGROUP_BLOCK_MS)
+
+                for msg in messages:
                     from app.event_bus import EventBus
 
                     raw_msg_id = msg["message_id"]
@@ -48,14 +74,13 @@ async def _consumer_loop(
                         message_id=msg_id,
                     )
                     await consumer.ack(msg["message_id"])
-                await asyncio.sleep(1)
             except asyncio.CancelledError:
-                # Re-raise immediately so the outer try/finally still runs.
+                logger.info("event_consumer_loop_cancelled")
                 raise
             except Exception:
-                # Log unexpected errors and back off; do not busy-loop.
+                # Log unexpected errors and back off briefly; do not busy-loop.
                 logger.exception("event_consumer_loop_error")
-                await asyncio.sleep(1)
+                await asyncio.sleep(_ERROR_BACKOFF_SECONDS)
     finally:
         # Always close the redis client, even on cancellation or exception.
         await redis_client.aclose()

@@ -2,9 +2,18 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import bcrypt
 import pytest
+from fakeredis.aioredis import FakeRedis
 from pydantic import ValidationError
 
+from app.core.security import (
+    can_assign_role,
+    has_minimum_role,
+    is_token_revoked,
+    revoke_tokens_by_jtis,
+    secure_compare,
+)
 from app.modules.auth.schemas import ChangePasswordRequest
 from app.modules.users.schemas import RoleEnum, UserCreate
 
@@ -116,3 +125,141 @@ class TestPasswordLengthBoundaryDefenseInDepth:
             validate_password_length("a" * 73)
 
         assert exc.value.status_code == 400
+
+
+class TestSecureCompare:
+    """Unit coverage for constant-time string comparisons."""
+
+    def test_equal_strings_return_true(self):
+        assert secure_compare("same-token", "same-token") is True
+
+    def test_unequal_strings_return_false(self):
+        assert secure_compare("same-token", "other-token") is False
+
+    def test_different_lengths_return_false(self):
+        assert secure_compare("short", "short-but-longer") is False
+
+    def test_empty_strings_return_true(self):
+        assert secure_compare("", "") is True
+
+
+class TestBcryptShim:
+    """Direct coverage for the bcrypt hashpw compatibility shim."""
+
+    def test_hashes_71_byte_password(self):
+        password = b"a" * 71
+        hashed = bcrypt.hashpw(password, bcrypt.gensalt())
+
+        assert bcrypt.checkpw(password, hashed) is True
+
+    def test_hashes_72_byte_password(self):
+        password = b"a" * 72
+        hashed = bcrypt.hashpw(password, bcrypt.gensalt())
+
+        assert bcrypt.checkpw(password, hashed) is True
+
+    @pytest.mark.parametrize("password_length", [73, 200])
+    def test_passwords_over_72_bytes_are_truncated_by_compat_shim(
+        self,
+        password_length: int,
+    ):
+        password = b"a" * password_length
+        truncated = password[:72]
+        salt = bcrypt.gensalt()
+
+        assert bcrypt.hashpw(password, salt) == bcrypt.hashpw(truncated, salt)
+
+
+class TestRoleHelpers:
+    """Matrix coverage for role hierarchy helpers."""
+
+    @pytest.mark.parametrize(
+        ("user_role", "required_role", "expected"),
+        [
+            ("admin", "viewer", True),
+            ("viewer", "admin", False),
+            ("superadmin", "admin", True),
+            ("analyst", "ingestor", True),
+            ("ingestor", "analyst", True),
+            ("analyst", "admin", False),
+            ("unknown", "viewer", False),
+            ("viewer", "unknown", True),
+        ],
+    )
+    def test_has_minimum_role_matrix(
+        self,
+        user_role: str,
+        required_role: str,
+        expected: bool,
+    ):
+        assert has_minimum_role(user_role, required_role) is expected
+
+    @pytest.mark.parametrize(
+        ("assigner_role", "target_role", "expected"),
+        [
+            ("admin", "viewer", True),
+            ("admin", "analyst", True),
+            ("admin", "ingestor", True),
+            ("admin", "admin", False),
+            ("viewer", "admin", False),
+            ("superadmin", "admin", True),
+            ("superadmin", "superadmin", False),
+            ("analyst", "viewer", True),
+            ("analyst", "ingestor", False),
+            ("unknown", "viewer", False),
+        ],
+    )
+    def test_can_assign_role_matrix(
+        self,
+        assigner_role: str,
+        target_role: str,
+        expected: bool,
+    ):
+        assert can_assign_role(assigner_role, target_role) is expected
+
+
+class TestBulkRevocation:
+    """Unit coverage for bulk token revocation with fakeredis."""
+
+    @pytest.mark.asyncio
+    async def test_empty_jti_list_is_noop(self):
+        redis = FakeRedis()
+        try:
+            await revoke_tokens_by_jtis([], redis, ttl_seconds=60)
+
+            assert await redis.keys("revoked:*") == []
+        finally:
+            await redis.aclose()
+
+    @pytest.mark.asyncio
+    async def test_single_jti_is_revoked_with_ttl(self):
+        redis = FakeRedis()
+        try:
+            await revoke_tokens_by_jtis(["jti-1"], redis, ttl_seconds=60)
+
+            assert await is_token_revoked("jti-1", redis) is True
+            assert await redis.ttl("revoked:jti-1") > 0
+        finally:
+            await redis.aclose()
+
+    @pytest.mark.asyncio
+    async def test_many_jtis_are_revoked(self):
+        redis = FakeRedis()
+        try:
+            jtis = [f"jti-{index}" for index in range(100)]
+            await revoke_tokens_by_jtis(jtis, redis, ttl_seconds=60)
+
+            assert await redis.exists(*(f"revoked:{jti}" for jti in jtis)) == len(jtis)
+        finally:
+            await redis.aclose()
+
+    @pytest.mark.asyncio
+    async def test_arbitrary_jti_format_is_revoked(self):
+        redis = FakeRedis()
+        try:
+            jti = "not-a-uuid"
+            await revoke_tokens_by_jtis([jti], redis, ttl_seconds=60)
+
+            assert await is_token_revoked(jti, redis) is True
+        finally:
+            await redis.aclose()

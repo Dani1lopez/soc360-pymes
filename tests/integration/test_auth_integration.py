@@ -1,8 +1,20 @@
 from __future__ import annotations
 
+import pytest_asyncio
 from httpx import AsyncClient
 
-from tests.conftest import ADMIN_A_ID, TENANT_A_ID
+from app.core.redis import get_redis
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _clear_login_attempts_before_auth_test(client: AsyncClient):
+    """Keep auth Redis lockout state isolated between auth tests."""
+    redis_override = client._transport.app.dependency_overrides[get_redis]
+    async for redis in redis_override():
+        keys = await redis.keys("login_attempts:*")
+        if keys:
+            await redis.delete(*keys)
+        break
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +268,7 @@ async def test_old_refresh_token_is_revoked_after_rotation(client: AsyncClient, 
     refresh = await client.post("/api/v1/auth/refresh")
     assert refresh.status_code == 200
     new_refresh_token = client.cookies.get("refresh_token")
+    assert new_refresh_token != old_refresh_token
     
     # Intentar usar el refresh token anterior — debe estar revocado
     client.cookies.clear()
@@ -671,7 +684,7 @@ async def test_old_access_token_revoked_after_refresh(client: AsyncClient, seed_
     )
     assert login.status_code == 200
     old_access_token = login.json()["access_token"]
-    rt = client.cookies.get("refresh_token")
+    assert client.cookies.get("refresh_token") is not None
     
     # Refresh — el old access token debe quedar revocado
     refresh = await client.post(

@@ -1,0 +1,30 @@
+{
+	"subagents": {
+		"agentOverrides": {
+			"context-builder": {
+				"model": "opencode-go/minimax-m3"
+			},
+			"delegate": {
+				"model": "opencode-go/minimax-m3"
+			},
+			"oracle": {
+				"model": "opencode-go/minimax-m3"
+			},
+			"planner": {
+				"model": "opencode-go/minimax-m3"
+			},
+			"researcher": {
+				"model": "opencode-go/minimax-m3"
+			},
+			"reviewer": {
+				"model": "opencode-go/minimax-m3"
+			},
+			"scout": {
+				"model": "opencode-go/minimax-m3"
+			},
+			"worker": {
+				"model": "opencode-go/minimax-m3"
+			}
+		}
+	}
+}

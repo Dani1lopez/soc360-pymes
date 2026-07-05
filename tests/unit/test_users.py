@@ -322,6 +322,8 @@ class TestUserService:
 
         user = await service.get_user_by_email("user@example.com", db=mock_db)
 
+        called_stmt = mock_db.execute.call_args[0][0]
+        assert "lower(" in str(called_stmt.compile()).lower()
         assert user == mock_user
 
     @pytest.mark.asyncio

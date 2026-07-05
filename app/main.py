@@ -39,7 +39,14 @@ async def _consumer_loop(
                 for msg in pending:
                     from app.event_bus import EventBus
 
-                    EventBus._dispatch_event("auth.login", msg.get("data", {}), redis_client)
+                    raw_msg_id = msg["message_id"]
+                    msg_id = raw_msg_id.decode() if isinstance(raw_msg_id, bytes) else raw_msg_id
+                    await EventBus._dispatch_event(
+                        "auth.login",
+                        msg.get("data", {}),
+                        redis_client,
+                        message_id=msg_id,
+                    )
                     await consumer.ack(msg["message_id"])
                 await asyncio.sleep(1)
             except asyncio.CancelledError:

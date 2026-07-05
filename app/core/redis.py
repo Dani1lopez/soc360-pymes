@@ -37,18 +37,30 @@ async def get_redis_client() -> Redis:
 
 
 async def ping_redis() -> bool:
+    """Ping Redis using the singleton pool (no new TCP connection per call)."""
     redis = Redis(connection_pool=get_pool())
     try:
         return await redis.ping()
     finally:
-        await redis.aclose()
+        # Do NOT close the client — it shares the singleton pool.
+        # Closing would destroy the pool connections we want to reuse.
+        pass
 
 
 async def check_redis_healthy(redis: Redis) -> bool:
-    """Returns True if Redis is reachable, False otherwise."""
+    """Returns True if Redis is reachable, False otherwise.
+
+    Logs the error cause so operators can diagnose the failure
+    (ConnectionError vs TimeoutError vs ResponseError have different fixes).
+    """
     try:
         return await redis.ping()
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "redis_health_check_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
         return False
 
 

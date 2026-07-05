@@ -22,18 +22,20 @@ from fakeredis.aioredis import FakeRedis
 class TestEventBusDispatchRouting:
     """Validate _dispatch_event routes to correct handlers."""
 
-    def test_dispatch_unknown_event_type_logs_debug(self, caplog):
+    @pytest.mark.asyncio
+    async def test_dispatch_unknown_event_type_logs_debug(self, caplog):
         """_dispatch_event MUST log at debug level when no handler exists for event type."""
         from app.event_bus import EventBus
 
         caplog.clear()
         with caplog.at_level(0):  # capture all levels
             # Key requirement: unknown event type must NOT raise
-            EventBus._dispatch_event("auth.logout", {"user_id": "u1"})
+            await EventBus._dispatch_event("auth.logout", {"user_id": "u1"})
 
         # Verify no exception was raised (the key requirement)
 
-    def test_dispatch_auth_login_calls_handler(self, caplog):
+    @pytest.mark.asyncio
+    async def test_dispatch_auth_login_calls_handler(self, caplog):
         """_dispatch_event MUST call _handle_auth_login for 'auth.login' events."""
         from app.event_bus import EventBus
 
@@ -50,7 +52,7 @@ class TestEventBusDispatchRouting:
         }
 
         with caplog.at_level(logging.INFO, logger="app.event_bus"):
-            EventBus._dispatch_event("auth.login", data)
+            await EventBus._dispatch_event("auth.login", data)
 
         # Handler should have logged the auth.login event consumed
         assert any(
@@ -58,7 +60,8 @@ class TestEventBusDispatchRouting:
             for record in caplog.records
         )
 
-    def test_dispatch_handler_error_caught_and_logged(self, caplog):
+    @pytest.mark.asyncio
+    async def test_dispatch_handler_error_caught_and_logged(self, caplog):
         """_dispatch_event MUST catch handler errors and log warning, not raise.
 
         The handler itself is non-throwing (uses .get() with defaults).
@@ -85,7 +88,7 @@ class TestEventBusDispatchRouting:
             # Patch _handle_auth_login to raise — dispatch catches and moves to DLQ
             with patch.object(EventBus, "_handle_auth_login", side_effect=RuntimeError("handler boom")):
                 # Must NOT raise — error must be caught and DLQ logged
-                result = EventBus._dispatch_event("auth.login", bad_data)
+                result = await EventBus._dispatch_event("auth.login", bad_data)
 
         # Should have logged error about DLQ
         assert result is False  # DLQ'd
@@ -95,12 +98,13 @@ class TestEventBusDispatchRouting:
         )
         assert error_found, "Exhausted retries should produce an error log"
 
-    def test_dispatch_requires_event_type_arg(self):
+    @pytest.mark.asyncio
+    async def test_dispatch_requires_event_type_arg(self):
         """_dispatch_event MUST receive event_type as first argument."""
         from app.event_bus import EventBus
 
         # Must be callable with (event_type, data)
-        result = EventBus._dispatch_event("auth.login", {})
+        result = await EventBus._dispatch_event("auth.login", {})
         assert result is True  # Returns True on success (no handler = success)
 
     @pytest.mark.asyncio
@@ -127,7 +131,7 @@ class TestEventBusDispatchRouting:
         client = FakeRedis()
         try:
             with patch.object(EventBus, "_handle_auth_login", side_effect=RuntimeError("handler boom")):
-                result = EventBus._dispatch_event("auth.login", bad_data, redis_client=client)
+                result = await EventBus._dispatch_event("auth.login", bad_data, redis_client=client)
             assert result is False
 
             # The fix holds a strong reference to the task; drain it so we can
@@ -175,7 +179,7 @@ class TestEventBusDispatchRouting:
         caplog.clear()
         with caplog.at_level(logging.CRITICAL, logger="app.event_bus"):
             with patch.object(EventBus, "_handle_auth_login", side_effect=RuntimeError("boom")):
-                result = EventBus._dispatch_event("auth.login", bad_data, redis_client=None)
+                result = await EventBus._dispatch_event("auth.login", bad_data, redis_client=None)
 
         assert result is False
         assert any(
@@ -206,7 +210,7 @@ class TestEventBusDispatchRouting:
                     "_retry_count": settings.EVENT_MAX_RETRIES,
                 }
                 with patch.object(EventBus, "_handle_auth_login", side_effect=RuntimeError("boom")):
-                    EventBus._dispatch_event("auth.login", bad_data, redis_client=client)
+                    await EventBus._dispatch_event("auth.login", bad_data, redis_client=client)
                 gc.collect()
                 # Yield to let the event loop run the scheduled tasks.
                 await asyncio.sleep(0)
@@ -385,3 +389,283 @@ class TestEventConsumerPendingEdgeCases:
         pending = await consumer.read_pending()
         assert len(pending) == 0
         await client.aclose()
+class TestEventBusRetryCounterPersistence:
+    """Regression tests for issue #127 — retry counter was in-memory only.
+
+    Root cause: the retry count was mutated in a local `data` dict but never
+    persisted to Redis. A consumer restart (or another consumer in the same
+    group picking up the same message via XCLAIM) would re-read `data` from
+    the stream, see no `_retry_count`, and reset the counter to 0 — leading
+    to infinite retries and a DLQ path that was effectively unreachable.
+
+    Fix: persist the counter to a Redis HASH keyed by
+    `event_retry:{event_type}:{message_id}` with a TTL, so the counter
+    survives across consumer restarts and rebalances.
+    """
+
+    @pytest.mark.asyncio
+    async def test_retry_count_persisted_to_redis_hash(self):
+        """A failing handler must persist an incremented retry count in Redis."""
+        from app.event_bus import EventBus
+        from app.core.config import settings
+
+        client = FakeRedis()
+        try:
+            data = {"user_id": "u1"}
+            with patch.object(
+                EventBus, "_handle_auth_login",
+                side_effect=RuntimeError("boom"),
+            ):
+                with pytest.raises(RuntimeError):
+                    await EventBus._dispatch_event(
+                        "auth.login", data,
+                        redis_client=client, message_id="100-0",
+                    )
+
+            # HINCRBY wrote the field, EXPIRE set a TTL.
+            key = f"event_retry:auth.login:100-0"
+            assert (await client.hget(key, "retry_count")) == b"1"
+            ttl = await client.ttl(key)
+            assert 0 < ttl <= settings.EVENT_RETRY_TTL_SECONDS
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_retry_count_read_from_redis_across_calls(self):
+        """Subsequent dispatches with the same message_id read the persisted count.
+
+        This is the core issue #127 fix: the counter survives because it
+        is read from Redis, not from the local `data` dict.
+        """
+        from app.event_bus import EventBus
+
+        client = FakeRedis()
+        try:
+            data: dict = {"user_id": "u1"}
+            msg_id = "200-0"
+
+            # First call: counter starts at 0, increments to 1 (still under max=3).
+            with patch.object(
+                EventBus, "_handle_auth_login",
+                side_effect=RuntimeError("boom"),
+            ):
+                with pytest.raises(RuntimeError):
+                    await EventBus._dispatch_event(
+                        "auth.login", data,
+                        redis_client=client, message_id=msg_id,
+                    )
+
+            # Second call: SIMULATE a consumer restart — `data` dict is fresh
+            # with no `_retry_count` key. The persisted counter must still be
+            # read from Redis.
+            fresh_data: dict = {"user_id": "u1"}
+            assert _RETRY_COUNT_KEY not in fresh_data
+            with patch.object(
+                EventBus, "_handle_auth_login",
+                side_effect=RuntimeError("boom"),
+            ):
+                with pytest.raises(RuntimeError):
+                    await EventBus._dispatch_event(
+                        "auth.login", fresh_data,
+                        redis_client=client, message_id=msg_id,
+                    )
+
+            # Persisted counter is now 2 — proves the second call read from
+            # Redis, not from the empty fresh_data dict.
+            key = f"event_retry:auth.login:{msg_id}"
+            assert (await client.hget(key, "retry_count")) == b"2"
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_retry_count_survives_simulated_consumer_restart(self):
+        """The DLQ branch must be reached when a new consumer reads the same msg.
+
+        End-to-end test of the bug: dispatch 3 times (max retries = 3) with
+        a fresh `data` dict on each call, simulating 3 separate consumer
+        instances picking up the same Redis stream message. The 3rd call
+        must observe retry_count == EVENT_MAX_RETRIES and route to DLQ.
+        """
+        from app.event_bus import EventBus, drain_dlq_tasks
+        from app.core.config import settings
+
+        client = FakeRedis()
+        try:
+            msg_id = "300-0"
+            # Simulate 3 separate consumers picking up the same message
+            for attempt in range(settings.EVENT_MAX_RETRIES):
+                fresh_data: dict = {"user_id": f"u-{attempt}"}
+                with patch.object(
+                    EventBus, "_handle_auth_login",
+                    side_effect=RuntimeError("boom"),
+                ):
+                    with pytest.raises(RuntimeError):
+                        await EventBus._dispatch_event(
+                            "auth.login", fresh_data,
+                            redis_client=client, message_id=msg_id,
+                        )
+
+            # 4th call: retry_count is now 3 (== max), so this call routes
+            # to DLQ instead of re-raising.
+            with patch.object(
+                EventBus, "_handle_auth_login",
+                side_effect=RuntimeError("dlq-time"),
+            ):
+                result = await EventBus._dispatch_event(
+                    "auth.login", {"user_id": "u-final"},
+                    redis_client=client, message_id=msg_id,
+                )
+            assert result is False
+
+            await drain_dlq_tasks(timeout=2.0)
+            dlq_key = f"{settings.EVENT_STREAM_PREFIX}:dlq:auth.login"
+            entries = await client.xrange(dlq_key)
+            assert len(entries) == 1
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_retry_count_cleared_on_success(self):
+        """A successful handler must DEL the persistent counter."""
+        from app.event_bus import EventBus
+
+        client = FakeRedis()
+        try:
+            msg_id = "400-0"
+            data = {"user_id": "u"}
+
+            # First: fail once to create the counter.
+            with patch.object(
+                EventBus, "_handle_auth_login",
+                side_effect=RuntimeError("boom"),
+            ):
+                with pytest.raises(RuntimeError):
+                    await EventBus._dispatch_event(
+                        "auth.login", data,
+                        redis_client=client, message_id=msg_id,
+                    )
+            key = f"event_retry:auth.login:{msg_id}"
+            assert (await client.hget(key, "retry_count")) is not None
+
+            # Second: handler succeeds → counter must be cleared.
+            result = await EventBus._dispatch_event(
+                "auth.login", data,
+                redis_client=client, message_id=msg_id,
+            )
+            assert result is True
+            assert (await client.hget(key, "retry_count")) is None
+            assert await client.exists(key) == 0
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_retry_count_cleared_on_dlq(self):
+        """DLQ routing must DEL the persistent counter to prevent re-DLQ on recycled id."""
+        from app.event_bus import EventBus, drain_dlq_tasks
+        from app.core.config import settings
+
+        client = FakeRedis()
+        try:
+            msg_id = "500-0"
+
+            # Drive the counter to max by failing max-1 times.
+            for _ in range(settings.EVENT_MAX_RETRIES):
+                with patch.object(
+                    EventBus, "_handle_auth_login",
+                    side_effect=RuntimeError("boom"),
+                ):
+                    with pytest.raises(RuntimeError):
+                        await EventBus._dispatch_event(
+                            "auth.login", {"user_id": "u"},
+                            redis_client=client, message_id=msg_id,
+                        )
+            key = f"event_retry:auth.login:{msg_id}"
+            assert (await client.hget(key, "retry_count")) is not None
+
+            # One more failure pushes to DLQ; counter must be cleared.
+            with patch.object(
+                EventBus, "_handle_auth_login",
+                side_effect=RuntimeError("final"),
+            ):
+                result = await EventBus._dispatch_event(
+                    "auth.login", {"user_id": "u"},
+                    redis_client=client, message_id=msg_id,
+                )
+            assert result is False
+            await drain_dlq_tasks(timeout=2.0)
+            assert (await client.hget(key, "retry_count")) is None
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_no_persistence_when_message_id_missing(self):
+        """Backward compat: dispatch without message_id falls back to in-memory.
+
+        Existing tests pass only (event_type, data) and rely on the in-memory
+        data dict. This MUST still work.
+        """
+        from app.event_bus import EventBus
+        from app.core.config import settings
+
+        client = FakeRedis()
+        try:
+            data = {"user_id": "u", "_retry_count": 0}
+            with patch.object(
+                EventBus, "_handle_auth_login",
+                side_effect=RuntimeError("boom"),
+            ):
+                with pytest.raises(RuntimeError):
+                    await EventBus._dispatch_event("auth.login", data, redis_client=client)
+
+            # No persistent key was created (message_id was None).
+            assert await client.keys("event_retry:auth.login:*") == []
+            # In-memory data was updated instead.
+            assert data.get("_retry_count") == 1
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_retry_count_falls_back_to_in_memory_on_redis_error(self):
+        """If Redis hget raises, dispatch must fall back to the data dict."""
+        from app.event_bus import EventBus
+        from app.core.config import settings
+
+        # FakeRedis whose hget always raises to simulate a Redis hiccup.
+        class BrokenRedis(FakeRedis):
+            def __init__(self) -> None:
+                super().__init__()
+
+            async def hget(self, *args, **kwargs):  # type: ignore[override]
+                raise ConnectionError("simulated")
+
+            async def hincrby(self, *args, **kwargs):  # type: ignore[override]
+                raise ConnectionError("simulated")
+
+            async def expire(self, *args, **kwargs):  # type: ignore[override]
+                raise ConnectionError("simulated")
+
+            async def delete(self, *args, **kwargs):  # type: ignore[override]
+                return 0
+
+        client = BrokenRedis()
+        try:
+            data = {"user_id": "u", "_retry_count": 1}
+            # Without persistence, the in-memory _retry_count = 1 is used.
+            # 1 < 3 (max), so this re-raises (still retryable).
+            with patch.object(
+                EventBus, "_handle_auth_login",
+                side_effect=RuntimeError("boom"),
+            ):
+                with pytest.raises(RuntimeError):
+                    await EventBus._dispatch_event(
+                        "auth.login", data,
+                        redis_client=client, message_id="600-0",
+                    )
+            # In-memory counter was incremented to 2.
+            assert data.get("_retry_count") == 2
+        finally:
+            await client.aclose()
+
+
+# Module-level constants imported by the regression tests
+from app.event_bus import _RETRY_COUNT_KEY  # noqa: E402

@@ -1,0 +1,55 @@
+# OpenSpec Configuration — soc360-pymes
+# Generated: 2026-06-21
+# Mode: hybrid (Engram + files)
+
+context: |
+  SOC as a Service for PyMEs. Modular monolith with FastAPI + PostgreSQL + Redis.
+  Auth via JWT with refresh/denylist. Event bus on Redis Streams.
+  LangGraph agent pipeline for scan enrichment. Celery workers for async tasks.
+  Multi-tenant with PostgreSQL Row-Level Security.
+
+strict_tdd: true
+
+testing:
+  runner: pytest
+  runner_version: "8.3.4"
+  asyncio_mode: auto
+  layers:
+    unit:
+      available: true
+      tool: pytest + fakeredis
+      paths: [tests/unit/]
+    integration:
+      available: true
+      tool: pytest + real PostgreSQL via Alembic
+      paths: [tests/integration/]
+      marker: integration
+    api:
+      available: true
+      tool: httpx AsyncClient + dependency overrides
+      paths: [tests/api/]
+    e2e:
+      available: false
+  coverage:
+    available: false
+  quality:
+    linter: ruff
+    type_checker: mypy
+    formatter: ruff
+
+phases:
+  proposal:
+    strict: true
+    require_scope: true
+  spec:
+    require_scenarios: true
+  design:
+    require_architecture: true
+  tasks:
+    require_effort: true
+  apply:
+    require_tests: true
+  verify:
+    require_all_tests_pass: true
+  archive:
+    require_delta_sync: true

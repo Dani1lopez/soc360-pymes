@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from typing import Callable, ClassVar, Protocol, runtime_checkable
@@ -40,6 +41,14 @@ def _redact_credentials(text: str) -> str:
     # Redact common API key prefixes with their values
     text = _API_KEY_PATTERN.sub(r"\1[REDACTED]", text)
     return text
+
+
+# Retry configuration for transient LLM errors (issue #137).
+# 429 (rate limit) and 5xx (server errors) are retried with exponential backoff.
+# 4xx (except 429) are NOT retried — they are client errors.
+LLM_RETRY_MAX_ATTEMPTS: int = 3
+LLM_RETRY_BACKOFF_BASE_SECONDS: float = 1.0
+LLM_RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
 # Singleton cache: one provider instance per provider name, per process.
 _llm_singletons: dict[str, "LLMProvider"] = {}
@@ -240,7 +249,194 @@ class LLMProvider(Protocol):
         ...
 
 
-class OpenAICompatProvider:
+class _BaseHTTPProvider:
+    """Shared HTTP request logic with retry/backoff for transient errors (issue #137).
+
+    Subclasses implement:
+    - ``_build_request()`` → returns (url, headers, payload)
+    - ``_parse_response(data)`` → extracts the text content from the JSON response
+
+    The base class handles:
+    - HTTP transport (httpx.AsyncClient)
+    - Timeout handling
+    - Status code mapping to exceptions
+    - Retry with exponential backoff for 429 and 5xx
+    - Logging with credential redaction
+    """
+
+    PROVIDER_NAME: ClassVar[str] = "BaseHTTPProvider"
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        model: str,
+        timeout: int = 30,
+    ) -> None:
+        self._api_key = api_key
+        self._model = model
+        self._timeout = timeout
+
+    def _build_request(
+        self,
+        prompt: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> tuple[str, dict[str, str], dict[str, object]]:
+        """Return (url, headers, payload) for the HTTP POST."""
+        raise NotImplementedError
+
+    def _parse_response(self, data: dict) -> str:
+        """Extract the text content from the parsed JSON response."""
+        raise NotImplementedError
+
+    async def complete(
+        self,
+        prompt: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        """Send a prompt and return the raw text response.
+
+        Retries up to ``LLM_RETRY_MAX_ATTEMPTS`` times on 429 and 5xx
+        with exponential backoff (1s, 2s, 4s by default).
+
+        Raises
+        ------
+        LLMTimeoutError
+            When the request exceeds ``self._timeout``.
+        LLMRateLimitError
+            When the provider returns HTTP 429 after all retries exhausted.
+        LLMContentFilterError
+            When the provider returns HTTP 451.
+        LLMResponseError
+            For any other non-OK response or parse failure.
+        LLMError
+            For transport-level failures.
+        """
+        url, headers, payload = self._build_request(prompt, max_tokens, temperature)
+
+        _llm_logger.debug(
+            "LLM call: provider=%s model=%s endpoint=%s",
+            self.PROVIDER_NAME,
+            self._model,
+            _redact_credentials(url),
+        )
+
+        last_error: Exception | None = None
+        for attempt in range(1, LLM_RETRY_MAX_ATTEMPTS + 1):
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout)) as client:
+                    response = await client.post(url, json=payload, headers=headers)
+            except httpx.TimeoutException:
+                _llm_logger.warning(
+                    "LLM timeout: provider=%s timeout=%ss",
+                    self.PROVIDER_NAME,
+                    self._timeout,
+                )
+                raise LLMTimeoutError(
+                    f"Request timed out after {self._timeout}s"
+                ) from None
+            except httpx.HTTPError as exc:
+                _llm_logger.warning(
+                    "LLM HTTP error: provider=%s error=%s",
+                    self.PROVIDER_NAME,
+                    exc,
+                )
+                raise LLMError(f"HTTP error during request: {exc}") from exc
+
+            # 451 Content Filtered — never retry
+            if response.status_code == 451:
+                _llm_logger.warning(
+                    "LLM content filtered: provider=%s status=451",
+                    self.PROVIDER_NAME,
+                )
+                raise LLMContentFilterError(
+                    "Content filtered by provider (451)"
+                ) from None
+
+            # 429 Rate Limit — retry with backoff
+            if response.status_code == 429:
+                if attempt < LLM_RETRY_MAX_ATTEMPTS:
+                    wait = LLM_RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                    _llm_logger.warning(
+                        "LLM rate limit: provider=%s status=429 retrying in %.1fs (attempt %d/%d)",
+                        self.PROVIDER_NAME,
+                        wait,
+                        attempt,
+                        LLM_RETRY_MAX_ATTEMPTS,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                # Exhausted retries
+                _llm_logger.warning(
+                    "LLM rate limit: provider=%s status=429 retries exhausted",
+                    self.PROVIDER_NAME,
+                )
+                raise LLMRateLimitError(
+                    "Rate limit hit (429) — retries exhausted"
+                ) from None
+
+            # 5xx Server Error — retry with backoff
+            if response.status_code in LLM_RETRYABLE_STATUS_CODES:
+                if attempt < LLM_RETRY_MAX_ATTEMPTS:
+                    wait = LLM_RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                    _llm_logger.warning(
+                        "LLM server error: provider=%s status=%d retrying in %.1fs (attempt %d/%d)",
+                        self.PROVIDER_NAME,
+                        response.status_code,
+                        wait,
+                        attempt,
+                        LLM_RETRY_MAX_ATTEMPTS,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                # Exhausted retries
+                _llm_logger.warning(
+                    "LLM server error: provider=%s status=%d retries exhausted",
+                    self.PROVIDER_NAME,
+                    response.status_code,
+                )
+                raise LLMResponseError(
+                    f"Provider returned {response.status_code} after {LLM_RETRY_MAX_ATTEMPTS} attempts: {response.text[:200]}"
+                ) from None
+
+            # 4xx Client Error (not 429, not 451) — never retry
+            if not response.is_success:
+                _llm_logger.warning(
+                    "LLM non-success response: provider=%s status=%s",
+                    self.PROVIDER_NAME,
+                    response.status_code,
+                )
+                raise LLMResponseError(
+                    f"Provider returned {response.status_code}: {response.text[:200]}"
+                ) from None
+
+            # Success — parse response
+            try:
+                data = response.json()
+                content = self._parse_response(data)
+            except Exception:
+                _llm_logger.warning(
+                    "LLM parse error: provider=%s",
+                    self.PROVIDER_NAME,
+                )
+                raise LLMResponseError(
+                    f"Could not parse response body: {response.text[:200]}"
+                ) from None
+
+            _llm_logger.debug(
+                "LLM success: provider=%s model=%s",
+                self.PROVIDER_NAME,
+                self._model,
+            )
+            return content
+
+        # Unreachable — keeps type-checkers happy
+        raise LLMError("Unexpected: retry loop exited without returning or raising")
+
+
+class OpenAICompatProvider(_BaseHTTPProvider):
     """
     Async provider for OpenAI-compatible endpoints.
 
@@ -249,6 +445,7 @@ class OpenAICompatProvider:
     ``/v1/chat/completions`` call shape.
     """
 
+    PROVIDER_NAME: ClassVar[str] = "OpenAICompatProvider"
     DEFAULT_BASE_URL: ClassVar[str] = "https://api.openai.com/v1"
     ENDPOINT: ClassVar[str] = "/chat/completions"
 
@@ -273,33 +470,15 @@ class OpenAICompatProvider:
         model: str,
         timeout: int = 30,
     ) -> None:
-        self._api_key = api_key
+        super().__init__(api_key, model=model, timeout=timeout)
         self._base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
-        self._model = model
-        self._timeout = timeout
 
-    async def complete(
+    def _build_request(
         self,
         prompt: str,
         max_tokens: int,
         temperature: float,
-    ) -> str:
-        """
-        Send a prompt and return the raw text response.
-
-        Raises
-        ------
-        LLMTimeoutError
-            When the request exceeds ``self._timeout``.
-        LLMRateLimitError
-            When the provider returns HTTP 429.
-        LLMContentFilterError
-            When the provider returns HTTP 451.
-        LLMResponseError
-            For any other non-OK response.
-        LLMError
-            For transport-level failures.
-        """
+    ) -> tuple[str, dict[str, str], dict[str, object]]:
         url = f"{self._base_url}{self.ENDPOINT}"
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -311,58 +490,13 @@ class OpenAICompatProvider:
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        return url, headers, payload
 
-        _llm_logger.debug(
-            "LLM call: provider=OpenAICompatProvider model=%s endpoint=%s",
-            self._model,
-            _redact_credentials(url),
-        )
-
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout)) as client:
-                response = await client.post(url, json=payload, headers=headers)
-        except httpx.TimeoutException:
-            _llm_logger.warning("LLM timeout: provider=OpenAICompatProvider timeout=%ss", self._timeout)
-            raise LLMTimeoutError(
-                f"Request timed out after {self._timeout}s"
-            ) from None
-        except httpx.HTTPError as exc:
-            _llm_logger.warning("LLM HTTP error: provider=OpenAICompatProvider error=%s", exc)
-            raise LLMError(f"HTTP error during request: {exc}") from exc
-
-        if response.status_code == 429:
-            _llm_logger.warning("LLM rate limit: provider=OpenAICompatProvider status=429")
-            raise LLMRateLimitError(
-                "Rate limit hit (429) — not retried automatically"
-            ) from None
-        if response.status_code == 451:
-            _llm_logger.warning("LLM content filtered: provider=OpenAICompatProvider status=451")
-            raise LLMContentFilterError(
-                "Content filtered by provider (451)"
-            ) from None
-        if not response.is_success:
-            _llm_logger.warning(
-                "LLM non-success response: provider=OpenAICompatProvider status=%s",
-                response.status_code,
-            )
-            raise LLMResponseError(
-                f"Provider returned {response.status_code}: {response.text[:200]}"
-            ) from None
-
-        try:
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
-        except Exception:
-            _llm_logger.warning("LLM parse error: provider=OpenAICompatProvider")
-            raise LLMResponseError(
-                f"Could not parse response body: {response.text[:200]}"
-            ) from None
-
-        _llm_logger.debug("LLM success: provider=OpenAICompatProvider model=%s", self._model)
-        return content
+    def _parse_response(self, data: dict) -> str:
+        return data["choices"][0]["message"]["content"]
 
 
-class AnthropicProvider:
+class AnthropicProvider(_BaseHTTPProvider):
     """
     Async provider for Anthropic's Claude API.
 
@@ -370,6 +504,7 @@ class AnthropicProvider:
     ``anthropic-version: 2023-06-01`` header.
     """
 
+    PROVIDER_NAME: ClassVar[str] = "AnthropicProvider"
     BASE_URL: ClassVar[str] = "https://api.anthropic.com/v1/messages"
     API_VERSION: ClassVar[str] = "2023-06-01"
 
@@ -381,33 +516,15 @@ class AnthropicProvider:
         timeout: int = 30,
         base_url: str | None = None,
     ) -> None:
-        self._api_key = api_key
-        self._model = model
-        self._timeout = timeout
+        super().__init__(api_key, model=model, timeout=timeout)
         self._base_url = base_url or self.BASE_URL
 
-    async def complete(
+    def _build_request(
         self,
         prompt: str,
         max_tokens: int,
         temperature: float,
-    ) -> str:
-        """
-        Send a prompt and return the raw text response.
-
-        Raises
-        ------
-        LLMTimeoutError
-            When the request exceeds ``self._timeout``.
-        LLMRateLimitError
-            When the provider returns HTTP 429.
-        LLMContentFilterError
-            When the provider returns HTTP 451.
-        LLMResponseError
-            For any other non-OK response.
-        LLMError
-            For transport-level failures.
-        """
+    ) -> tuple[str, dict[str, str], dict[str, object]]:
         headers = {
             "x-api-key": self._api_key,
             "anthropic-version": self.API_VERSION,
@@ -419,64 +536,20 @@ class AnthropicProvider:
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        return self._base_url, headers, payload
 
-        _llm_logger.debug(
-            "LLM call: provider=Anthropic model=%s endpoint=%s",
-            self._model,
-            _redact_credentials(self._base_url),
-        )
-
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout)) as client:
-                response = await client.post(self._base_url, json=payload, headers=headers)
-        except httpx.TimeoutException:
-            _llm_logger.warning("LLM timeout: provider=Anthropic timeout=%ss", self._timeout)
-            raise LLMTimeoutError(
-                f"Request timed out after {self._timeout}s"
-            ) from None
-        except httpx.HTTPError as exc:
-            _llm_logger.warning("LLM HTTP error: provider=Anthropic error=%s", exc)
-            raise LLMError(f"HTTP error during request: {exc}") from exc
-
-        if response.status_code == 429:
-            _llm_logger.warning("LLM rate limit: provider=Anthropic status=429")
-            raise LLMRateLimitError(
-                "Rate limit hit (429) — not retried automatically"
-            ) from None
-        if response.status_code == 451:
-            _llm_logger.warning("LLM content filtered: provider=Anthropic status=451")
-            raise LLMContentFilterError(
-                "Content filtered by provider (451)"
-            ) from None
-        if not response.is_success:
-            _llm_logger.warning(
-                "LLM non-success response: provider=Anthropic status=%s",
-                response.status_code,
-            )
-            raise LLMResponseError(
-                f"Provider returned {response.status_code}: {response.text[:200]}"
-            ) from None
-
-        try:
-            data = response.json()
-            content = data["content"][0]["text"]
-        except Exception:
-            _llm_logger.warning("LLM parse error: provider=Anthropic")
-            raise LLMResponseError(
-                f"Could not parse response body: {response.text[:200]}"
-            ) from None
-
-        _llm_logger.debug("LLM success: provider=Anthropic model=%s", self._model)
-        return content
+    def _parse_response(self, data: dict) -> str:
+        return data["content"][0]["text"]
 
 
-class GeminiProvider:
+class GeminiProvider(_BaseHTTPProvider):
     """
     Async provider for Google Gemini models via the REST API.
 
     Uses the ``/v1beta/models/{model}:generateContent`` endpoint.
     """
 
+    PROVIDER_NAME: ClassVar[str] = "GeminiProvider"
     BASE_URL: ClassVar[str] = "https://generativelanguage.googleapis.com/v1beta"
 
     def __init__(
@@ -487,31 +560,15 @@ class GeminiProvider:
         timeout: int = 30,
         base_url: str | None = None,
     ) -> None:
-        self._api_key = api_key
-        self._model = model
-        self._timeout = timeout
+        super().__init__(api_key, model=model, timeout=timeout)
         self._base_url = base_url or self.BASE_URL
 
-    async def complete(
+    def _build_request(
         self,
         prompt: str,
         max_tokens: int,
         temperature: float,
-    ) -> str:
-        """
-        Send a prompt and return the raw text response.
-
-        Raises
-        ------
-        LLMTimeoutError
-            When the request exceeds ``self._timeout``.
-        LLMRateLimitError
-            When the provider returns HTTP 429.
-        LLMResponseError
-            For any other non-OK response.
-        LLMError
-            For transport-level failures.
-        """
+    ) -> tuple[str, dict[str, str], dict[str, object]]:
         url = f"{self._base_url}/models/{self._model}:generateContent"
         headers = {
             "x-goog-api-key": self._api_key,
@@ -524,55 +581,10 @@ class GeminiProvider:
                 "temperature": temperature,
             },
         }
+        return url, headers, payload
 
-        _llm_logger.debug(
-            "LLM call: provider=Gemini model=%s endpoint=%s",
-            self._model,
-            _redact_credentials(url),
-        )
-
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout)) as client:
-                response = await client.post(url, json=payload, headers=headers)
-        except httpx.TimeoutException:
-            _llm_logger.warning("LLM timeout: provider=Gemini timeout=%ss", self._timeout)
-            raise LLMTimeoutError(
-                f"Request timed out after {self._timeout}s"
-            ) from None
-        except httpx.HTTPError as exc:
-            _llm_logger.warning("LLM HTTP error: provider=Gemini error=%s", exc)
-            raise LLMError(f"HTTP error during request: {exc}") from exc
-
-        if response.status_code == 429:
-            _llm_logger.warning("LLM rate limit: provider=Gemini status=429")
-            raise LLMRateLimitError(
-                "Rate limit hit (429) — not retried automatically"
-            ) from None
-        if response.status_code == 451:
-            _llm_logger.warning("LLM content filtered: provider=Gemini status=451")
-            raise LLMContentFilterError(
-                "Content filtered by provider (451)"
-            ) from None
-        if not response.is_success:
-            _llm_logger.warning(
-                "LLM non-success response: provider=Gemini status=%s",
-                response.status_code,
-            )
-            raise LLMResponseError(
-                f"Provider returned {response.status_code}: {response.text[:200]}"
-            ) from None
-
-        try:
-            data = response.json()
-            content = data["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception:
-            _llm_logger.warning("LLM parse error: provider=Gemini")
-            raise LLMResponseError(
-                f"Could not parse response body: {response.text[:200]}"
-            ) from None
-
-        _llm_logger.debug("LLM success: provider=Gemini model=%s", self._model)
-        return content
+    def _parse_response(self, data: dict) -> str:
+        return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
 class MockLLMProvider:

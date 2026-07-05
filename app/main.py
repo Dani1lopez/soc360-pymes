@@ -91,6 +91,25 @@ async def lifespan(app: FastAPI):
     #Inicialización de servicios al arrancar
     logger.info("soc360.startup", environment=settings.ENVIRONMENT)
 
+    # Guard: MockLLMProvider must never run in production (issue #139).
+    # If LLM_PROVIDER=mock accidentally lands in prod, the system would
+    # "work" but return fake vulnerability analysis — undetectable without
+    # this explicit check.
+    if settings.ENVIRONMENT == "production" and settings.LLM_PROVIDER == "mock":
+        raise RuntimeError(
+            "MockLLMProvider is not allowed in production. "
+            "Set LLM_PROVIDER to a real provider (groq, openai, anthropic, etc.)."
+        )
+
+    # Log the active LLM provider at startup for operational visibility.
+    from app.core.llm import get_llm_provider
+    active_provider = get_llm_provider()
+    logger.warning(
+        "soc360.llm_provider_active",
+        provider=type(active_provider).__name__,
+        provider_name=settings.LLM_PROVIDER,
+    )
+
     #Verificar Redis — retry on transient blips (issue #128)
     if not await ping_redis_with_retry(
         max_attempts=settings.REDIS_STARTUP_MAX_ATTEMPTS,

@@ -222,14 +222,14 @@ async def deactivate_tenant(
     user_ids = (await db.scalars(
         select(User.id).where(User.tenant_id == tenant_id)
     )).all()
-    await asyncio.gather(*[
-        revoke_all_user_access_tokens(
-            user_id=str(uid),
-            redis=redis,
-            ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        )
-        for uid in user_ids
-    ])
+    
+    # Use batch revocation to reduce O(u) Redis pipelines to O(1) (issue #104)
+    from app.core.security import revoke_all_user_access_tokens_batch
+    await revoke_all_user_access_tokens_batch(
+        user_ids=[str(uid) for uid in user_ids],
+        redis=redis,
+        ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
 
     await db.flush()
     await db.refresh(tenant)

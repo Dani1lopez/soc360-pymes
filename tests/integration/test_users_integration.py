@@ -104,7 +104,7 @@ async def test_admin_can_create_viewer_analyst_but_not_admin(
 async def test_admin_cannot_create_superadmin(
     client: AsyncClient, admin_a_headers, seed_data
 ):
-    """Admin no puede crear superadmin."""
+    """Admin cannot create a superadmin through the public user endpoint."""
     resp = await client.post(
         "/api/v1/users/",
         json={
@@ -117,7 +117,7 @@ async def test_admin_cannot_create_superadmin(
         },
         headers=admin_a_headers,
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 422
 
 
 async def test_analyst_cannot_create_any_user(
@@ -413,8 +413,9 @@ async def test_hierarchy_enforcement_complete(
     seed_data,
 ):
     """Verificacion completa de la jerarquia de roles."""
-    # Superadmin puede crear cualquier rol
-    assert await _can_create_user(client, superadmin_headers, "superadmin") is True
+    # Superadmin can create tenant-scoped roles through the public endpoint.
+    # Superadmin creation is internal-only and rejected at schema validation.
+    assert await _can_create_user(client, superadmin_headers, "superadmin") is False
     assert await _can_create_user(client, superadmin_headers, "admin") is True
     assert await _can_create_user(client, superadmin_headers, "analyst") is True
     

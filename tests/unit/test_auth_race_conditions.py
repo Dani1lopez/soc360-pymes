@@ -38,8 +38,11 @@ class TestSessionCapLock:
     @pytest.mark.asyncio
     async def test_create_refresh_token_revokes_oldest_when_at_cap(self):
         """At MAX_ACTIVE_SESSIONS, oldest token is revoked and a new one added."""
-        mock_db = AsyncMock()
-        mock_db.in_transaction.return_value = True
+        mock_db = MagicMock()
+        # in_transaction is SYNC on AsyncSession — must NOT be an AsyncMock.
+        mock_db.in_transaction = MagicMock(return_value=True)
+        # execute is async — must be an AsyncMock.
+        mock_db.execute = AsyncMock()
 
         oldest = MagicMock()
         oldest.revoked_at = None
@@ -64,8 +67,11 @@ class TestSessionCapLock:
     @pytest.mark.asyncio
     async def test_create_refresh_token_allows_new_token_when_under_cap(self):
         """Under cap, no revocation happens and a new token is added."""
-        mock_db = AsyncMock()
-        mock_db.in_transaction.return_value = True
+        mock_db = MagicMock()
+        # in_transaction is SYNC on AsyncSession — must NOT be an AsyncMock.
+        mock_db.in_transaction = MagicMock(return_value=True)
+        # execute is async — must be an AsyncMock.
+        mock_db.execute = AsyncMock()
 
         # Return count < MAX_ACTIVE_SESSIONS (no oldest query needed)
         mock_db.scalar = AsyncMock(return_value=MAX_ACTIVE_SESSIONS - 2)
@@ -117,8 +123,11 @@ class TestSessionCapLock:
         def tracking_add(token):
             shared_count[0] += 1
 
-        mock_db = AsyncMock()
-        mock_db.in_transaction.return_value = True
+        mock_db = MagicMock()
+        # in_transaction is SYNC on AsyncSession — must NOT be an AsyncMock.
+        mock_db.in_transaction = MagicMock(return_value=True)
+        # execute is async — must be an AsyncMock.
+        mock_db.execute = AsyncMock()
         mock_db.scalar = AsyncMock(side_effect=tracking_scalar)
         mock_db.add = tracking_add
 

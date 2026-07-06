@@ -122,14 +122,7 @@ async def update_tenant(
     db: AsyncSession,
     redis: Redis,
 ) -> Tenant:
-    """Actualiza el tenant.
-    
-    Note: When reactivating a tenant (is_active False → True), individual user
-    states are NOT affected. Users that were manually deactivated before the
-    tenant suspension remain deactivated. This preserves the security principle
-    of least privilege and prevents accidental reactivation of users who were
-    deactivated for security reasons (credential theft, termination, abuse).
-    """
+    """Actualiza el tenant"""
     tenant = await get_tenant_by_id(tenant_id, db)
     if tenant is None:
         raise TenantError("Tenant no encontrado", status_code=404)
@@ -141,6 +134,13 @@ async def update_tenant(
         "is_active" in update_data
         and update_data["is_active"] is False
         and tenant.is_active is True
+    )
+
+    # Detectar transición de inactivo → activo para reactivar usuarios del tenant
+    is_reactivating = (
+        "is_active" in update_data
+        and update_data["is_active"] is True
+        and tenant.is_active is False
     )
 
     if "name" in update_data:
@@ -165,6 +165,13 @@ async def update_tenant(
         tenant.settings = TenantSettings.model_validate(merged).model_dump()
 
     await db.flush()
+
+    if is_reactivating:
+        await db.execute(
+            update(User)
+            .where(User.tenant_id == tenant_id)
+            .values(is_active=True)
+        )
 
     # Revocar tokens solo si hubo transición True → False
     if is_deactivating:
@@ -222,14 +229,14 @@ async def deactivate_tenant(
     user_ids = (await db.scalars(
         select(User.id).where(User.tenant_id == tenant_id)
     )).all()
-    
-    # Use batch revocation to reduce O(u) Redis pipelines to O(1) (issue #104)
-    from app.core.security import revoke_all_user_access_tokens_batch
-    await revoke_all_user_access_tokens_batch(
-        user_ids=[str(uid) for uid in user_ids],
-        redis=redis,
-        ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-    )
+    await asyncio.gather(*[
+        revoke_all_user_access_tokens(
+            user_id=str(uid),
+            redis=redis,
+            ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        )
+        for uid in user_ids
+    ])
 
     await db.flush()
     await db.refresh(tenant)

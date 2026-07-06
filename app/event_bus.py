@@ -436,6 +436,52 @@ class EventConsumer:
                 pass
         return result
 
+    async def read_new(self, block: int = 5000) -> list[dict]:
+        """Read new (undelivered) messages using XREADGROUP with blocking.
+
+        Uses XREADGROUP with '>' to read only new messages (never delivered
+        before to any consumer in the group). Blocks for up to `block`
+        milliseconds waiting for new messages, replacing the old busy-poll
+        pattern (issue #133).
+
+        Args:
+            block: Maximum milliseconds to block waiting for messages.
+                   Defaults to 5000 (5 seconds).
+
+        Returns:
+            List of dicts, each containing:
+              - "message_id": bytes
+              - "data": dict with event fields
+            Returns an empty list if no messages available within the timeout.
+        """
+        await self._ensure_group_exists()
+        stream_key = self._stream_key()
+
+        result = await self.redis_client.xreadgroup(
+            self.group_name,
+            self.consumer_name,
+            {stream_key: ">"},
+            count=10,
+            block=block,
+        )
+
+        if not result:
+            return []
+
+        messages: list[dict] = []
+        for _stream_name, stream_messages in result:
+            for msg_id, fields in stream_messages:
+                str_fields = {
+                    k.decode() if isinstance(k, bytes) else k:
+                    v.decode() if isinstance(v, bytes) else v
+                    for k, v in fields.items()
+                }
+                messages.append({
+                    "message_id": msg_id if isinstance(msg_id, bytes) else msg_id.encode(),
+                    "data": str_fields,
+                })
+        return messages
+
     async def reconnect_and_resume(self) -> list[dict]:
         """Reconnect to Redis and resume from last acknowledged position.
 

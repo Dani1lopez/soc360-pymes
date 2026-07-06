@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str
     POSTGRES_DB: str
+    # Per-connection safety nets (issue #134) — prevent runaway queries and
+    # indefinite lock waits from starving the pool.
+    DB_STATEMENT_TIMEOUT_MS: int = 30_000
+    DB_LOCK_TIMEOUT_MS: int = 5_000
     
     # JWT
     JWT_ALGORITHM: str = "HS256"
@@ -147,6 +151,16 @@ class Settings(BaseSettings):
         if v.lower() not in _PROVIDER_NAMES:
             raise ValueError(f"LLM_PROVIDER debe ser uno de: {sorted(_PROVIDER_NAMES)}")
         return v.lower()
+
+    @field_validator("DB_STATEMENT_TIMEOUT_MS", "DB_LOCK_TIMEOUT_MS")
+    @classmethod
+    def db_timeout_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(
+                "DB timeout values must be positive integers (milliseconds); "
+                "PostgreSQL treats 0 as 'disabled', which defeats the safety net"
+            )
+        return v
 
     @model_validator(mode="after")
     def groq_key_required_for_groq(self) -> Settings:

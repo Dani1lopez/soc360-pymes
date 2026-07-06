@@ -55,8 +55,15 @@ async def redis_client() -> Redis:
     if not await _redis_is_available():
         pytest.skip("Redis not available — E2E tests require a running Redis instance")
     client = Redis.from_url(settings.REDIS_URL, decode_responses=False)
+    # Cleanup BEFORE test to ensure clean state
+    try:
+        keys = await client.keys("events:*")
+        if keys:
+            await client.delete(*keys)
+    except Exception:
+        pass
     yield client
-    # Cleanup: flush test keys
+    # Cleanup AFTER test
     try:
         keys = await client.keys("events:*")
         if keys:
@@ -95,6 +102,17 @@ def sample_event() -> AuthLoginEvent:
 @pytest.mark.integration
 class TestEventBusE2E:
     """End-to-end event bus tests with real Redis."""
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _cleanup_streams(self, redis_client: Redis):
+        """Ensure clean Redis streams before each test."""
+        keys = await redis_client.keys("events:*")
+        if keys:
+            await redis_client.delete(*keys)
+        yield
+        keys = await redis_client.keys("events:*")
+        if keys:
+            await redis_client.delete(*keys)
 
     async def test_publish_and_consume(
         self, event_bus: EventBus, redis_client: Redis, sample_event: AuthLoginEvent

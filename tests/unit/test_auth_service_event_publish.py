@@ -30,6 +30,8 @@ class TestAuthLoginEventPublish:
         mock_user.role = "admin"
         mock_user.is_superadmin = False
         mock_user.is_active = True
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
 
         # Mock DB and Redis
         mock_db = AsyncMock()
@@ -46,7 +48,7 @@ class TestAuthLoginEventPublish:
         mock_event_bus.publish.side_effect = mock_publish
 
         with patch.object(service, "_check_account_lockout", return_value=None):
-            with patch.object(service, "_get_active_user", return_value=mock_user):
+            with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):
                 with patch("app.modules.auth.service.verify_password", return_value=True):
                     with patch.object(service, "_check_tenant_active", return_value=None):
                         with patch.object(service, "_clear_login_attempts", return_value=None):
@@ -101,6 +103,8 @@ class TestAuthLoginEventPublish:
         mock_user.role = "user"
         mock_user.is_superadmin = False
         mock_user.is_active = True
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
 
         mock_db = AsyncMock()
         mock_redis = AsyncMock()
@@ -115,7 +119,7 @@ class TestAuthLoginEventPublish:
         mock_event_bus.publish.side_effect = mock_publish
 
         with patch.object(service, "_check_account_lockout", return_value=None):
-            with patch.object(service, "_get_active_user", return_value=mock_user):
+            with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):
                 with patch("app.modules.auth.service.verify_password", return_value=True):
                     with patch.object(service, "_check_tenant_active", return_value=None):
                         with patch.object(service, "_clear_login_attempts", return_value=None):
@@ -161,6 +165,8 @@ class TestAuthLoginEventPublish:
         mock_user.role = "admin"
         mock_user.is_superadmin = False
         mock_user.is_active = True
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
 
         mock_db = AsyncMock()
         mock_redis = AsyncMock()
@@ -170,7 +176,7 @@ class TestAuthLoginEventPublish:
         mock_event_bus.publish.side_effect = Exception("Redis connection failed")
 
         with patch.object(service, "_check_account_lockout", return_value=None):
-            with patch.object(service, "_get_active_user", return_value=mock_user):
+            with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):
                 with patch("app.modules.auth.service.verify_password", return_value=True):
                     with patch.object(service, "_check_tenant_active", return_value=None):
                         with patch.object(service, "_clear_login_attempts", return_value=None):
@@ -213,6 +219,8 @@ class TestAuthLoginEventPublish:
         mock_user = MagicMock()
         mock_user.is_active = True
         mock_user.hashed_password = "hashed_password"
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
 
         mock_db = AsyncMock()
         mock_redis = AsyncMock()
@@ -220,7 +228,7 @@ class TestAuthLoginEventPublish:
         mock_event_bus = AsyncMock(spec=EventBus)
 
         with patch.object(service, "_check_account_lockout", return_value=None):
-            with patch.object(service, "_get_active_user", return_value=mock_user):
+            with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):
                 with patch(
                     "app.modules.auth.service.verify_password", return_value=False
                 ):

@@ -56,6 +56,8 @@ class TestAuthService:
         mock_user.role = "admin"
         mock_user.is_superadmin = False
         mock_user.is_active = True
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
         
         # Mock DB and Redis
         mock_db = AsyncMock()
@@ -63,7 +65,7 @@ class TestAuthService:
         
         # Mock the helper functions
         with patch.object(service, '_check_account_lockout', return_value=None):
-            with patch.object(service, '_get_active_user', return_value=mock_user):
+            with patch.object(service, '_get_active_user', return_value=(mock_user, mock_tenant)):
                 with patch('app.modules.auth.service.verify_password', return_value=True):
                     with patch.object(service, '_check_tenant_active', return_value=None):
                         with patch.object(service, '_clear_login_attempts', return_value=None):
@@ -89,12 +91,14 @@ class TestAuthService:
         mock_user = MagicMock()
         mock_user.is_active = True
         mock_user.hashed_password = "hashed_password"
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
         
         mock_db = AsyncMock()
         mock_redis = AsyncMock()
         
         with patch.object(service, '_check_account_lockout', return_value=None):
-            with patch.object(service, '_get_active_user', return_value=mock_user):
+            with patch.object(service, '_get_active_user', return_value=(mock_user, mock_tenant)):
                 with patch('app.modules.auth.service.verify_password', return_value=False):
                     with patch.object(service, '_record_failed_attempt', return_value=None):
                         with pytest.raises(AuthError) as exc_info:
@@ -151,12 +155,14 @@ class TestAuthService:
         mock_user.role = "admin"
         mock_user.is_superadmin = False
         mock_user.is_active = True
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
 
         mock_db = AsyncMock()
         mock_redis = AsyncMock()
 
         with patch.object(service, '_check_account_lockout', return_value=None), \
-             patch.object(service, '_get_active_user', return_value=mock_user), \
+             patch.object(service, '_get_active_user', return_value=(mock_user, mock_tenant)), \
              patch('app.modules.auth.service.verify_password', return_value=True), \
              patch.object(service, '_check_tenant_active', return_value=None), \
              patch.object(service, '_clear_login_attempts', return_value=None), \
@@ -215,7 +221,7 @@ class TestAuthService:
 
         with patch('app.modules.auth.service.create_access_token', return_value=("access_token", "new-jti")), \
              patch('app.modules.auth.service.track_jti', new=AsyncMock()), \
-             patch('app.modules.auth.service._get_active_user_by_id', new=AsyncMock(return_value=mock_user)), \
+             patch('app.modules.auth.service._get_active_user_by_id', new=AsyncMock(return_value=(mock_user, MagicMock(is_active=True)))), \
              patch('app.modules.auth.service._check_tenant_active', new=AsyncMock()), \
              patch('app.modules.auth.service._create_refresh_token', new=AsyncMock(return_value="new_refresh")), \
              patch('app.modules.auth.service.set_tenant_context', new=AsyncMock()) as mock_set_ctx:
@@ -317,12 +323,14 @@ class TestLoginEnumerationResistance:
         mock_user = MagicMock()
         mock_user.is_active = True
         mock_user.hashed_password = "hashed_password"
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
 
         mock_db = AsyncMock()
         mock_redis = AsyncMock()
 
         with patch.object(service, '_check_account_lockout', return_value=None):
-            with patch.object(service, '_get_active_user', return_value=mock_user):
+            with patch.object(service, '_get_active_user', return_value=(mock_user, mock_tenant)):
                 with patch('app.modules.auth.service.verify_password', return_value=False):
                     with patch.object(service, '_record_failed_attempt', return_value=None):
                         with pytest.raises(AuthError) as exc_info:
@@ -389,6 +397,8 @@ class TestLoginEnumerationResistance:
         mock_user = MagicMock()
         mock_user.is_active = True
         mock_user.hashed_password = "hashed_password"
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
 
         mock_db = AsyncMock()
         mock_redis = AsyncMock()
@@ -407,7 +417,7 @@ class TestLoginEnumerationResistance:
 
         # --- Case 2: Wrong password ---
         with patch.object(service, '_check_account_lockout', return_value=None):
-            with patch.object(service, '_get_active_user', return_value=mock_user):
+            with patch.object(service, '_get_active_user', return_value=(mock_user, mock_tenant)):
                 with patch('app.modules.auth.service.verify_password', return_value=False):
                     with patch.object(service, '_record_failed_attempt', return_value=None):
                         with pytest.raises(AuthError) as exc2:
@@ -462,3 +472,329 @@ class TestLoginEnumerationResistance:
         assert exc_info.value.status_code == 401
         assert "inactivo" not in exc_info.value.detail.lower()
         assert "activo" not in exc_info.value.detail.lower()
+
+
+class TestLoginTenantJoinOptimization:
+    """#103 — login() must NOT issue a separate Tenant SELECT.
+
+    _get_active_user() JOINs Tenant in one SELECT, and _check_tenant_active()
+    uses the pre-loaded tenant without any DB query.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_active_user_issues_single_query_with_tenant_join(self):
+        """_get_active_user must issue exactly ONE db.execute (the JOIN query)
+        and must NOT call db.scalar — a regression adding db.scalar(select(Tenant))
+        must fail this test."""
+        from app.modules.auth.service import _get_active_user
+
+        mock_user = MagicMock()
+        mock_user.is_active = True
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
+
+        mock_result = MagicMock()
+        mock_result.one_or_none.return_value = (mock_user, mock_tenant)
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        user, tenant = await _get_active_user("test@example.com", mock_db)
+
+        # Exactly ONE db.execute call (the JOIN query)
+        assert mock_db.execute.await_count == 1, (
+            f"_get_active_user must issue exactly 1 query (JOIN), "
+            f"got {mock_db.execute.await_count}"
+        )
+        # No db.scalar — tenant must come from the JOIN, not a second query
+        mock_db.scalar.assert_not_called()
+        assert user is mock_user
+        assert tenant is mock_tenant
+
+        # Verify the statement uses an outerjoin with Tenant
+        stmt = mock_db.execute.await_args.args[0]
+        stmt_str = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert "JOIN" in stmt_str.upper(), (
+            f"_get_active_user must use a JOIN query, got: {stmt_str}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_check_tenant_active_has_no_db_parameter(self):
+        """_check_tenant_active signature must NOT accept db — it uses pre-loaded
+        tenant data only. A regression re-adding db would change the signature."""
+        import inspect
+        from app.modules.auth.service import _check_tenant_active
+
+        sig = inspect.signature(_check_tenant_active)
+        param_names = list(sig.parameters.keys())
+        assert "db" not in param_names, (
+            f"_check_tenant_active must not accept 'db' parameter, "
+            f"found params: {param_names}"
+        )
+        assert param_names == ["user", "tenant"], (
+            f"_check_tenant_active must accept (user, tenant), "
+            f"got: {param_names}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_check_tenant_active_rejects_inactive_tenant(self):
+        """Inactive tenant is rejected using pre-loaded data."""
+        from app.modules.auth.service import _check_tenant_active
+        from app.core.exceptions import AuthError
+
+        mock_user = MagicMock()
+        mock_user.is_superadmin = False
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = False
+
+        with pytest.raises(AuthError) as exc_info:
+            await _check_tenant_active(mock_user, mock_tenant)
+
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_check_tenant_active_accepts_active_tenant(self):
+        """Active tenant passes without error."""
+        from app.modules.auth.service import _check_tenant_active
+
+        mock_user = MagicMock()
+        mock_user.is_superadmin = False
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
+
+        # Must not raise
+        await _check_tenant_active(mock_user, mock_tenant)
+
+    @pytest.mark.asyncio
+    async def test_check_tenant_active_skips_for_superadmin(self):
+        """Superadmin bypasses tenant check — tenant=None is fine."""
+        from app.modules.auth.service import _check_tenant_active
+
+        mock_user = MagicMock()
+        mock_user.is_superadmin = True
+
+        # Must not raise even with tenant=None
+        await _check_tenant_active(mock_user, None)
+
+    @pytest.mark.asyncio
+    async def test_check_tenant_active_rejects_none_tenant_for_regular_user(self):
+        """Regular user with tenant=None (e.g. tenant deleted) is rejected."""
+        from app.modules.auth.service import _check_tenant_active
+        from app.core.exceptions import AuthError
+
+        mock_user = MagicMock()
+        mock_user.is_superadmin = False
+
+        with pytest.raises(AuthError) as exc_info:
+            await _check_tenant_active(mock_user, None)
+
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_login_path_issues_no_scalar_calls(self):
+        """End-to-end login() must never call db.scalar — all data comes from
+        the JOIN in _get_active_user. A regression adding db.scalar(select(Tenant))
+        anywhere in the login path must fail this test."""
+        from app.modules.auth import service
+
+        mock_user = MagicMock()
+        mock_user.is_active = True
+        mock_user.is_superadmin = False
+        mock_user.hashed_password = "hashed"
+        mock_user.id = "user-id-123"
+        mock_user.tenant_id = "tenant-id-123"
+        mock_user.role = "user"
+        mock_user.email = "test@example.com"
+        mock_user.last_login_at = None
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
+        mock_tenant.id = "tenant-id-123"
+
+        mock_result = MagicMock()
+        mock_result.one_or_none.return_value = (mock_user, mock_tenant)
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        mock_redis = AsyncMock()
+
+        with patch.object(service, "_check_account_lockout", return_value=None), \
+             patch("app.modules.auth.service.verify_password", return_value=True), \
+             patch.object(service, "_clear_login_attempts", return_value=None), \
+             patch("app.modules.auth.service.create_access_token",
+                   return_value=("access_token", "jti-123")), \
+             patch.object(service, "_create_refresh_token",
+                   return_value="refresh_token"), \
+             patch("app.modules.auth.service.track_jti", new=AsyncMock()), \
+             patch("app.modules.auth.service.set_tenant_context", new=AsyncMock()), \
+             patch("app.modules.auth.service.check_redis_healthy",
+                   new=AsyncMock(return_value=True)), \
+             patch("app.modules.auth.service.get_event_bus",
+                   new=AsyncMock(return_value=AsyncMock())):
+
+            await service.login(
+                email="test@example.com",
+                password="password123",
+                db=mock_db,
+                redis=mock_redis,
+            )
+
+        # No db.scalar anywhere in the login path — tenant comes from JOIN
+        mock_db.scalar.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_active_user_unknown_email_raises_without_tenant_query(self):
+        """Unknown email raises 401 — only the single JOIN query is issued."""
+        from app.modules.auth.service import _get_active_user
+        from app.core.exceptions import AuthError
+
+        mock_result = MagicMock()
+        mock_result.one_or_none.return_value = None
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        with pytest.raises(AuthError) as exc_info:
+            await _get_active_user("nobody@test.test", mock_db)
+
+        assert exc_info.value.status_code == 401
+        # Still exactly one query (the JOIN) — no fallback Tenant SELECT
+        assert mock_db.execute.await_count == 1
+        # No db.scalar — must not fall back to separate Tenant query
+        mock_db.scalar.assert_not_called()
+
+
+class TestGetActiveUserByIdTenantJoin:
+    """#103 — _get_active_user_by_id must also use the JOIN optimization.
+
+    This covers refresh_tokens and change_password paths.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_active_user_by_id_issues_single_query_with_tenant_join(self):
+        """_get_active_user_by_id must issue exactly ONE db.execute (the JOIN)
+        and must NOT call db.scalar."""
+        from app.modules.auth.service import _get_active_user_by_id
+        import uuid
+
+        user_id = uuid.uuid4()
+        mock_user = MagicMock()
+        mock_user.is_active = True
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
+
+        mock_result = MagicMock()
+        mock_result.one_or_none.return_value = (mock_user, mock_tenant)
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        user, tenant = await _get_active_user_by_id(user_id, mock_db)
+
+        assert mock_db.execute.await_count == 1
+        mock_db.scalar.assert_not_called()
+        assert user is mock_user
+        assert tenant is mock_tenant
+
+        # Verify the statement uses a JOIN with Tenant
+        stmt = mock_db.execute.await_args.args[0]
+        stmt_str = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert "JOIN" in stmt_str.upper(), (
+            f"_get_active_user_by_id must use a JOIN query, got: {stmt_str}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_active_user_by_id_unknown_user_raises(self):
+        """Unknown user_id raises 401 — only the single JOIN query is issued."""
+        from app.modules.auth.service import _get_active_user_by_id
+        from app.core.exceptions import AuthError
+        import uuid
+
+        mock_result = MagicMock()
+        mock_result.one_or_none.return_value = None
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        with pytest.raises(AuthError) as exc_info:
+            await _get_active_user_by_id(uuid.uuid4(), mock_db)
+
+        assert exc_info.value.status_code == 401
+        assert mock_db.execute.await_count == 1
+        mock_db.scalar.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_active_user_by_id_inactive_user_raises(self):
+        """Inactive user raises 401 — tenant is still loaded via JOIN."""
+        from app.modules.auth.service import _get_active_user_by_id
+        from app.core.exceptions import AuthError
+        import uuid
+
+        mock_user = MagicMock()
+        mock_user.is_active = False
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
+
+        mock_result = MagicMock()
+        mock_result.one_or_none.return_value = (mock_user, mock_tenant)
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        with pytest.raises(AuthError) as exc_info:
+            await _get_active_user_by_id(uuid.uuid4(), mock_db)
+
+        assert exc_info.value.status_code == 401
+        assert mock_db.execute.await_count == 1
+        mock_db.scalar.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_refresh_tokens_uses_preloaded_tenant(self):
+        """refresh_tokens path: _get_active_user_by_id returns (user, tenant)
+        and _check_tenant_active receives the pre-loaded tenant — not db."""
+        from app.modules.auth import service
+        from uuid import UUID
+
+        mock_user = MagicMock()
+        mock_user.id = UUID("00000000-0000-0000-0000-000000000001")
+        mock_user.tenant_id = UUID("00000000-0000-0000-0000-000000000002")
+        mock_user.role = "admin"
+        mock_user.is_superadmin = False
+        mock_user.is_active = True
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
+
+        mock_db = AsyncMock()
+        mock_redis = AsyncMock()
+
+        # Mock the RefreshToken SELECT to return a valid record
+        mock_record = MagicMock()
+        mock_record.user_id = mock_user.id
+        mock_record.revoked_at = None
+
+        async def fake_scalar(stmt):
+            return mock_record
+
+        mock_db.scalar = fake_scalar
+        mock_db.in_transaction = MagicMock(return_value=True)
+
+        with patch("app.modules.auth.service.create_access_token",
+                   return_value=("access_token", "new-jti")), \
+             patch("app.modules.auth.service.track_jti", new=AsyncMock()), \
+             patch("app.modules.auth.service._get_active_user_by_id",
+                   new=AsyncMock(return_value=(mock_user, mock_tenant))) as mock_get, \
+             patch("app.modules.auth.service._check_tenant_active",
+                   new=AsyncMock()) as mock_check, \
+             patch("app.modules.auth.service._create_refresh_token",
+                   new=AsyncMock(return_value="new_refresh")), \
+             patch("app.modules.auth.service.set_tenant_context",
+                   new=AsyncMock()):
+
+            await service.refresh_tokens(
+                refresh_token="some_refresh_token",
+                db=mock_db,
+                redis=mock_redis,
+            )
+
+        mock_get.assert_awaited_once_with(mock_user.id, mock_db)
+        mock_check.assert_awaited_once_with(mock_user, mock_tenant)

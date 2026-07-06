@@ -109,8 +109,8 @@ class TestAuthLoginEvent:
         with pytest.raises(ValidationError) as exc_info:
             AuthLoginEvent(
                 user_id="",  # empty string should fail
-                email="user@example.com",
-                ip_address="192.168.1.1",
+                email_hash="a" * 32,
+                ip_prefix="192.168.1.0/24",
                 user_agent="Mozilla/5.0",
             )
         errors = exc_info.value.errors()

@@ -177,6 +177,72 @@ class TestEventConsumerReadPending:
         assert "data" in msg
         await client.aclose()
 
+    @pytest.mark.asyncio
+    async def test_read_pending_uses_batch_xclaim_single_call(self):
+        """read_pending() MUST use a single batch XCLAIM call for all pending messages (issue #100).
+        
+        This test verifies that when there are multiple pending messages, read_pending()
+        makes ONE XCLAIM call with all message_ids instead of N individual XCLAIM calls.
+        This is a performance optimization that reduces Redis round-trips from O(n) to O(1).
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from app.event_bus import EventConsumer
+
+        # Create mock Redis client
+        mock_redis = AsyncMock()
+        
+        # Mock xpending_range to return 5 pending entries
+        pending_entries = [
+            {"message_id": b"1-0", "consumer": "worker-1", "time_since_delivered": 1000, "times_delivered": 1},
+            {"message_id": b"2-0", "consumer": "worker-1", "time_since_delivered": 1000, "times_delivered": 1},
+            {"message_id": b"3-0", "consumer": "worker-1", "time_since_delivered": 1000, "times_delivered": 1},
+            {"message_id": b"4-0", "consumer": "worker-1", "time_since_delivered": 1000, "times_delivered": 1},
+            {"message_id": b"5-0", "consumer": "worker-1", "time_since_delivered": 1000, "times_delivered": 1},
+        ]
+        mock_redis.xpending_range = AsyncMock(return_value=pending_entries)
+        
+        # Mock xclaim to return claimed messages
+        # xclaim should be called ONCE with all 5 message_ids
+        mock_redis.xclaim = AsyncMock(return_value=[
+            (b"1-0", {b"user_id": b"u1", b"event_type": b"auth.login"}),
+            (b"2-0", {b"user_id": b"u2", b"event_type": b"auth.login"}),
+            (b"3-0", {b"user_id": b"u3", b"event_type": b"auth.login"}),
+            (b"4-0", {b"user_id": b"u4", b"event_type": b"auth.login"}),
+            (b"5-0", {b"user_id": b"u5", b"event_type": b"auth.login"}),
+        ])
+        
+        consumer = EventConsumer(
+            redis_client=mock_redis,
+            event_type="auth.login",
+            consumer_name="worker-1",
+            group_name="soc360-consumers",
+        )
+        
+        # Mock _ensure_group_exists and _stream_key
+        with patch.object(consumer, "_ensure_group_exists", new_callable=AsyncMock):
+            with patch.object(consumer, "_stream_key", return_value="events:auth.login"):
+                result = await consumer.read_pending()
+        
+        # Verify xclaim was called EXACTLY ONCE (batch operation)
+        assert mock_redis.xclaim.call_count == 1, (
+            f"Expected xclaim to be called exactly 1 time (batch), "
+            f"but it was called {mock_redis.xclaim.call_count} times. "
+            f"This indicates the batch optimization is not working."
+        )
+        
+        # Verify xclaim was called with all 5 message_ids in a single call
+        call_args = mock_redis.xclaim.call_args
+        message_ids_arg = call_args.kwargs.get("message_ids", [])
+        assert len(message_ids_arg) == 5, (
+            f"Expected xclaim to be called with 5 message_ids, "
+            f"but it was called with {len(message_ids_arg)} message_ids."
+        )
+        
+        # Verify result has 5 messages
+        assert len(result) == 5
+        
+        await mock_redis.aclose()
+
 
 class TestEventConsumerAck:
     """Validate EventConsumer.ack()."""

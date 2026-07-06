@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-import bcrypt
 import pytest
 from fakeredis.aioredis import FakeRedis
 from pydantic import ValidationError
@@ -144,30 +143,41 @@ class TestSecureCompare:
 
 
 class TestBcryptShim:
-    """Direct coverage for the bcrypt hashpw compatibility shim."""
+    """Coverage for password hashing with 72-byte limit (now built-in)."""
 
     def test_hashes_71_byte_password(self):
-        password = b"a" * 71
-        hashed = bcrypt.hashpw(password, bcrypt.gensalt())
+        from app.core.security import hash_password, verify_password
 
-        assert bcrypt.checkpw(password, hashed) is True
+        password = "a" * 71
+        hashed = hash_password(password)
+
+        assert verify_password(password, hashed) is True
 
     def test_hashes_72_byte_password(self):
-        password = b"a" * 72
-        hashed = bcrypt.hashpw(password, bcrypt.gensalt())
+        from app.core.security import hash_password, verify_password
 
-        assert bcrypt.checkpw(password, hashed) is True
+        password = "a" * 72
+        hashed = hash_password(password)
+
+        assert verify_password(password, hashed) is True
 
     @pytest.mark.parametrize("password_length", [73, 200])
-    def test_passwords_over_72_bytes_are_truncated_by_compat_shim(
+    def test_passwords_over_72_bytes_are_truncated(
         self,
         password_length: int,
     ):
-        password = b"a" * password_length
-        truncated = password[:72]
-        salt = bcrypt.gensalt()
+        from app.core.security import hash_password, verify_password
 
-        assert bcrypt.hashpw(password, salt) == bcrypt.hashpw(truncated, salt)
+        password = "a" * password_length
+        truncated = "a" * 72
+
+        # Full password and truncated must both be hashable
+        hashed = hash_password(password)
+
+        # Verify with truncated version must succeed
+        assert verify_password(truncated, hashed) is True
+        # Verify with full version must also succeed (verify also truncates)
+        assert verify_password(password, hashed) is True
 
 
 class TestRoleHelpers:

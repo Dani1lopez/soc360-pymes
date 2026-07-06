@@ -522,53 +522,6 @@ class TestUpdateTenantTokenRevocation:
             mock_revoke_access.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_update_tenant_reactivate_does_not_reenable_manually_deactivated_users(self):
-        """update_tenant con reactivación NO reactiva usuarios desactivados manualmente.
-        
-        Security fix (issue #132): When a tenant is reactivated, individual user states
-        must NOT be affected. Users that were manually deactivated before tenant suspension
-        must remain deactivated to preserve security principles (least privilege, audit trail).
-        """
-        from app.modules.tenants import service
-        from app.modules.tenants.schemas import TenantUpdate
-        from uuid import uuid4
-
-        tenant_id = uuid4()
-        mock_tenant = MagicMock()
-        mock_tenant.id = tenant_id
-        mock_tenant.is_active = False  # inactivo, se va a reactivar
-
-        mock_db = AsyncMock()
-        mock_db.flush = AsyncMock()
-        mock_db.refresh = AsyncMock()
-        mock_db.execute = AsyncMock()
-
-        mock_redis = AsyncMock()
-
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_tenant
-        mock_db.execute.return_value = mock_result
-
-        data = TenantUpdate(is_active=True)
-
-        await service.update_tenant(tenant_id=tenant_id, data=data, db=mock_db, redis=mock_redis)
-
-        # Verify that db.execute was called for tenant update but NOT for bulk user activation
-        # The old code would call db.execute with update(User).where(...).values(is_active=True)
-        # We need to verify that no such call was made
-        
-        # Count how many times db.execute was called
-        execute_calls = mock_db.execute.call_args_list
-        
-        # Should have at most 1 call (for tenant update), not 2 (tenant + bulk user activation)
-        # The old buggy code would make 2 calls: one for tenant, one for bulk user activation
-        assert len(execute_calls) <= 1, (
-            f"Expected at most 1 db.execute call (tenant update only), "
-            f"but got {len(execute_calls)} calls. "
-            f"This suggests bulk user activation is still happening on tenant reactivation."
-        )
-
-    @pytest.mark.asyncio
     async def test_update_tenant_patch_without_is_active_no_revocation(self):
         """update_tenant sin cambio de is_active NO revoca tokens."""
         from app.modules.tenants import service

@@ -14,6 +14,10 @@ async def _clear_login_attempts_before_auth_test(client: AsyncClient):
         keys = await redis.keys("login_attempts:*")
         if keys:
             await redis.delete(*keys)
+        # Also clear new rate limit keys
+        rl_keys = await redis.keys("ratelimit:*")
+        if rl_keys:
+            await redis.delete(*rl_keys)
         break
 
 

@@ -87,6 +87,10 @@ class Settings(BaseSettings):
     REDIS_STARTUP_MAX_ATTEMPTS: int = 3
     REDIS_STARTUP_BACKOFF_BASE_SECONDS: float = 1.0
     
+    # Rate Limiting (progressive lockout)
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_WINDOW_SECONDS: int = 86400  # 24h — auto-cleanup TTL for rate limit keys
+
     #CORS
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]
 

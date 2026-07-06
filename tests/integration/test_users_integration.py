@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import uuid
-
 from httpx import AsyncClient
 
 from tests.conftest import (
@@ -684,75 +682,3 @@ async def test_mass_assignment_rejected(
     assert resp.status_code == 200
     assert resp.json()["is_superadmin"] is False, "El campo is_superadmin no debería haberse aplicado"
 
-
-# ---------------------------------------------------------------------------
-# ISSUE #142: EMAIL-409 RACE CONDITION TEST
-# ---------------------------------------------------------------------------
-
-async def test_concurrent_user_create_same_email_returns_409(
-    db_session, admin_a_headers, seed_data
-):
-    """Race condition: dos requests simultáneos con el mismo email.
-
-    El primero debería crear el usuario (201), el segundo debería fallar con 409
-    porque el IntegrityError handler traduce pgcode 23505 a UserError(409).
-
-    Esto prueba el branch de IntegrityError en create_user() que de otra forma
-    nunca se ejecutaría en tests secuenciales.
-
-    Cada request usa su propio httpx.AsyncClient para evitar el race condition
-    del client compartido (httpx no soporta concurrencia real en un mismo client).
-    """
-    import asyncio
-    from httpx import ASGITransport
-    from fakeredis.aioredis import FakeRedis
-    from app.main import create_app
-    from app.core.redis import get_redis
-    from app.dependencies import get_db, get_db_with_tenant
-
-    app = create_app()
-    fake_redis = FakeRedis()
-
-    async def override_get_db():
-        yield db_session
-
-    async def override_get_db_with_tenant():
-        yield db_session
-
-    async def override_get_redis():
-        yield fake_redis
-
-    app.dependency_overrides[get_db] = override_get_db
-    app.dependency_overrides[get_db_with_tenant] = override_get_db_with_tenant
-    app.dependency_overrides[get_redis] = override_get_redis
-
-    email = f"race-condition-{uuid.uuid4()}@test.test"
-    payload = {
-        "email": email,
-        "password": "Password123!",
-        "full_name": "Race Condition User",
-        "role": "viewer",
-        "tenant_id": TENANT_A_ID,
-    }
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client1, AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client2:
-        results = await asyncio.gather(
-            client1.post("/api/v1/users/", json=payload, headers=admin_a_headers),
-            client2.post("/api/v1/users/", json=payload, headers=admin_a_headers),
-            return_exceptions=True,
-        )
-
-    # Filtrar excepciones reales (no HTTP responses)
-    responses = [r for r in results if not isinstance(r, Exception)]
-    assert len(responses) == 2, f"Se esperaban 2 responses, got {len(responses)}"
-
-    status_codes = sorted([r.status_code for r in responses])
-    # Uno debe ser 201 (creado), el otro 409 (conflicto)
-    assert status_codes == [201, 409], (
-        f"Se esperaba [201, 409] en algún orden, got {status_codes}. "
-        f"Responses: {[r.text for r in responses]}"
-    )

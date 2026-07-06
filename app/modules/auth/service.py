@@ -26,6 +26,8 @@ from app.modules.auth.models import RefreshToken
 from app.modules.users.models import User
 from app.modules.tenants.models import Tenant
 from app.modules.auth.schemas import TokenResponse
+from sqlalchemy.exc import DBAPIError
+
 from app.core.database import set_tenant_context
 from app.core.exceptions import AuthError, ServiceUnavailableError
 from app.core.pii import hash_email, mask_ip
@@ -150,20 +152,101 @@ _ADVISORY_LOCK_SQL = text(
     "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:user_id AS text), 0))"
 )
 
+# Set a transaction-local lock_timeout so pg_advisory_xact_lock cannot block
+# indefinitely. set_config(..., true) makes it LOCAL (transaction-scoped),
+# mirroring the pattern used by set_tenant_context.
+_LOCK_TIMEOUT_SQL = text(
+    "SELECT set_config('lock_timeout', :timeout_ms, true)"
+)
+
+# 2-second timeout for advisory lock acquisition.
+_ADVISORY_LOCK_TIMEOUT_MS = "2000"
+
+# SQLSTATE code for lock_not_available (raised when lock_timeout expires).
+_LOCK_TIMEOUT_SQLSTATE = "55P03"
+
+
+def _is_lock_timeout_error(exc: DBAPIError) -> bool:
+    """Detect whether *exc* is a lock-timeout error (SQLSTATE 55P03).
+
+    SQLAlchemy wraps the underlying DBAPI exception.  For most dialects
+    a lock timeout surfaces as ``OperationalError`` (a ``DBAPIError``
+    subclass), but with asyncpg the driver maps
+    ``asyncpg.LockNotAvailableError`` through the generic DBAPI ``Error``
+    which SQLAlchemy wraps as a plain ``DBAPIError`` — **not**
+    ``OperationalError``.  We therefore accept the full ``DBAPIError``
+    hierarchy and inspect ``orig`` / ``sql_error()`` for the SQLSTATE.
+
+    Detection layers (dialect-agnostic):
+
+    * **asyncpg** — ``orig`` is an ``asyncpg.LockNotAvailableError`` with
+      ``.sqlstate == '55P03'``.
+    * **psycopg (3) / psycopg2** — ``orig`` carries ``.pgcode == '55P03'``.
+    * Other dialects may expose ``.code`` or only the SQLSTATE in the
+      string representation or ``sql_error()`` output.
+    """
+    orig = exc.orig
+    if orig is not None:
+        # 1. Direct isinstance against asyncpg (most precise when available).
+        try:
+            import asyncpg
+
+            if isinstance(orig, asyncpg.LockNotAvailableError):
+                return True
+        except ImportError:
+            pass
+
+        # 2. SQLSTATE / pgcode attributes on the DBAPI exception.
+        for attr in ("sqlstate", "pgcode", "code"):
+            if getattr(orig, attr, None) == _LOCK_TIMEOUT_SQLSTATE:
+                return True
+
+        # 3. String fallback on orig — some drivers embed the SQLSTATE.
+        if _LOCK_TIMEOUT_SQLSTATE in str(orig):
+            return True
+
+    # 4. sql_error() — DBAPIError may expose the SQLSTATE in its structured
+    #    error dict even when orig is heavily wrapped.
+    try:
+        sql_err = exc.sql_error()
+        if sql_err and _LOCK_TIMEOUT_SQLSTATE in str(sql_err):
+            return True
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+    return False
+
 
 async def _acquire_session_cap_lock(user_id: UUID, db: AsyncSession) -> None:
     """Acquire a transaction-scoped advisory lock for session-cap serialization.
 
     Must be called inside an active transaction (db.in_transaction() == True).
-    The lock blocks concurrent calls for the same user_id until the holding
-    transaction commits or rolls back, preventing race conditions in the
-    session-cap check + insert sequence.
+    Sets a 2-second lock_timeout before acquiring the lock so that contention
+    raises a controlled error instead of blocking indefinitely.
+
+    Raises ServiceUnavailableError if the lock cannot be acquired within the
+    timeout (PostgreSQL raises lock_not_available / SQLSTATE 55P03).
     """
     if not db.in_transaction():
         raise RuntimeError(
             "_acquire_session_cap_lock requires an active transaction"
         )
-    await db.execute(_ADVISORY_LOCK_SQL, {"user_id": str(user_id)})
+    # Set transaction-local lock_timeout so the advisory lock cannot hang.
+    await db.execute(_LOCK_TIMEOUT_SQL, {"timeout_ms": _ADVISORY_LOCK_TIMEOUT_MS})
+    try:
+        await db.execute(_ADVISORY_LOCK_SQL, {"user_id": str(user_id)})
+    except DBAPIError as exc:
+        if _is_lock_timeout_error(exc):
+            logger.warning(
+                "session_cap_lock_timeout",
+                user_id=str(user_id),
+                timeout_ms=_ADVISORY_LOCK_TIMEOUT_MS,
+            )
+            raise ServiceUnavailableError(
+                detail="Servicio temporalmente ocupado, intenta de nuevo."
+            ) from exc
+        # Not a lock timeout — re-raise the original DBAPIError unchanged.
+        raise
 
 
 async def _create_refresh_token(

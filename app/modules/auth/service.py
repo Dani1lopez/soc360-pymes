@@ -101,41 +101,67 @@ async def _clear_login_attempts(email: str, redis: Redis) -> None:
         logger.warning("login_clear_attempts_failed", reason="redis_error")
 
 
-async def _get_active_user(email: str, db: AsyncSession) -> User:
-    """Carga el usuario pro email y verifica que esta activo"""
-    user = await db.scalar(
-        select(User).where(User.email == email)
+async def _get_active_user(email: str, db: AsyncSession) -> tuple[User, Tenant | None]:
+    """Carga el usuario por email (con Tenant en un solo SELECT) y verifica que esta activo.
+
+    Returns (user, tenant). Tenant is None for superadmins.
+    """
+    stmt = (
+        select(User, Tenant)
+        .outerjoin(Tenant, User.tenant_id == Tenant.id)
+        .where(User.email == email)
     )
-    if not user or not user.is_active:
+    row = await db.execute(stmt)
+    result = row.one_or_none()
+    if not result:
         raise AuthError(
             status_code=401,
             detail="Credenciales incorrectas",
         )
-    return user
+    user, tenant = result
+    if not user.is_active:
+        raise AuthError(
+            status_code=401,
+            detail="Credenciales incorrectas",
+        )
+    return user, tenant
 
 
-async def _get_active_user_by_id(user_id: UUID, db: AsyncSession) -> User:
-    """Carga usuario por id y verifica que esta activo"""
-    user = await db.scalar(
-        select(User).where(User.id == user_id)
+async def _get_active_user_by_id(user_id: UUID, db: AsyncSession) -> tuple[User, Tenant | None]:
+    """Carga usuario por id (con Tenant en un solo SELECT) y verifica que esta activo.
+
+    Returns (user, tenant). Tenant is None for superadmins.
+    """
+    stmt = (
+        select(User, Tenant)
+        .outerjoin(Tenant, User.tenant_id == Tenant.id)
+        .where(User.id == user_id)
     )
-    if not user or not user.is_active:
+    row = await db.execute(stmt)
+    result = row.one_or_none()
+    if not result:
         raise AuthError(
             status_code=401,
             detail="Usuario inactivo.",
         )
-    return user
+    user, tenant = result
+    if not user.is_active:
+        raise AuthError(
+            status_code=401,
+            detail="Usuario inactivo.",
+        )
+    return user, tenant
 
 
-async def _check_tenant_active(user: User, db: AsyncSession) -> None:
-    """Verifica que el tenant del usuario esta activo"""
+async def _check_tenant_active(user: User, tenant: Tenant | None) -> None:
+    """Verifica que el tenant del usuario esta activo.
+
+    Uses the pre-loaded tenant from the JOIN in _get_active_user /
+    _get_active_user_by_id — no extra SELECT needed.
+    """
     if user.is_superadmin:
         return
-    
-    tenant = await db.scalar(
-        select(Tenant).where(Tenant.id == user.tenant_id)
-    )
-    
+
     if not tenant or not tenant.is_active:
         raise AuthError(
             status_code=401,
@@ -251,7 +277,7 @@ async def login(
     await set_tenant_context(db, tenant_id=None, is_superadmin=True)
     await _check_account_lockout(email, redis)
 
-    user = await _get_active_user(email, db)
+    user, tenant = await _get_active_user(email, db)
     
     if not verify_password(password, user.hashed_password):
         await _record_failed_attempt(email, redis)
@@ -260,7 +286,7 @@ async def login(
             detail="Credenciales incorrectas",
         )
     
-    await _check_tenant_active(user, db)
+    await _check_tenant_active(user, tenant)
     
     await _clear_login_attempts(email, redis)
 
@@ -333,8 +359,8 @@ async def refresh_tokens(
                 detail="Refresh token invalido o expirado",
             )
 
-        user = await _get_active_user_by_id(record.user_id, db)
-        await _check_tenant_active(user, db)
+        user, tenant = await _get_active_user_by_id(record.user_id, db)
+        await _check_tenant_active(user, tenant)
 
         record.revoked_at = datetime.now(timezone.utc)
         new_refresh_token = await _create_refresh_token(
@@ -411,7 +437,7 @@ async def change_password(
     """Cambia la contraseña y revoca todas las sesiones activas"""
     if not await check_redis_healthy(redis):
         raise ServiceUnavailableError()
-    user = await _get_active_user_by_id(user_id, db)
+    user, _tenant = await _get_active_user_by_id(user_id, db)
     if not verify_password(current_password, user.hashed_password):
         raise AuthError(
             status_code=400,

@@ -125,8 +125,12 @@ class TestJWTApproval:
             is_superadmin=False,
         )
 
-        # Tamper with the payload by changing the last character
-        tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+        # Tamper with the payload by changing multiple characters in the signature
+        # (changing only the last char may not invalidate Base64url padding)
+        parts = token.split(".")
+        sig = parts[2]
+        tampered_sig = sig[:len(sig)//2] + "X" * (len(sig) - len(sig)//2)
+        tampered = f"{parts[0]}.{parts[1]}.{tampered_sig}"
 
         with pytest.raises(Exception):
             decode_access_token(tampered)

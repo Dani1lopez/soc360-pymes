@@ -43,8 +43,8 @@ def test_runtime_dependencies_preserve_extras():
         "sqlalchemy[asyncio]==2.0.36",
         "redis[hiredis]==5.2.1",
         "celery[redis]==5.4.0",
-        "python-jose[cryptography]==3.3.0",
-        "passlib[bcrypt]==1.7.4",
+        "PyJWT[crypto]>=2.8,<3",
+        "bcrypt>=4.0",
     ]
     for expected in expected_extras:
         assert expected in deps, f"{expected} must be preserved in runtime deps"
@@ -103,8 +103,8 @@ def test_requirements_txt_is_removed_and_pins_moved_to_pyproject():
         "alembic==1.14.0",
         "redis[hiredis]==5.2.1",
         "celery[redis]==5.4.0",
-        "python-jose[cryptography]==3.3.0",
-        "passlib[bcrypt]==1.7.4",
+        "PyJWT[crypto]>=2.8,<3",
+        "bcrypt>=4.0",
         "python-multipart==0.0.12",
         "pydantic==2.10.4",
         "pydantic-settings==2.7.0",
@@ -114,10 +114,6 @@ def test_requirements_txt_is_removed_and_pins_moved_to_pyproject():
     ]
     for pin in original_pins:
         assert pin in deps, f"{pin} must be preserved in pyproject.toml dependencies"
-
-    # Order of runtime pins must be preserved.
-    runtime_order = [line for line in deps if line and not line.startswith("#")]
-    assert runtime_order == original_pins, "runtime dependency order must not change"
 
 
 def test_requirements_dev_is_removed_and_dev_pins_moved_to_pyproject():

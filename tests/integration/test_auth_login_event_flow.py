@@ -39,12 +39,14 @@ async def test_auth_login_event_appears_in_redis_stream():
     mock_user.role = "admin"
     mock_user.is_superadmin = False
     mock_user.is_active = True
+    mock_tenant = MagicMock()
+    mock_tenant.is_active = True
 
     mock_db = AsyncMock()
 
     # --- Mock all auth service internals ---
     with patch.object(service, "_check_account_lockout", return_value=None):
-        with patch.object(service, "_get_active_user", return_value=mock_user):
+        with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):
             with patch("app.modules.auth.service.verify_password", return_value=True):
                 with patch.object(service, "_check_tenant_active", return_value=None):
                     with patch.object(service, "_clear_login_attempts", return_value=None):
@@ -198,6 +200,8 @@ async def test_login_succeeds_even_if_redis_unavailable_for_event():
     mock_user.role = "user"
     mock_user.is_superadmin = False
     mock_user.is_active = True
+    mock_tenant = MagicMock()
+    mock_tenant.is_active = True
 
     mock_db = AsyncMock()
     fake_redis = FakeRedis()
@@ -207,7 +211,7 @@ async def test_login_succeeds_even_if_redis_unavailable_for_event():
     failing_event_bus.publish.side_effect = ConnectionError("Redis unavailable")
 
     with patch.object(service, "_check_account_lockout", return_value=None):
-        with patch.object(service, "_get_active_user", return_value=mock_user):
+        with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):
             with patch("app.modules.auth.service.verify_password", return_value=True):
                 with patch.object(service, "_check_tenant_active", return_value=None):
                     with patch.object(service, "_clear_login_attempts", return_value=None):

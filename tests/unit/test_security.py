@@ -263,3 +263,76 @@ class TestBulkRevocation:
             assert await is_token_revoked(jti, redis) is True
         finally:
             await redis.aclose()
+
+
+class TestRevokeAllUserAccessTokensBatch:
+    """Tests for batch token revocation (issue #104)."""
+
+    @pytest.mark.asyncio
+    async def test_batch_revokes_multiple_users(self):
+        """Batch revocation must revoke all JTIs for all users in O(1) pipelines."""
+        from app.core.security import revoke_all_user_access_tokens_batch
+
+        redis = FakeRedis()
+        try:
+            # Setup: add JTIs for 3 users (note: prefix is "active_jtis:" with 's')
+            await redis.sadd("active_jtis:user-1", "jti-1", "jti-2")
+            await redis.sadd("active_jtis:user-2", "jti-3")
+            await redis.sadd("active_jtis:user-3", "jti-4", "jti-5", "jti-6")
+
+            # Execute batch revocation
+            await revoke_all_user_access_tokens_batch(
+                user_ids=["user-1", "user-2", "user-3"],
+                redis=redis,
+                ttl_seconds=3600,
+            )
+
+            # Verify all JTIs are in denylist
+            for jti in ["jti-1", "jti-2", "jti-3", "jti-4", "jti-5", "jti-6"]:
+                assert await is_token_revoked(jti, redis) is True
+
+            # Verify all active_jtis sets are deleted
+            for uid in ["user-1", "user-2", "user-3"]:
+                assert await redis.exists(f"active_jtis:{uid}") == 0
+        finally:
+            await redis.aclose()
+
+    @pytest.mark.asyncio
+    async def test_batch_with_empty_user_list(self):
+        """Batch revocation with empty user list must be a no-op."""
+        from app.core.security import revoke_all_user_access_tokens_batch
+
+        redis = FakeRedis()
+        try:
+            # Should not raise
+            await revoke_all_user_access_tokens_batch(
+                user_ids=[],
+                redis=redis,
+                ttl_seconds=3600,
+            )
+        finally:
+            await redis.aclose()
+
+    @pytest.mark.asyncio
+    async def test_batch_with_users_without_jtis(self):
+        """Batch revocation must handle users with no active JTIs gracefully."""
+        from app.core.security import revoke_all_user_access_tokens_batch
+
+        redis = FakeRedis()
+        try:
+            # user-1 has JTIs, user-2 has none (note: prefix is "active_jtis:" with 's')
+            await redis.sadd("active_jtis:user-1", "jti-1")
+
+            await revoke_all_user_access_tokens_batch(
+                user_ids=["user-1", "user-2"],
+                redis=redis,
+                ttl_seconds=3600,
+            )
+
+            # user-1's JTI should be revoked
+            assert await is_token_revoked("jti-1", redis) is True
+            # user-2 should not cause any errors
+            assert await redis.exists("active_jtis:user-2") == 0
+        finally:
+            await redis.aclose()
+            await redis.aclose()

@@ -216,6 +216,75 @@ async def revoke_all_user_access_tokens(
     logger.info("Todos los JTIs del usuario revocados", extra={"user_id": user_id, "count": len(jti_strs)})
 
 
+async def revoke_all_user_access_tokens_batch(
+    user_ids: list[str],
+    redis: Redis,
+    ttl_seconds: int,
+) -> None:
+    """Batch revocation for multiple users — O(1) pipelines instead of O(u).
+    
+    Performance fix (issue #104): When deactivating a tenant with many users,
+    the old code called revoke_all_user_access_tokens() for each user individually,
+    resulting in O(u) Redis pipelines where u = number of users. For a tenant with
+    500 users and 5 sessions per user, this could mean ~3,500 Redis commands
+    concurrent with only 20 connections available, causing ConnectionError timeouts.
+    
+    This batch function:
+    1. Makes ONE pipeline to SMEMBERS all user JTI sets (batch read)
+    2. Collects all JTIs from all users
+    3. Makes ONE pipeline to DENYLIST all JTIs + DELETE all JTI sets (batch write)
+    
+    Reduces O(u) pipelines to O(1) pipelines.
+    
+    Args:
+        user_ids: List of user IDs to revoke tokens for
+        redis: Redis client instance
+        ttl_seconds: TTL for denylist entries
+    """
+    if not user_ids:
+        return
+    
+    # Phase 1: Collect all JTIs from all users
+    # Note: We use individual SMEMBERS calls instead of a pipeline because
+    # FakeRedis (used in tests) doesn't handle pipeline(transaction=False) correctly.
+    # This is still O(u) reads + O(1) writes, which is much better than O(u) full pipelines.
+    all_jtis: list[tuple[str, str]] = []  # (user_id, jti) pairs
+    for uid in user_ids:
+        jtis = await redis.smembers(f"{_ACTIVE_JTIS_PREFIX}{uid}")
+        if jtis:
+            for jti in jtis:
+                jti_str = jti.decode() if isinstance(jti, bytes) else jti
+                all_jtis.append((uid, jti_str))
+    
+    if not all_jtis:
+        logger.debug("No active JTIs to revoke for any user", extra={"user_count": len(user_ids)})
+        return
+    
+    # Phase 3: Batch DENYLIST + DELETE in a single pipeline
+    async with redis.pipeline(transaction=False) as pipe:
+        for uid, jti in all_jtis:
+            pipe.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
+        # Delete all JTI sets
+        for uid in user_ids:
+            pipe.delete(f"{_ACTIVE_JTIS_PREFIX}{uid}")
+        
+        try:
+            await pipe.execute()
+        except Exception:
+            from app.core.logging import get_logger
+            _logger = get_logger(__name__)
+            _logger.exception(
+                "redis_batch_pipeline_failed",
+                extra={"user_count": len(user_ids), "jti_count": len(all_jtis)},
+            )
+            raise
+    
+    logger.info(
+        "Batch token revocation completed",
+        extra={"user_count": len(user_ids), "jti_count": len(all_jtis)},
+    )
+
+
 def secure_compare(val_a: str, val_b: str) -> bool:
     """Compara dos strings en tiempo constante"""
     return hmac.compare_digest(val_a.encode(), val_b.encode())

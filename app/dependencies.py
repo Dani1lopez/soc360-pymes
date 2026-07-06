@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError
+from jwt import InvalidTokenError
 from redis.asyncio import Redis
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,7 +48,7 @@ async def get_current_user(
 ) -> User:
     try:
         payload = decode_access_token(token)
-    except JWTError:
+    except InvalidTokenError:
         logger.warning("auth_failed", reason="invalid_token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

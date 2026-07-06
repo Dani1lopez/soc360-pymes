@@ -5,9 +5,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import bcrypt as _bcrypt
-from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt
+import jwt
+from jwt import ExpiredSignatureError, InvalidTokenError
 from redis.asyncio import Redis
 
 from app.core.config import settings
@@ -17,23 +17,10 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
-if not getattr(_bcrypt, "__soc360_compat__", False):
-    _bcrypt_hashpw = _bcrypt.hashpw
-
-    def _hashpw_compat(secret: bytes, salt: bytes) -> bytes:
-        if len(secret) > 72:
-            secret = secret[:72]
-        return _bcrypt_hashpw(secret, salt)
-
-    _bcrypt.hashpw = _hashpw_compat
-    _bcrypt.__soc360_compat__ = True
-
-
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
 def hash_password(plain: str) -> str:
-    return _pwd_context.hash(plain)
+    """Hash password using bcrypt with 72-byte limit."""
+    password_bytes = plain.encode("utf-8")[:72]
+    return bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode("utf-8")
 
 
 def validate_password_length(password: str) -> None:
@@ -49,7 +36,11 @@ def validate_password_length(password: str) -> None:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return _pwd_context.verify(plain, hashed)
+    """Verify password against bcrypt hash."""
+    return bcrypt.checkpw(
+        plain.encode("utf-8")[:72],
+        hashed.encode("utf-8"),
+    )
 
 
 ROLE_HIERARCHY: dict[str, int] = {
@@ -121,7 +112,7 @@ def decode_access_token(token: str) -> dict[str, Any]:
     missing = required_fields - payload.keys()
     
     if missing:
-        raise JWTError(f"Payload incompleto, faltan campos: {missing}")
+        raise InvalidTokenError(f"Payload incompleto, faltan campos: {missing}")
     
     return payload
 

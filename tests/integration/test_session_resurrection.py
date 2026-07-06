@@ -247,13 +247,14 @@ async def test_tenant_reactivation_does_not_resurrect_old_tokens(
     )
     assert resp.status_code == 401, "Old refresh token debe seguir revocado tras tenant reactivacion"
 
-    # 6. Verificar que fresh login funciona
+    # 6. Verificar que fresh login falla (usuarios siguen desactivados tras reactivacion de tenant)
+    # Security fix (issue #132): tenant reactivation NO reactiva usuarios individualmente
     client.cookies.clear()
     login = await client.post(
         "/api/v1/auth/login",
         json={"email": "admin@beta.test", "password": "AdminBeta123!"},
     )
-    assert login.status_code == 200, "Fresh login debe funcionar tras tenant reactivacion"
+    assert login.status_code == 401, "Fresh login debe fallar tras tenant reactivacion (usuarios no se reactivan automaticamente)"
 
 
 # ---------------------------------------------------------------------------
@@ -369,10 +370,11 @@ async def test_no_revocation_on_false_to_true_tenant_reactivation(
     assert resp.status_code == 200
     assert resp.json()["is_active"] is True
 
-    # 3. Fresh login debe funcionar
+    # 3. Fresh login debe fallar (usuarios siguen desactivados tras reactivacion de tenant)
+    # Security fix (issue #132): tenant reactivation NO reactiva usuarios individualmente
     client.cookies.clear()
     login = await client.post(
         "/api/v1/auth/login",
         json={"email": "admin@beta.test", "password": "AdminBeta123!"},
     )
-    assert login.status_code == 200, "Fresh login debe funcionar tras tenant reactivacion"
+    assert login.status_code == 401, "Fresh login debe fallar tras tenant reactivacion (usuarios no se reactivan automaticamente)"

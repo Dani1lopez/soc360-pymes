@@ -159,7 +159,7 @@ def test_ci_uv_job_has_import_smoke_step():
     ci_text = (ROOT / ".github/workflows/ci.yml").read_text()
     assert "Smoke test uv import surface" in ci_text
     assert "import uvicorn, sqlalchemy.ext.asyncio, redis.asyncio, celery" in ci_text
-    assert "jose, passlib, asyncpg, cryptography, bcrypt, hiredis" in ci_text
+    assert "jwt, asyncpg, cryptography, bcrypt, hiredis" in ci_text
 
 
 def test_ci_uv_job_has_celery_help_step():

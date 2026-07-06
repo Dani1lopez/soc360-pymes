@@ -67,7 +67,7 @@ jobs:
       - name: Smoke test uv import surface
         run: >
           uv run python -c
-          "import uvicorn, sqlalchemy.ext.asyncio, redis.asyncio, celery, jose, passlib, asyncpg, cryptography, bcrypt, hiredis"
+          "import uvicorn, sqlalchemy.ext.asyncio, redis.asyncio, celery, jwt, asyncpg, cryptography, bcrypt, hiredis"
 
       - name: Smoke test Celery CLI help
         run: uv run celery --help

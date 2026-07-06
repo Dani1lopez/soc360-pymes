@@ -166,3 +166,35 @@ def call_call_params(call_args) -> dict | None:
     if "params" in call_args[1]:
         return call_args[1]["params"]
     return None
+
+
+class TestBuildConnectArgs:
+    """Verify _build_connect_args produces correct asyncpg server_settings
+    (issue #134).
+
+    The helper is a pure function — no module reload or SQLAlchemy monkeypatch
+    needed. This avoids polluting app.core.database.engine / AsyncSessionLocal
+    with mock-derived globals.
+    """
+
+    def test_returns_statement_and_lock_timeout_as_strings(self):
+        """_build_connect_args MUST return server_settings with string values
+        for statement_timeout and lock_timeout."""
+        from app.core.database import _build_connect_args
+
+        result = _build_connect_args(12345, 6789)
+
+        assert result == {
+            "server_settings": {
+                "statement_timeout": "12345",
+                "lock_timeout": "6789",
+            },
+        }
+
+    def test_default_timeout_values(self):
+        """The module-level engine MUST be created with default timeout values
+        when no env override is set (30s statement, 5s lock)."""
+        from app.core.config import settings
+
+        assert settings.DB_STATEMENT_TIMEOUT_MS == 30_000
+        assert settings.DB_LOCK_TIMEOUT_MS == 5_000

@@ -681,3 +681,4 @@ async def test_mass_assignment_rejected(
     resp = await client.get(f"/api/v1/users/{ANALYST_A_ID}", headers=admin_a_headers)
     assert resp.status_code == 200
     assert resp.json()["is_superadmin"] is False, "El campo is_superadmin no debería haberse aplicado"
+

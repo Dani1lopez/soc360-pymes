@@ -6,7 +6,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115.6-009688.svg)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D.svg)
-![Tests](https://img.shields.io/badge/tests-500%2B-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-673-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-All%20Rights%20Reserved-red.svg)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 ![Ruff](https://img.shields.io/badge/linter-ruff-261C15.svg)
@@ -28,7 +28,7 @@ Small and medium-sized businesses (PyMEs) face the same cyber threats as enterpr
 | Phase | Status | Description |
 |-------|--------|-------------|
 | **F0** | ✅ Complete | Architecture & Data Model — 23 ADRs, 13 DB tables, security model |
-| **F1** | ✅ Complete | Backend Base — Auth, tenants, users, RLS, events, LLM — 500+ tests passing |
+| **F1** | ✅ Complete | Backend Base — Auth, tenants, users, RLS, events, LLM — 673 tests passing |
 | **F2** | 🔄 In Progress | Vulnerability Agent — Nmap executor, LangGraph agent, asset/vuln CRUD, dashboard, PDF reports |
 | **F3** | 📋 Planned | Real-time — WebSockets, log ingestion, anomaly detection |
 | **F4** | 📋 Planned | Frontend — React 18 + TypeScript + Vite (MVP June 2026) |
@@ -119,13 +119,9 @@ soc360-pymes/
 │       ├── auth/               # ✅ F1 — 672 loc
 │       ├── tenants/            # ✅ F1 — 510 loc
 │       ├── users/              # ✅ F1 — 556 loc
-│       ├── assets/             # 🔲 F2 scaffold
-│       ├── scans/              # 🔲 F2 scaffold
-│       ├── vulnerabilities/    # 🔲 F2 scaffold
-│       ├── dashboard/          # 🔲 F2 scaffold
-│       ├── alerts/             # 📋 Planned
-│       ├── anomalies/          # 📋 Planned
-│       └── ingest/             # 📋 Planned
+│       ├── assets/             # ✅ F2 — models
+│       ├── scans/              # ✅ F2 — models
+│       └── vulnerabilities/    # ✅ F2 — models
 ├── tests/                      # 10,900+ lines
 │   ├── conftest.py             # Shared fixtures
 │   ├── unit/                   # Fakeredis + mocks
@@ -144,7 +140,7 @@ soc360-pymes/
 └── AGENTS.md
 ```
 
-> **Note**: Assets, Scans, Vulnerabilities, Dashboard, and Agents modules are currently scaffold-only (`__init__.py`) and will be implemented in F2.
+> **Note**: Assets, Scans, and Vulnerabilities modules have models implemented (F2 in progress). Empty scaffold modules (dashboard, alerts, anomalies, ingest) have been removed.
 
 ---
 
@@ -175,7 +171,7 @@ uv run alembic upgrade head
 # 6. Seed database with demo data
 uv run python scripts/seed_db.py
 
-# 7. Run tests (500+ tests across 3 layers)
+# 7. Run tests (673 tests across 3 layers)
 uv run pytest -v
 
 # 8. Start dev server

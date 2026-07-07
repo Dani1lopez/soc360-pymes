@@ -63,6 +63,7 @@ class _BaseHTTPProvider:
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
 
     def _build_request(
         self,
@@ -113,8 +114,7 @@ class _BaseHTTPProvider:
         last_error: Exception | None = None
         for attempt in range(1, LLM_RETRY_MAX_ATTEMPTS + 1):
             try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout)) as client:
-                    response = await client.post(url, json=payload, headers=headers)
+                response = await self._client.post(url, json=payload, headers=headers)
             except httpx.TimeoutException:
                 _llm_logger.warning(
                     "LLM timeout: provider=%s timeout=%ss",
@@ -221,6 +221,10 @@ class _BaseHTTPProvider:
 
         # Unreachable — keeps type-checkers happy
         raise LLMError("Unexpected: retry loop exited without returning or raising")
+
+    async def close(self) -> None:
+        """Close the underlying HTTP client and release connection pool."""
+        await self._client.aclose()
 
 
 class OpenAICompatProvider(_BaseHTTPProvider):
@@ -421,4 +425,13 @@ async def llm_safe_complete(
         text = await provider.complete(prompt, max_tokens, temperature)
         return text, False
     except LLMError:
+        return "", True
+    except Exception:
+        # Catch generic exceptions (ValueError, TypeError, ConnectionError, etc.)
+        # that provider.complete() may raise but aren't LLMError subtypes.
+        _llm_logger.warning(
+            "LLM unexpected error: provider=%s error=%s",
+            type(provider).__name__,
+            exc_info=True,
+        )
         return "", True

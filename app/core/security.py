@@ -187,33 +187,63 @@ async def revoke_all_user_access_tokens(
     redis: Redis,
     ttl_seconds: int,
 ) -> None:
-    """Revoca todos los JTIs activos del usuario y elimina el conjunto.
-    
-    Usa pipeline atómico para denylist + delete. Si falla, la denylist parcial
-    sigue siendo segura (los tokens siguen bloqueados aunque no se borró el set).
+    """Revoca todos los JTIs activos del usuario usando comandos ordenados (REQ-140-R05).
+
+    Estrategia defense-in-depth:
+    1. Escribe cada entrada denylist con ``redis.set(...)`` ordenado (sin pipeline).
+    2. Si al menos una SET tuvo éxito, intenta eliminar el set ``active_jtis``
+       (best-effort) incluso si alguna SET posterior falló.
+    3. Si ninguna SET tuvo éxito, propaga el error para que el caller reintente.
+
+    Esto evita el estado parcial ambiguo de usar ``pipeline(transaction=True)``:
+    si el pipeline falla en ``execute()``, no sabemos cuántas SET llegaron a Redis.
     """
     key = f"{_ACTIVE_JTIS_PREFIX}{user_id}"
     jtis = await redis.smembers(key)
     if not jtis:
         logger.debug("No hay JTIs activos para revocar", extra={"user_id": user_id})
         return
-    
+
     jti_strs = [j.decode() if isinstance(j, bytes) else j for j in jtis]
-    
-    async with redis.pipeline(transaction=True) as pipe:
-        for jti in jti_strs:
-            pipe.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
-        pipe.delete(key)
+    denylisted_count = 0
+
+    # Fase 1: denylist SETs ordenados (sin pipeline, REQ-140-R05)
+    for jti in jti_strs:
         try:
-            await pipe.execute()
+            await redis.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
+            denylisted_count += 1
         except Exception:
-            logger.exception(
-                "redis_pipeline_failed",
-                extra={"user_id": user_id, "jtis_count": len(jti_strs)},
+            if denylisted_count == 0:
+                # Zero success — propagate for retry
+                logger.warning(
+                    "redis_revoke_zero_success",
+                    extra={"user_id": user_id, "jtis_count": len(jti_strs)},
+                )
+                raise
+            # Partial success — log and continue to best-effort cleanup
+            logger.warning(
+                "redis_revoke_all_partial_failure",
+                extra={
+                    "user_id": user_id,
+                    "jtis_count": len(jti_strs),
+                    "denylisted_count": denylisted_count,
+                },
             )
-            raise
-    
-    logger.info("Todos los JTIs del usuario revocados", extra={"user_id": user_id, "count": len(jti_strs)})
+            break
+
+    # Fase 2: best-effort DELETE del set active_jtis
+    try:
+        await redis.delete(key)
+    except Exception:
+        logger.warning(
+            "redis_active_jtis_cleanup_failed",
+            extra={"user_id": user_id},
+        )
+
+    logger.info(
+        "Todos los JTIs del usuario revocados",
+        extra={"user_id": user_id, "count": denylisted_count, "total_jtis": len(jti_strs)},
+    )
 
 
 async def revoke_all_user_access_tokens_batch(

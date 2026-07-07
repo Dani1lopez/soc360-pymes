@@ -43,6 +43,11 @@ PR1_INDENT_IMPORT_ALLOWLIST: set[tuple[str, int, str]] = {
     # `app.modules.auth.service` and `app.dependencies`. PR-1 does not refactor
     # this pattern.
     ("app/modules/auth/service.py", 42, "get_event_bus"),
+    # `from app.core.llm import get_llm_provider` and
+    # `from app.core.llm.providers import _BaseHTTPProvider` are deferred imports
+    # inside `shutdown()` to avoid circular imports at module level (issue #194).
+    ("app/main.py", 154, "get_llm_provider"),
+    ("app/main.py", 155, "_BaseHTTPProvider"),
 }
 
 

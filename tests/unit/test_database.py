@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 from unittest.mock import AsyncMock, MagicMock
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import pytest
 
@@ -102,7 +103,8 @@ class TestSetTenantContextSuperadminCombinedSQL:
         pooled connections."""
         from app.core.database import set_tenant_context
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_db.execute.return_value = MagicMock()
 
         await set_tenant_context(db=mock_db, tenant_id="abc-123", is_superadmin=True)
@@ -127,7 +129,8 @@ class TestSetTenantContextSuperadminCombinedSQL:
         roundtrip. Regular users MUST NOT get is_superadmin='true'."""
         from app.core.database import set_tenant_context
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
 
         await set_tenant_context(
             db=mock_db, tenant_id="tenant-xyz", is_superadmin=False

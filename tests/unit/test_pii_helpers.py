@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.pii import hash_email, mask_ip
+from app.core.pii import hash_email, mask_ip, sanitize_user_agent
 
 
 class TestHashEmail:
@@ -49,3 +49,52 @@ class TestMaskIp:
     def test_mask_ip_non_ipv4_returns_original(self):
         """mask_ip MUST return original string for non-IPv4 input."""
         assert mask_ip("not-an-ip") == "not-an-ip"
+
+
+class TestSanitizeUserAgent:
+    """Validate sanitize_user_agent behaviour (REQ-140-R08)."""
+
+    def test_none_returns_none(self):
+        """sanitize_user_agent MUST return None when input is None."""
+        assert sanitize_user_agent(None) is None
+
+    def test_empty_string_returns_none(self):
+        """sanitize_user_agent MUST return None for empty string."""
+        assert sanitize_user_agent("") is None
+
+    def test_whitespace_only_returns_none(self):
+        """sanitize_user_agent MUST return None for whitespace-only input."""
+        assert sanitize_user_agent("   \t  \n  ") is None
+
+    def test_control_chars_are_replaced(self):
+        """Control characters MUST be replaced with space."""
+        result = sanitize_user_agent("Mozilla\x00Foo\x1fBar\x7f")
+        assert result is not None
+        assert "\x00" not in result
+        assert "\x1f" not in result
+        assert "\x7f" not in result
+        # Replaced with spaces, then collapsed
+        assert result == "Mozilla Foo Bar"
+
+    def test_whitespace_is_collapsed(self):
+        """Runs of whitespace MUST be collapsed to single space."""
+        result = sanitize_user_agent("Mozilla/5.0   (Linux;   Android 13)")
+        assert result == "Mozilla/5.0 (Linux; Android 13)"
+
+    def test_long_ua_is_capped_at_256(self):
+        """Output MUST be capped at 256 characters."""
+        long_ua = "Mozilla/5.0 " + "x" * 500
+        result = sanitize_user_agent(long_ua)
+        assert result is not None
+        assert len(result) == 256
+
+    def test_normal_ua_passes_through(self):
+        """Normal User-Agent MUST remain unchanged (except whitespace normalization)."""
+        ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+        result = sanitize_user_agent(ua)
+        assert result == ua
+
+    def test_leading_trailing_whitespace_stripped(self):
+        """Leading and trailing whitespace MUST be stripped."""
+        result = sanitize_user_agent("  Chrome/120  ")
+        assert result == "Chrome/120"

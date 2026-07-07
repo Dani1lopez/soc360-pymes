@@ -31,7 +31,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.core.database import set_tenant_context
 from app.core.exceptions import AuthError, ServiceUnavailableError
-from app.core.pii import hash_email, mask_ip
+from app.core.pii import hash_email, mask_ip, sanitize_user_agent
 from app.core.redis import check_redis_healthy
 from app.event_schemas import AuthLoginEvent, AuthSuperadminLoginEvent
 
@@ -386,6 +386,9 @@ async def login(
     await track_jti(str(user.id), jti, redis)
     refresh_token = await _create_refresh_token(user.id, db, created_from_ip=request_ip)
 
+    # Sanitize User-Agent before publishing (REQ-140-R08)
+    safe_user_agent = sanitize_user_agent(user_agent)
+
     # Publish login event (non-blocking on failure)
     try:
         event_bus = await get_event_bus()
@@ -395,7 +398,7 @@ async def login(
                 user_id=str(user.id),
                 email_hash=hash_email(user.email),
                 ip_prefix=mask_ip(request_ip),
-                user_agent=user_agent,
+                user_agent=safe_user_agent,
             ))
         else:
             await event_bus.publish(AuthLoginEvent(
@@ -404,7 +407,7 @@ async def login(
                 user_id=str(user.id),
                 email_hash=hash_email(user.email),
                 ip_prefix=mask_ip(request_ip),
-                user_agent=user_agent,
+                user_agent=safe_user_agent,
             ))
     except RedisError:
         logger.warning("event_publish_failed", event_type="auth.login", reason="redis_error")

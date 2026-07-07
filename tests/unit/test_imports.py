@@ -24,10 +24,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 APP_DIR = PROJECT_ROOT / "app"
 
 # Files in PR-1's slice (per the design PR-1 section + the orchestrator scope).
+# After refactor-180 (god files SRP), event_bus was split into a package.
+# We target the sub-module that still contains __import__ and indented imports.
 PR1_TARGETS: list[Path] = [
     APP_DIR / "modules" / "auth" / "service.py",
     APP_DIR / "core" / "security.py",
-    APP_DIR / "event_bus.py",
+    APP_DIR / "event_bus" / "bus.py",
     APP_DIR / "main.py",
 ]
 
@@ -64,12 +66,12 @@ def _format_offender(path: Path, lineno: int, line: str) -> str:
             id="app/main.py",
         ),
         pytest.param(
-            APP_DIR / "event_bus.py",
-            id="app/event_bus.py",
+            APP_DIR / "event_bus" / "bus.py",
+            id="app/event_bus/bus.py",
             marks=pytest.mark.xfail(
                 strict=True,
                 reason=(
-                    "event_bus.py L180 uses __import__('datetime') inside the "
+                    "event_bus/bus.py uses __import__('datetime') inside the "
                     "DLQ write block. Belongs to the event_bus cleanup issue, "
                     "not #101. Remove this xfail mark when that issue is fixed."
                 ),
@@ -96,8 +98,8 @@ def test_no_dunder_import_call(target: Path) -> None:
     "target",
     [
         pytest.param(
-            APP_DIR / "event_bus.py",
-            id="app/event_bus.py",
+            APP_DIR / "event_bus" / "bus.py",
+            id="app/event_bus/bus.py",
         ),
         pytest.param(
             APP_DIR / "modules" / "auth" / "service.py",
@@ -132,7 +134,7 @@ def test_no_dunder_import_call(target: Path) -> None:
             marks=pytest.mark.xfail(
                 strict=True,
                 reason=(
-                    "main.py L49 `from app.event_bus import EventBus` is an "
+                    "main.py L66 `from app.event_bus import EventBus` is an "
                     "indented import inside the consumer message loop. Owned "
                     "by issue #102 (inline imports refactor, 6 ubicaciones). "
                     "Remove this xfail mark when #102 is fixed."

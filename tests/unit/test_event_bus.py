@@ -102,6 +102,88 @@ class TestEventBusPublish:
         assert b"-" in msg_id
 
 
+class TestEventBusPublishNoneFilter:
+    """Validate publish() filters None values before XADD (W1)."""
+
+    @pytest_asyncio.fixture
+    async def client(self) -> FakeRedis:
+        r = FakeRedis()
+        yield r
+        await r.aclose()
+
+    @pytest.mark.asyncio
+    async def test_publish_omits_none_tenant_id_from_redis(self, client: FakeRedis):
+        """publish() MUST omit tenant_id from Redis payload when it is None."""
+        from app.event_bus import EventBus
+        from app.event_schemas import AuthSuperadminLoginEvent
+
+        bus = EventBus(redis_client=client)
+
+        # Create a tenantless superadmin login event
+        event = AuthSuperadminLoginEvent(
+            event_id=uuid.uuid4(),
+            user_id="sa-user",
+            email_hash="a" * 32,
+        )
+        assert event.tenant_id is None  # precondition
+
+        msg_id = await bus.publish(event)
+        assert isinstance(msg_id, bytes)
+
+        # Read the raw message from Redis
+        stream = "events:system.auth.login"
+        messages = await client.xrange(stream)
+        assert len(messages) >= 1
+
+        _msg_id, fields = messages[0]
+        field_dict = {
+            k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+            for k, v in fields.items()
+        }
+        # tenant_id must NOT be in the XADD payload (None values filtered out)
+        assert "tenant_id" not in field_dict, (
+            f"tenant_id should be omitted from Redis when None, "
+            f"but found in payload keys: {list(field_dict.keys())}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_publish_keeps_non_none_tenant_id(self, client: FakeRedis):
+        """publish() MUST keep tenant_id in Redis payload when it is not None."""
+        from app.event_bus import EventBus
+        from app.event_schemas import AuthLoginEvent
+        from datetime import datetime, timezone
+
+        bus = EventBus(redis_client=client)
+        tenant_id = uuid.uuid4()
+
+        event = AuthLoginEvent(
+            event_id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            user_id="user-123",
+            email_hash="b" * 32,
+            ip_prefix="192.168.1.0/24",
+            user_agent="Mozilla/5.0",
+            timestamp=datetime.now(timezone.utc),
+        )
+        assert event.tenant_id is not None  # precondition
+
+        msg_id = await bus.publish(event)
+        assert isinstance(msg_id, bytes)
+
+        # Read the raw message from Redis
+        messages = await client.xrange("events:auth.login")
+        assert len(messages) >= 1
+
+        _msg_id, fields = messages[0]
+        field_dict = {
+            k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+            for k, v in fields.items()
+        }
+        # tenant_id MUST be present when not None
+        assert "tenant_id" in field_dict
+        assert field_dict["tenant_id"] == str(tenant_id)
+
+
 class TestEventConsumerInit:
     """Validate EventConsumer initialization."""
 

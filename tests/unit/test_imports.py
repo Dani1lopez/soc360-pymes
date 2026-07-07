@@ -107,39 +107,20 @@ def test_no_dunder_import_call(target: Path) -> None:
             marks=pytest.mark.xfail(
                 strict=True,
                 reason=(
-                    "L276 `from app.event_schemas import AuthLoginEvent` is a "
-                    "deferred import inside the login() try block to avoid a "
-                    "circular-import concern. Explicitly out of scope for #101; "
-                    "remove this xfail mark when the circular-import cleanup is "
-                    "done."
+                    "service.py L51 `from app.dependencies import get_event_bus` "
+                    "is a deferred import inside get_event_bus() to allow test "
+                    "patching of the dependency. Moving to module level would "
+                    "break mock injection. Leave as-is."
                 ),
             ),
         ),
         pytest.param(
             APP_DIR / "core" / "security.py",
             id="app/core/security.py",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "security.py L195 `from app.core.logging import get_logger` "
-                    "is an indented import inside an except block. Belongs to "
-                    "the security import cleanup issue, not #101. Remove this "
-                    "xfail mark when that issue is fixed."
-                ),
-            ),
         ),
         pytest.param(
             APP_DIR / "main.py",
             id="app/main.py",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "main.py L66 `from app.event_bus import EventBus` is an "
-                    "indented import inside the consumer message loop. Owned "
-                    "by issue #102 (inline imports refactor, 6 ubicaciones). "
-                    "Remove this xfail mark when #102 is fixed."
-                ),
-            ),
         ),
     ],
 )

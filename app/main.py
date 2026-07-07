@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.middleware import HTTPSRedirectMiddleware, SecurityHeadersMiddleware
 from app.core.redis import ping_redis_with_retry, close_pool, get_redis_client
-from app.event_bus import EventConsumer, drain_dlq_tasks
+from app.event_bus import EventConsumer, EventBus, drain_dlq_tasks
 from app.modules.auth.router import router as auth_router
 from app.modules.tenants.router import router as tenants_router
 from app.modules.users.router import router as users_router
@@ -63,8 +63,6 @@ async def _consumer_loop(
                     messages = await consumer.read_new(block=_XREADGROUP_BLOCK_MS)
 
                 for msg in messages:
-                    from app.event_bus import EventBus
-
                     raw_msg_id = msg["message_id"]
                     msg_id = raw_msg_id.decode() if isinstance(raw_msg_id, bytes) else raw_msg_id
                     await EventBus._dispatch_event(

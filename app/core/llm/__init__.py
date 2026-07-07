@@ -22,7 +22,6 @@ from app.core.llm.providers import (  # noqa: F401
     AnthropicProvider,
     GeminiProvider,
     LLMProvider,
-    MockLLMProvider,
     OpenAICompatProvider,
     _BaseHTTPProvider,
     llm_safe_complete,

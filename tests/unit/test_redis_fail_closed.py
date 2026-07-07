@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from uuid import uuid4
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import pytest
 from fastapi import HTTPException
@@ -17,7 +18,7 @@ class TestRedisFailClosed:
         from app.core.exceptions import ServiceUnavailableError
 
         mock_redis = AsyncMock()
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
 
         with patch("app.modules.auth.service.check_redis_healthy", return_value=False):
             with pytest.raises(ServiceUnavailableError) as exc_info:
@@ -41,7 +42,7 @@ class TestRedisFailClosed:
         from app.core.exceptions import ServiceUnavailableError
 
         mock_redis = AsyncMock()
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
 
         with patch("app.modules.auth.service.check_redis_healthy", return_value=False):
             with pytest.raises(ServiceUnavailableError) as exc_info:
@@ -64,7 +65,7 @@ class TestRedisFailClosed:
         from app.core.exceptions import ServiceUnavailableError
 
         mock_redis = AsyncMock()
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
 
         with patch("app.modules.auth.service.check_redis_healthy", return_value=False):
             with pytest.raises(ServiceUnavailableError) as exc_info:
@@ -89,7 +90,7 @@ class TestRedisFailClosed:
         from app.core.exceptions import ServiceUnavailableError
 
         mock_redis = AsyncMock()
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
 
         with patch("app.modules.auth.service.check_redis_healthy", return_value=False):
             with pytest.raises(ServiceUnavailableError) as exc_info:
@@ -121,7 +122,7 @@ class TestRedisFailClosed:
         )
 
         mock_redis = AsyncMock()
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
 
         with patch("app.dependencies.auth.check_redis_healthy", return_value=False):
             from app.dependencies import get_current_user

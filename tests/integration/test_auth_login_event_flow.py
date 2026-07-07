@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
+from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import uuid4
 
 from fakeredis.aioredis import FakeRedis
@@ -42,7 +43,8 @@ async def test_auth_login_event_appears_in_redis_stream():
     mock_tenant = MagicMock()
     mock_tenant.is_active = True
 
-    mock_db = AsyncMock()
+    mock_db = MagicMock(spec=AsyncSession)
+    mock_db.execute = AsyncMock()
 
     # --- Mock all auth service internals ---
     with patch.object(service, "_check_account_lockout", return_value=None):
@@ -203,7 +205,8 @@ async def test_login_succeeds_even_if_redis_unavailable_for_event():
     mock_tenant = MagicMock()
     mock_tenant.is_active = True
 
-    mock_db = AsyncMock()
+    mock_db = MagicMock(spec=AsyncSession)
+    mock_db.execute = AsyncMock()
     fake_redis = FakeRedis()
 
     # EventBus that will fail on publish
@@ -267,7 +270,8 @@ async def test_superadmin_login_publishes_system_event_in_separate_stream():
     mock_user.is_active = True
     mock_tenant = None  # superadmin
 
-    mock_db = AsyncMock()
+    mock_db = MagicMock(spec=AsyncSession)
+    mock_db.execute = AsyncMock()
 
     with patch.object(service, "_check_account_lockout", return_value=None):
         with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):

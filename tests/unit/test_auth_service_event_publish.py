@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import uuid4
 
 
@@ -34,10 +35,11 @@ class TestAuthLoginEventPublish:
         mock_tenant.is_active = True
 
         # Mock DB and Redis
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_redis = AsyncMock()
 
-        # Capture published event
+        # Capture published events
         published_events: list[AuthLoginEvent] = []
 
         async def mock_publish(event: AuthLoginEvent) -> bytes:
@@ -106,7 +108,8 @@ class TestAuthLoginEventPublish:
         mock_tenant = MagicMock()
         mock_tenant.is_active = True
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_redis = AsyncMock()
 
         published_events: list[AuthLoginEvent] = []
@@ -169,7 +172,8 @@ class TestAuthLoginEventPublish:
         mock_tenant = MagicMock()
         mock_tenant.is_active = True
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_redis = AsyncMock()
 
         mock_event_bus = AsyncMock(spec=EventBus)
@@ -224,7 +228,8 @@ class TestAuthLoginEventPublish:
         mock_tenant = MagicMock()
         mock_tenant.is_active = True
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_redis = AsyncMock()
 
         mock_event_bus = AsyncMock(spec=EventBus)
@@ -278,7 +283,8 @@ class TestAuthSuperadminLoginEventPublish:
         mock_user.is_active = True
         mock_tenant = None  # superadmins have no tenant
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_redis = AsyncMock()
 
         published_events: list = []
@@ -356,7 +362,8 @@ class TestAuthSuperadminLoginEventPublish:
         mock_tenant = MagicMock()
         mock_tenant.is_active = True
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_redis = AsyncMock()
 
         published_events: list = []
@@ -439,7 +446,8 @@ class TestLoginEventErrorHandling:
         mock_tenant = MagicMock()
         mock_tenant.is_active = True
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_redis = AsyncMock()
 
         mock_event_bus = AsyncMock()
@@ -501,7 +509,8 @@ class TestLoginEventErrorHandling:
         mock_tenant = MagicMock()
         mock_tenant.is_active = True
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_redis = AsyncMock()
 
         mock_event_bus = AsyncMock()

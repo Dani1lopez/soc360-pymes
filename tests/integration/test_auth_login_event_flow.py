@@ -47,7 +47,7 @@ async def test_auth_login_event_appears_in_redis_stream():
     # --- Mock all auth service internals ---
     with patch.object(service, "_check_account_lockout", return_value=None):
         with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):
-            with patch("app.modules.auth.service.verify_password", return_value=True):
+            with patch("app.modules.auth.service.verify_password_async", return_value=True):
                 with patch.object(service, "_check_tenant_active", return_value=None):
                     with patch.object(service, "_clear_login_attempts", return_value=None):
                         with patch(
@@ -212,7 +212,7 @@ async def test_login_succeeds_even_if_redis_unavailable_for_event():
 
     with patch.object(service, "_check_account_lockout", return_value=None):
         with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):
-            with patch("app.modules.auth.service.verify_password", return_value=True):
+            with patch("app.modules.auth.service.verify_password_async", return_value=True):
                 with patch.object(service, "_check_tenant_active", return_value=None):
                     with patch.object(service, "_clear_login_attempts", return_value=None):
                         with patch(

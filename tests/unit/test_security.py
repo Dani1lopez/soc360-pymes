@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -345,4 +346,50 @@ class TestRevokeAllUserAccessTokensBatch:
             assert await redis.exists("active_jtis:user-2") == 0
         finally:
             await redis.aclose()
-            await redis.aclose()
+
+
+class TestBcryptAsyncWrappers:
+    """Verify async wrappers offload bcrypt to threadpool (issue #195)."""
+
+    @pytest.mark.asyncio
+    async def test_hash_password_async_produces_valid_hash(self):
+        """hash_password_async must return a bcrypt hash string."""
+        from app.core.security import hash_password_async
+
+        result = await hash_password_async("testpassword123")
+
+        assert result.startswith("$2")
+        assert len(result) > 0
+
+    @pytest.mark.asyncio
+    async def test_verify_password_async_correct(self):
+        """verify_password_async returns True for matching passwords."""
+        from app.core.security import hash_password, verify_password_async
+
+        h = hash_password("testpassword123")
+
+        assert await verify_password_async("testpassword123", h) is True
+
+    @pytest.mark.asyncio
+    async def test_verify_password_async_wrong(self):
+        """verify_password_async returns False for mismatched passwords."""
+        from app.core.security import hash_password, verify_password_async
+
+        h = hash_password("testpassword123")
+
+        assert await verify_password_async("wrongpassword", h) is False
+
+    @pytest.mark.asyncio
+    async def test_concurrent_bcrypt_does_not_block_event_loop(self):
+        """10 concurrent verifications must complete faster than sequential."""
+        from app.core.security import hash_password, verify_password_async
+
+        h = hash_password("testpassword123")
+        tasks = [verify_password_async("testpassword123", h) for _ in range(10)]
+
+        # If these run sequentially: ~10 × 200 ms = 2 s+
+        # If offloaded to threadpool: all run in parallel < 1 s
+        results = await asyncio.wait_for(
+            asyncio.gather(*tasks), timeout=1.5
+        )
+        assert all(results)

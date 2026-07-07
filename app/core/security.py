@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import anyio
 import bcrypt
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
@@ -41,6 +42,16 @@ def verify_password(plain: str, hashed: str) -> bool:
         plain.encode("utf-8")[:72],
         hashed.encode("utf-8"),
     )
+
+
+async def hash_password_async(plain: str) -> str:
+    """Async wrapper — offloads bcrypt.hashpw to a threadpool worker."""
+    return await anyio.to_thread.run_sync(hash_password, plain)
+
+
+async def verify_password_async(plain: str, hashed: str) -> bool:
+    """Async wrapper — offloads bcrypt.checkpw to a threadpool worker."""
+    return await anyio.to_thread.run_sync(verify_password, plain, hashed)
 
 
 ROLE_HIERARCHY: dict[str, int] = {

@@ -66,7 +66,7 @@ class TestAuthService:
         # Mock the helper functions
         with patch.object(service, '_check_account_lockout', return_value=None):
             with patch.object(service, '_get_active_user', return_value=(mock_user, mock_tenant)):
-                with patch('app.modules.auth.service.verify_password', return_value=True):
+                with patch('app.modules.auth.service.verify_password_async', return_value=True):
                     with patch.object(service, '_check_tenant_active', return_value=None):
                         with patch.object(service, '_clear_login_attempts', return_value=None):
                             with patch('app.modules.auth.service.create_access_token', return_value=("access_token", "jti-123")):
@@ -99,7 +99,7 @@ class TestAuthService:
         
         with patch.object(service, '_check_account_lockout', return_value=None):
             with patch.object(service, '_get_active_user', return_value=(mock_user, mock_tenant)):
-                with patch('app.modules.auth.service.verify_password', return_value=False):
+                with patch('app.modules.auth.service.verify_password_async', return_value=False):
                     with patch.object(service, '_record_failed_attempt', return_value=None):
                         with pytest.raises(AuthError) as exc_info:
                             await service.login(
@@ -163,7 +163,7 @@ class TestAuthService:
 
         with patch.object(service, '_check_account_lockout', return_value=None), \
              patch.object(service, '_get_active_user', return_value=(mock_user, mock_tenant)), \
-             patch('app.modules.auth.service.verify_password', return_value=True), \
+             patch('app.modules.auth.service.verify_password_async', return_value=True), \
              patch.object(service, '_check_tenant_active', return_value=None), \
              patch.object(service, '_clear_login_attempts', return_value=None), \
              patch('app.modules.auth.service.create_access_token', return_value=("access_token", "jti-123")), \
@@ -331,7 +331,7 @@ class TestLoginEnumerationResistance:
 
         with patch.object(service, '_check_account_lockout', return_value=None):
             with patch.object(service, '_get_active_user', return_value=(mock_user, mock_tenant)):
-                with patch('app.modules.auth.service.verify_password', return_value=False):
+                with patch('app.modules.auth.service.verify_password_async', return_value=False):
                     with patch.object(service, '_record_failed_attempt', return_value=None):
                         with pytest.raises(AuthError) as exc_info:
                             await service.login(
@@ -418,7 +418,7 @@ class TestLoginEnumerationResistance:
         # --- Case 2: Wrong password ---
         with patch.object(service, '_check_account_lockout', return_value=None):
             with patch.object(service, '_get_active_user', return_value=(mock_user, mock_tenant)):
-                with patch('app.modules.auth.service.verify_password', return_value=False):
+                with patch('app.modules.auth.service.verify_password_async', return_value=False):
                     with patch.object(service, '_record_failed_attempt', return_value=None):
                         with pytest.raises(AuthError) as exc2:
                             await service.login(
@@ -619,7 +619,7 @@ class TestLoginTenantJoinOptimization:
         mock_redis = AsyncMock()
 
         with patch.object(service, "_check_account_lockout", return_value=None), \
-             patch("app.modules.auth.service.verify_password", return_value=True), \
+             patch("app.modules.auth.service.verify_password_async", return_value=True), \
              patch.object(service, "_clear_login_attempts", return_value=None), \
              patch("app.modules.auth.service.create_access_token",
                    return_value=("access_token", "jti-123")), \

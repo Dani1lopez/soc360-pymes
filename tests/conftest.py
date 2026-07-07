@@ -254,10 +254,11 @@ async def admin_b_headers(admin_b_token: str) -> dict:
 @pytest.fixture(autouse=True)
 def _reset_event_bus_singleton():
     """Reset the _event_bus singleton before/after each test for isolation."""
-    import app.dependencies
-    app.dependencies._event_bus = None
+    import app.dependencies.event_deps
+    app.dependencies.event_deps._event_bus = None
     yield
-    app.dependencies._event_bus = None
+    import app.dependencies.event_deps
+    app.dependencies.event_deps._event_bus = None
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -145,7 +146,8 @@ class TestUserService:
         from app.modules.users import service
         from app.core.exceptions import UserError
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one.return_value = 1  # Email exists
         mock_db.execute.return_value = mock_result
@@ -179,7 +181,10 @@ class TestUserService:
         from app.modules.users.schemas import UserCreate, RoleEnum
         from sqlalchemy.exc import IntegrityError
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.rollback = AsyncMock()
         # Pre-check returns no row (race window: not yet visible).
         mock_result = MagicMock()
         mock_result.scalar_one.return_value = 0
@@ -222,7 +227,10 @@ class TestUserService:
         from app.modules.users.schemas import UserCreate, RoleEnum
         from sqlalchemy.exc import IntegrityError
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.rollback = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one.return_value = 0
         mock_db.execute.return_value = mock_result
@@ -263,7 +271,10 @@ class TestUserService:
         from app.modules.users.schemas import UserCreate, RoleEnum
         from sqlalchemy.exc import IntegrityError
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.rollback = AsyncMock()
 
         # Each create_user call does: _is_email_taken -> _get_active_tenant (2 executes)
         # + db.flush() (1 call). Plan execute/flush results across BOTH calls.
@@ -332,7 +343,7 @@ class TestUserService:
         target.id = uuid4()
         target.is_active = True
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
@@ -383,7 +394,8 @@ class TestUserService:
         mock_user = MagicMock()
         mock_user.email = "User@Example.COM"
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_user
         mock_db.execute.return_value = mock_result
@@ -399,7 +411,8 @@ class TestUserService:
         """Test getting user by email returns None if not found."""
         from app.modules.users import service
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute.return_value = mock_result
@@ -416,7 +429,8 @@ class TestUserService:
 
         tenant_id = uuid4()
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = []
         mock_db.execute.return_value = mock_result
@@ -434,7 +448,8 @@ class TestUserService:
 
         tenant_id = uuid4()
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute.return_value = mock_result
@@ -455,7 +470,8 @@ class TestUserService:
         mock_tenant = MagicMock()
         mock_tenant.is_active = False
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_tenant
         mock_db.execute.return_value = mock_result
@@ -528,7 +544,7 @@ class TestUpdateUserTokenRevocation:
         target.is_active = True
 
         mock_caller = MagicMock()
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
@@ -565,7 +581,7 @@ class TestUpdateUserTokenRevocation:
         target.is_active = False  # ya inactivo
 
         mock_caller = MagicMock()
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
@@ -599,7 +615,7 @@ class TestUpdateUserTokenRevocation:
         target.is_active = False  # inactivo, se va a reactivar
 
         mock_caller = MagicMock()
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
@@ -633,7 +649,7 @@ class TestUpdateUserTokenRevocation:
         target.is_active = True
 
         mock_caller = MagicMock()
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 

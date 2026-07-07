@@ -240,3 +240,114 @@ async def test_login_succeeds_even_if_redis_unavailable_for_event():
     assert refresh_token == "refresh_token"
 
     await fake_redis.aclose()
+
+
+@pytest.mark.asyncio
+async def test_superadmin_login_publishes_system_event_in_separate_stream():
+    """Superadmin login MUST publish a system.auth.login event in the system stream.
+
+    Verifies:
+    1. Login succeeds for superadmin (no tenant)
+    2. System.auth.login event appears in events:system.auth.login stream
+    3. No tenant_id in Redis payload (filtered before XADD)
+    4. Regular stream events:auth.login is NOT written for superadmins
+    """
+    from app.modules.auth import service
+    from app.event_bus import EventBus
+
+    fake_redis = FakeRedis()
+
+    mock_user = MagicMock()
+    mock_user.id = uuid4()
+    mock_user.email = "sa-integration@test.com"
+    mock_user.hashed_password = "hashed_password"
+    mock_user.tenant_id = None  # superadmin
+    mock_user.role = "superadmin"
+    mock_user.is_superadmin = True
+    mock_user.is_active = True
+    mock_tenant = None  # superadmin
+
+    mock_db = AsyncMock()
+
+    with patch.object(service, "_check_account_lockout", return_value=None):
+        with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):
+            with patch("app.modules.auth.service.verify_password_async", return_value=True):
+                with patch.object(service, "_check_tenant_active", return_value=None):
+                    with patch.object(service, "_clear_login_attempts", return_value=None):
+                        with patch(
+                            "app.modules.auth.service.create_access_token",
+                            return_value=("sa_access_token", "sa_jti"),
+                        ):
+                            with patch.object(
+                                service, "_create_refresh_token", return_value="sa_refresh_token"
+                            ):
+                                with patch(
+                                    "app.modules.auth.service.get_event_bus"
+                                ) as mock_get_bus:
+                                    event_bus = EventBus(fake_redis)
+                                    mock_get_bus.return_value = event_bus
+
+                                    result = await service.login(
+                                        email="sa-integration@test.com",
+                                        password="password",
+                                        db=mock_db,
+                                        redis=fake_redis,
+                                        request_ip="10.0.0.50",
+                                    )
+
+    # Login succeeded
+    token_response, refresh_token = result
+    assert token_response.access_token == "sa_access_token"
+    assert refresh_token == "sa_refresh_token"
+
+    # The system.auth.login stream MUST have the event
+    system_stream = "events:system.auth.login"
+    system_msgs = await fake_redis.xrange(system_stream)
+    assert len(system_msgs) >= 1, (
+        f"Expected system.auth.login event in {system_stream}, "
+        f"but stream is empty"
+    )
+
+    # Verify the event payload in the system stream
+    found_system_event = False
+    for _msg_id, fields in system_msgs:
+        field_dict = {
+            k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+            for k, v in fields.items()
+        }
+        if field_dict.get("event_type") == "system.auth.login":
+            found_system_event = True
+            # user_id must match
+            assert field_dict["user_id"] == str(mock_user.id)
+            # email_hash must be present
+            assert "email_hash" in field_dict
+            # raw email must NOT leak
+            assert "email" not in field_dict
+            # ip_prefix must be masked
+            assert field_dict.get("ip_prefix") == "10.0.0.0/24"
+            # tenant_id MUST be absent (filtered by publish())
+            assert "tenant_id" not in field_dict, (
+                f"tenant_id should be filtered when None, "
+                f"but found in payload: {field_dict}"
+            )
+            break
+
+    assert found_system_event, (
+        "system.auth.login event not found in events:system.auth.login stream"
+    )
+
+    # The auth.login stream MUST NOT have the superadmin event
+    regular_stream = "events:auth.login"
+    regular_msgs = await fake_redis.xrange(regular_stream)
+    for _msg_id, fields in regular_msgs:
+        field_dict = {
+            k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+            for k, v in fields.items()
+        }
+        if field_dict.get("user_id") == str(mock_user.id):
+            pytest.fail(
+                f"Superadmin event found in tenant-scoped stream {regular_stream}. "
+                f"Superadmin events MUST go to {system_stream}"
+            )
+
+    await fake_redis.aclose()

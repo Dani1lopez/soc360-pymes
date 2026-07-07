@@ -11,6 +11,7 @@ we assert on the formatted message content.
 from __future__ import annotations
 
 import re
+import uuid
 import pytest
 import logging
 
@@ -236,3 +237,87 @@ class TestConsumerHandlerIntegration:
         assert "email_hash=dddddddddddddddddddddddddddddddd" in msg, f"Expected email_hash in message, got: {msg}"
         assert "ip_prefix=8.8.8.0/24" in msg, f"Expected ip_prefix in message, got: {msg}"
         assert "user_id=" in msg, f"Expected user_id in message, got: {msg}"
+
+
+class TestSystemAuthLoginDispatch:
+    """Validate system.auth.login dispatch routing (W2)."""
+
+    @pytest.mark.asyncio
+    async def test_system_auth_login_routes_to_handle_auth_login(self, caplog):
+        """_dispatch_event MUST route system.auth.login to _handle_auth_login."""
+        from app.event_bus import EventBus
+
+        # Build a payload similar to what AuthSuperadminLoginEvent would produce
+        payload = {
+            "event_type": "system.auth.login",
+            "user_id": "sa-user-1",
+            "email_hash": "a" * 32,
+            "ip_prefix": "10.0.0.0/24",
+            "user_agent": "SuperadminAgent/1.0",
+            # Notice: no tenant_id — it was filtered out before XADD
+        }
+
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="app.event_bus"):
+            await EventBus._dispatch_event("system.auth.login", payload)
+
+        # Must route to _handle_auth_login and log the event
+        assert any(
+            "auth.login_event_consumed" in (r.message or "")
+            for r in caplog.records
+        ), (
+            f"Expected auth.login_event_consumed for system.auth.login dispatch, "
+            f"got: {[(r.levelname, r.message) for r in caplog.records]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_system_auth_login_handles_missing_tenant_id(self, caplog):
+        """_dispatch_event MUST handle system.auth.login without tenant_id gracefully."""
+        from app.event_bus import EventBus
+
+        # AuthSuperadminLoginEvent has no tenant_id after None-filtering
+        payload = {
+            "event_type": "system.auth.login",
+            "user_id": "sa-user-2",
+            "email_hash": "b" * 32,
+            "ip_prefix": "192.168.1.0/24",
+            # no tenant_id key at all
+        }
+
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="app.event_bus"):
+            try:
+                await EventBus._dispatch_event("system.auth.login", payload)
+            except Exception as exc:
+                pytest.fail(
+                    f"_dispatch_event raised {exc} for system.auth.login "
+                    f"without tenant_id"
+                )
+
+        # Must have logged successfully
+        assert any(
+            "auth.login_event_consumed" in (r.message or "")
+            for r in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_auth_login_still_routes_correctly(self, caplog):
+        """_dispatch_event MUST still route auth.login (not just system.auth.login)."""
+        from app.event_bus import EventBus
+
+        payload = {
+            "event_type": "auth.login",
+            "user_id": "regular-user",
+            "email_hash": "c" * 32,
+            "ip_prefix": "10.0.0.0/24",
+            "tenant_id": str(uuid.uuid4()),
+        }
+
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="app.event_bus"):
+            await EventBus._dispatch_event("auth.login", payload)
+
+        assert any(
+            "auth.login_event_consumed" in (r.message or "")
+            for r in caplog.records
+        ), f"auth.login should still route, got: {[(r.levelname, r.message) for r in caplog.records]}"

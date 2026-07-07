@@ -68,6 +68,7 @@ class EventBus:
         payload = {
             k: str(v) if hasattr(v, "__str__") else v
             for k, v in raw.items()
+            if v is not None
         }
         # XADD with bounded stream length (approximate)
         msg_id = await self._redis.xadd(
@@ -166,7 +167,7 @@ class EventBus:
                 )
 
         try:
-            if event_type == "auth.login":
+            if event_type in ("auth.login", "system.auth.login"):
                 EventBus._handle_auth_login(data)
             else:
                 logger.debug("no_handler_for_event_type", event_type=event_type)

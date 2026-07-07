@@ -74,3 +74,43 @@ class AuthLoginEvent(BaseEvent):
     email_hash: Annotated[str, Field(min_length=1, description="SHA256[:32] of user email")]
     ip_prefix: Annotated[str | None, Field(default=None, description="Masked IP /24 prefix, e.g. 192.168.1.0/24")]
     user_agent: Annotated[str | None, Field(default=None, description="Client User-Agent if available")]
+
+
+class TenantlessEvent(BaseEvent):
+    """Event base for system-level events without a tenant scope.
+
+    Allows `tenant_id` to be absent or `None` for system-level audit events.
+    `BaseEvent` remains unchanged — existing tenant-scoped events continue
+    to require a UUID tenant id.
+    """
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
+
+    tenant_id: Annotated[
+        uuid.UUID | None,
+        Field(default=None, description="Tenant that owns this event (None for system events)"),
+    ]
+
+
+class AuthSuperadminLoginEvent(TenantlessEvent):
+    """system.auth.login event emitted after a superadmin login.
+
+    Tenantless — superadmins operate outside any tenant scope.
+    `is_superadmin=True` is explicit so consumers don't need to parse
+    stream names to infer event semantics.
+    """
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
+
+    event_type: Annotated[str, Field(default="system.auth.login", description="Event type discriminator")]
+    user_id: Annotated[str, Field(min_length=1, description="Authenticated user ID")]
+    email_hash: Annotated[str, Field(min_length=1, description="SHA256[:32] of user email")]
+    ip_prefix: Annotated[str | None, Field(default=None, description="Masked IP /24 prefix, e.g. 192.168.1.0/24")]
+    user_agent: Annotated[str | None, Field(default=None, description="Client User-Agent if available")]
+    is_superadmin: Annotated[bool, Field(default=True, description="Flag indicating superadmin authentication")]

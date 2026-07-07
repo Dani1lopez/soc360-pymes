@@ -153,8 +153,8 @@ async def refresh(
             token = auth_header[7:]
             payload = decode_access_token(token)
             old_jti = payload.get("jti")
-        except InvalidTokenError:
-            pass  # token inválido o expirado — no importa, no podemos removerlo
+        except InvalidTokenError as exc:
+            logger.warning("refresh_old_token_decode_failed", reason=exc.__class__.__name__, ip=ip)
 
     try:
         token_response, new_refresh = await service.refresh_tokens(

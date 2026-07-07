@@ -422,3 +422,12 @@ async def llm_safe_complete(
         return text, False
     except LLMError:
         return "", True
+    except Exception:
+        # Catch generic exceptions (ValueError, TypeError, ConnectionError, etc.)
+        # that provider.complete() may raise but aren't LLMError subtypes.
+        _llm_logger.warning(
+            "LLM unexpected error: provider=%s error=%s",
+            type(provider).__name__,
+            exc_info=True,
+        )
+        return "", True

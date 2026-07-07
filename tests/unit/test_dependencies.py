@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import pytest
 from fastapi import HTTPException
@@ -34,7 +35,8 @@ class TestGetCurrentUserTenantContext:
         mock_result = MagicMock()
         mock_result.one_or_none.return_value = mock_row
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_db.execute.return_value = mock_result
         return mock_db, mock_user, mock_tenant
 
@@ -228,7 +230,8 @@ class TestGetUserForAdmin:
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_user
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         # set_tenant_context is awaited in the finally block.
         with patch("app.dependencies.cross_tenant.set_tenant_context", AsyncMock()) as mock_set_ctx:
             mock_db.execute.return_value = mock_result
@@ -259,7 +262,8 @@ class TestGetUserForAdmin:
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_user
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         with patch("app.dependencies.cross_tenant.set_tenant_context", AsyncMock()), \
              patch("app.dependencies.cross_tenant._log_cross_tenant_attempt") as mock_log:
             mock_db.execute.return_value = mock_result
@@ -293,7 +297,8 @@ class TestGetUserForAdmin:
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_user
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         with patch("app.dependencies.cross_tenant.set_tenant_context", AsyncMock()):
             mock_db.execute.return_value = mock_result
             row = await _get_user_for_admin(
@@ -314,7 +319,8 @@ class TestGetUserForAdmin:
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         with patch("app.dependencies.cross_tenant.set_tenant_context", AsyncMock()), \
              patch("app.dependencies.cross_tenant._log_cross_tenant_attempt") as mock_log:
             mock_db.execute.return_value = mock_result
@@ -348,7 +354,8 @@ class TestGetTenantForAdmin:
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_tenant
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_db.execute.return_value = mock_result
         row = await _get_tenant_for_admin(
             tenant_id, mock_caller, mock_db, method="GET", endpoint=f"/tenants/{tenant_id}"
@@ -367,7 +374,7 @@ class TestGetTenantForAdmin:
         mock_caller.id = uuid4()
         mock_caller.tenant_id = uuid4()  # different
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         with patch("app.dependencies.cross_tenant._log_cross_tenant_attempt") as mock_log:
             with pytest.raises(HTTPException) as exc_info:
                 await _get_tenant_for_admin(
@@ -400,7 +407,8 @@ class TestGetTenantForAdmin:
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_tenant
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_db.execute.return_value = mock_result
         row = await _get_tenant_for_admin(
             tenant_id, mock_caller, mock_db, method="GET", endpoint=f"/tenants/{tenant_id}"
@@ -421,7 +429,8 @@ class TestGetTenantForAdmin:
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_db.execute.return_value = mock_result
         with pytest.raises(HTTPException) as exc_info:
             await _get_tenant_for_admin(

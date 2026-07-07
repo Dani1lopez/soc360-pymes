@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class TestAuthSchemas:
@@ -60,7 +61,7 @@ class TestAuthService:
         mock_tenant.is_active = True
         
         # Mock DB and Redis
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_redis = AsyncMock()
         
         # Mock the helper functions
@@ -94,7 +95,7 @@ class TestAuthService:
         mock_tenant = MagicMock()
         mock_tenant.is_active = True
         
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_redis = AsyncMock()
         
         with patch.object(service, '_check_account_lockout', return_value=None):
@@ -116,7 +117,8 @@ class TestAuthService:
         """Test logout revokes access and refresh tokens."""
         from app.modules.auth import service
         
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_redis = AsyncMock()
         
         # Mock refresh token record
@@ -158,7 +160,7 @@ class TestAuthService:
         mock_tenant = MagicMock()
         mock_tenant.is_active = True
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_redis = AsyncMock()
 
         with patch.object(service, '_check_account_lockout', return_value=None), \
@@ -205,7 +207,7 @@ class TestAuthService:
         mock_user.is_superadmin = False
         mock_user.is_active = True
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_redis = AsyncMock()
 
         # Mock the RefreshToken SELECT to return a valid record
@@ -291,7 +293,7 @@ class TestLoginEnumerationResistance:
         from app.modules.auth import service
         from app.core.exceptions import AuthError
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_redis = AsyncMock()
 
         # User does not exist
@@ -326,7 +328,7 @@ class TestLoginEnumerationResistance:
         mock_tenant = MagicMock()
         mock_tenant.is_active = True
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_redis = AsyncMock()
 
         with patch.object(service, '_check_account_lockout', return_value=None):
@@ -359,7 +361,7 @@ class TestLoginEnumerationResistance:
         from app.modules.auth import service
         from app.core.exceptions import AuthError
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_redis = AsyncMock()
 
         # Simulate lockout triggered — must NOT return 429 publicly
@@ -400,7 +402,7 @@ class TestLoginEnumerationResistance:
         mock_tenant = MagicMock()
         mock_tenant.is_active = True
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_redis = AsyncMock()
 
         # --- Case 1: Unknown user ---
@@ -454,7 +456,7 @@ class TestLoginEnumerationResistance:
         from app.modules.auth import service
         from app.core.exceptions import AuthError
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_redis = AsyncMock()
 
         # User exists but is_active=False — same generic message as unknown
@@ -496,7 +498,7 @@ class TestLoginTenantJoinOptimization:
         mock_result = MagicMock()
         mock_result.one_or_none.return_value = (mock_user, mock_tenant)
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.execute = AsyncMock(return_value=mock_result)
 
         user, tenant = await _get_active_user("test@example.com", mock_db)
@@ -613,7 +615,7 @@ class TestLoginTenantJoinOptimization:
         mock_result = MagicMock()
         mock_result.one_or_none.return_value = (mock_user, mock_tenant)
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.execute = AsyncMock(return_value=mock_result)
 
         mock_redis = AsyncMock()
@@ -651,7 +653,7 @@ class TestLoginTenantJoinOptimization:
         mock_result = MagicMock()
         mock_result.one_or_none.return_value = None
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.execute = AsyncMock(return_value=mock_result)
 
         with pytest.raises(AuthError) as exc_info:
@@ -686,7 +688,7 @@ class TestGetActiveUserByIdTenantJoin:
         mock_result = MagicMock()
         mock_result.one_or_none.return_value = (mock_user, mock_tenant)
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.execute = AsyncMock(return_value=mock_result)
 
         user, tenant = await _get_active_user_by_id(user_id, mock_db)
@@ -713,7 +715,7 @@ class TestGetActiveUserByIdTenantJoin:
         mock_result = MagicMock()
         mock_result.one_or_none.return_value = None
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.execute = AsyncMock(return_value=mock_result)
 
         with pytest.raises(AuthError) as exc_info:
@@ -738,7 +740,7 @@ class TestGetActiveUserByIdTenantJoin:
         mock_result = MagicMock()
         mock_result.one_or_none.return_value = (mock_user, mock_tenant)
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.execute = AsyncMock(return_value=mock_result)
 
         with pytest.raises(AuthError) as exc_info:
@@ -764,7 +766,7 @@ class TestGetActiveUserByIdTenantJoin:
         mock_tenant = MagicMock()
         mock_tenant.is_active = True
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_redis = AsyncMock()
 
         # Mock the RefreshToken SELECT to return a valid record

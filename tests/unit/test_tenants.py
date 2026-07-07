@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import uuid4
 
 
@@ -118,7 +119,8 @@ class TestTenantService:
         """Test _is_slug_taken returns True when slug exists."""
         from app.modules.tenants import service
         
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one.return_value = 1  # Slug exists
         mock_db.execute.return_value = mock_result
@@ -132,7 +134,8 @@ class TestTenantService:
         """Test _is_slug_taken returns False when slug doesn't exist."""
         from app.modules.tenants import service
         
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one.return_value = 0  # Slug doesn't exist
         mock_db.execute.return_value = mock_result
@@ -150,7 +153,8 @@ class TestTenantService:
         mock_tenant.id = uuid4()
         mock_tenant.name = "Found Tenant"
         
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_tenant
         mock_db.execute.return_value = mock_result
@@ -165,7 +169,8 @@ class TestTenantService:
         """Test getting non-existent tenant returns None."""
         from app.modules.tenants import service
         
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute.return_value = mock_result
@@ -180,7 +185,8 @@ class TestTenantService:
         from app.modules.tenants import service
         from app.core.exceptions import TenantError
         
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute.return_value = mock_result
@@ -202,7 +208,8 @@ class TestTenantService:
         mock_tenant = MagicMock()
         mock_tenant.is_active = False
         
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_tenant
         mock_db.execute.return_value = mock_result
@@ -222,7 +229,8 @@ class TestTenantService:
         mock_tenant.plan = "free"
         mock_tenant.max_assets = 10
         
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_tenant
         mock_db.execute.return_value = mock_result
@@ -246,7 +254,7 @@ class TestTenantService:
         from app.modules.tenants import service
         from app.modules.tenants.schemas import TenantCreate
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.add = MagicMock()
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
@@ -268,7 +276,7 @@ class TestTenantService:
         from app.modules.tenants.schemas import TenantCreate
         from app.core.exceptions import TenantError
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
 
         with patch.object(service, "_is_slug_taken", new_callable=AsyncMock) as mock_is_slug:
             mock_is_slug.return_value = True
@@ -285,7 +293,7 @@ class TestTenantService:
         from app.modules.tenants import service
         from app.modules.tenants.schemas import TenantCreate
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.add = MagicMock()
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
@@ -304,7 +312,7 @@ class TestTenantService:
         from app.modules.tenants import service
         from app.modules.tenants.schemas import TenantCreate
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.add = MagicMock()
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
@@ -326,7 +334,7 @@ class TestTenantService:
         from app.modules.tenants import service
         from app.modules.tenants.schemas import TenantCreate
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.add = MagicMock()
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
@@ -347,7 +355,8 @@ class TestTenantService:
         mock_t1 = MagicMock()
         mock_t2 = MagicMock()
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = [mock_t1, mock_t2]
         mock_db.execute.return_value = mock_result
@@ -365,7 +374,8 @@ class TestTenantService:
         """Test listing tenants applies pagination."""
         from app.modules.tenants import service
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = []
         mock_db.execute.return_value = mock_result
@@ -432,7 +442,7 @@ class TestUpdateTenantTokenRevocation:
 
         user1 = uuid4()
         user2 = uuid4()
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
         mock_db.execute = AsyncMock()
@@ -467,7 +477,7 @@ class TestUpdateTenantTokenRevocation:
         mock_tenant.id = tenant_id
         mock_tenant.is_active = False  # ya inactivo
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
         mock_db.execute = AsyncMock()
@@ -500,7 +510,7 @@ class TestUpdateTenantTokenRevocation:
         mock_tenant.id = tenant_id
         mock_tenant.is_active = False  # inactivo, se va a reactivar
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
         mock_db.execute = AsyncMock()
@@ -538,7 +548,7 @@ class TestUpdateTenantTokenRevocation:
         mock_tenant.id = tenant_id
         mock_tenant.is_active = False  # inactivo, se va a reactivar
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
         mock_db.execute = AsyncMock()
@@ -582,7 +592,7 @@ class TestUpdateTenantTokenRevocation:
         mock_tenant.plan = "free"
         mock_tenant.max_assets = 10
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock(spec=AsyncSession)
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
         mock_db.execute = AsyncMock()

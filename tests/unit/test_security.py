@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -393,3 +394,179 @@ class TestBcryptAsyncWrappers:
             asyncio.gather(*tasks), timeout=1.5
         )
         assert all(results)
+
+
+class TestRevokeAllUserAccessTokensOrdered:
+    """REQ-140-R05: Ordered token revocation with best-effort cleanup."""
+
+    @pytest.mark.asyncio
+    async def test_success_path(self):
+        """All JTIs denylisted, active set deleted on success."""
+        from app.core.security import revoke_all_user_access_tokens, is_token_revoked
+
+        redis = FakeRedis()
+        try:
+            await redis.sadd("active_jtis:user-1", "jti-a", "jti-b", "jti-c")
+
+            await revoke_all_user_access_tokens(
+                user_id="user-1",
+                redis=redis,
+                ttl_seconds=3600,
+            )
+
+            # All JTIs in denylist
+            assert await is_token_revoked("jti-a", redis) is True
+            assert await is_token_revoked("jti-b", redis) is True
+            assert await is_token_revoked("jti-c", redis) is True
+
+            # Active set deleted
+            assert await redis.exists("active_jtis:user-1") == 0
+        finally:
+            await redis.aclose()
+
+    @pytest.mark.asyncio
+    async def test_no_jtis_is_noop(self):
+        """No active JTIs → no-op, no error."""
+        from app.core.security import revoke_all_user_access_tokens
+
+        redis = FakeRedis()
+        try:
+            await revoke_all_user_access_tokens(
+                user_id="user-empty",
+                redis=redis,
+                ttl_seconds=3600,
+            )
+            # No keys should have been created
+            assert await redis.keys("revoked:*") == []
+        finally:
+            await redis.aclose()
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_still_attempts_cleanup(self):
+        """After a partial denylist write, DELETE must still be attempted."""
+        from app.core.security import revoke_all_user_access_tokens
+
+        redis = AsyncMock()
+        redis.smembers = AsyncMock(
+            return_value={b"jti-1", b"jti-2", b"jti-3"}
+        )
+
+        call_count = 0
+
+        async def mock_set(key, value, ex):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise ConnectionError("Redis dropped mid-flight")
+            return True
+
+        redis.set = mock_set
+        redis.delete = AsyncMock()
+
+        await revoke_all_user_access_tokens(
+            user_id="user-pfail",
+            redis=redis,
+            ttl_seconds=3600,
+        )
+
+        # First JTI should have been denylisted
+        assert call_count == 2  # Only 2 set calls made (third not attempted after fail)
+
+        # DELETE must have been attempted (best-effort cleanup)
+        redis.delete.assert_awaited_once_with("active_jtis:user-pfail")
+
+    @pytest.mark.asyncio
+    async def test_zero_success_raises_error(self):
+        """Zero denylist writes → error propagates for retry."""
+        from app.core.security import revoke_all_user_access_tokens
+
+        redis = AsyncMock()
+        redis.smembers = AsyncMock(
+            return_value={b"jti-1", b"jti-2"}
+        )
+
+        async def mock_set(key, value, ex):
+            raise ConnectionError("Redis down")
+
+        redis.set = mock_set
+        redis.delete = AsyncMock()
+
+        with pytest.raises(ConnectionError):
+            await revoke_all_user_access_tokens(
+                user_id="user-zero",
+                redis=redis,
+                ttl_seconds=3600,
+            )
+
+        # DELETE must NOT have been called (no denylist writes succeeded)
+        redis.delete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_delete_failure_logs_but_does_not_raise(self):
+        """DELETE failure after successful denylist must log warning, not raise."""
+        from app.core.security import revoke_all_user_access_tokens, is_token_revoked
+
+        redis = AsyncMock()
+        redis.smembers = AsyncMock(
+            return_value={b"jti-1", b"jti-2"}
+        )
+        redis.set = AsyncMock(return_value=True)
+        redis.delete = AsyncMock(side_effect=ConnectionError("Delete failed"))
+
+        with patch("app.core.security.logger") as mock_logger:
+            await revoke_all_user_access_tokens(
+                user_id="user-del-fail",
+                redis=redis,
+                ttl_seconds=3600,
+            )
+
+        # Denylist entries written
+        assert redis.set.await_count == 2
+
+        # DELETE was attempted (and failed)
+        redis.delete.assert_awaited_once_with("active_jtis:user-del-fail")
+
+        # Warning logged for cleanup failure
+        mock_logger.warning.assert_any_call(
+            "redis_active_jtis_cleanup_failed",
+            extra={"user_id": "user-del-fail"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_command_order_denylist_before_delete(self):
+        """Denylist SET commands MUST precede DELETE (recorded order)."""
+        from app.core.security import revoke_all_user_access_tokens
+
+        redis = AsyncMock()
+        redis.smembers = AsyncMock(
+            return_value={b"jti-first", b"jti-second"}
+        )
+
+        command_log: list[str] = []
+
+        async def logged_set(key, value, ex):
+            command_log.append(f"SET {key}")
+            return True
+
+        async def logged_delete(key):
+            command_log.append(f"DELETE {key}")
+            return 1
+
+        redis.set = logged_set
+        redis.delete = logged_delete
+
+        await revoke_all_user_access_tokens(
+            user_id="user-order",
+            redis=redis,
+            ttl_seconds=3600,
+        )
+
+        # All SETs must come before DELETE
+        set_indices = [i for i, cmd in enumerate(command_log) if cmd.startswith("SET")]
+        delete_indices = [i for i, cmd in enumerate(command_log) if cmd.startswith("DELETE")]
+
+        assert len(set_indices) == 2
+        assert len(delete_indices) == 1
+        assert set_indices[-1] < delete_indices[0], (
+            f"SET indices {set_indices} must all be before DELETE at {delete_indices}"
+        )

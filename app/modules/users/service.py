@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import UserError
 from app.core.security import (
-    hash_password,
+    hash_password_async,
     revoke_all_user_access_tokens,
     validate_password_length,
 )
@@ -66,7 +66,7 @@ async def create_user(data: UserCreate | UserInternalCreate, db: AsyncSession) -
     user = User(
         tenant_id=data.tenant_id,
         email=data.email.lower().strip(),
-        hashed_password=hash_password(data.password),
+        hashed_password=await hash_password_async(data.password),
         full_name=data.full_name,
         role=data.role.value,
         is_active=True,

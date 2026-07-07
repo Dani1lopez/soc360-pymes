@@ -14,8 +14,8 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.security import (
     create_access_token,
-    verify_password,
-    hash_password,
+    hash_password_async,
+    verify_password_async,
     validate_password_length,
     revoke_access_token,
     track_jti,
@@ -362,7 +362,7 @@ async def login(
 
     user, tenant = await _get_active_user(email, db)
     
-    if not verify_password(password, user.hashed_password):
+    if not await verify_password_async(password, user.hashed_password):
         await _record_failed_attempt(email, redis)
         raise AuthError(
             status_code=401,
@@ -521,14 +521,14 @@ async def change_password(
     if not await check_redis_healthy(redis):
         raise ServiceUnavailableError()
     user, _tenant = await _get_active_user_by_id(user_id, db)
-    if not verify_password(current_password, user.hashed_password):
+    if not await verify_password_async(current_password, user.hashed_password):
         raise AuthError(
             status_code=400,
             detail="La contraseña actual es incorrecta.",
         )
     
     validate_password_length(new_password)
-    user.hashed_password = hash_password(new_password)
+    user.hashed_password = await hash_password_async(new_password)
     
     await _revoke_all_user_tokens(user_id, db)
     

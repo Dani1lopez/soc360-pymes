@@ -255,3 +255,137 @@ class TestAuthLoginEventSerialization:
         assert restored.ip_prefix == original.ip_prefix
         assert restored.user_agent == original.user_agent
         assert restored.event_id == original.event_id
+
+
+class TestTenantlessEvent:
+    """Validate TenantlessEvent Pydantic model."""
+
+    def test_tenantless_event_accepts_no_tenant_id(self):
+        """TenantlessEvent MUST accept tenant_id=None."""
+        from app.event_schemas import TenantlessEvent
+
+        event = TenantlessEvent(
+            event_id=uuid.uuid4(),
+            event_type="system.auth.login",
+        )
+        assert event.tenant_id is None
+
+    def test_tenantless_event_tenant_id_defaults_to_none(self):
+        """TenantlessEvent tenant_id MUST default to None when not provided."""
+        from app.event_schemas import TenantlessEvent
+
+        event = TenantlessEvent(
+            event_id=uuid.uuid4(),
+            event_type="system.event",
+        )
+        assert event.tenant_id is None
+
+    def test_tenantless_event_is_base_event_subclass(self):
+        """TenantlessEvent MUST be a subclass of BaseEvent."""
+        from app.event_schemas import TenantlessEvent, BaseEvent
+
+        assert issubclass(TenantlessEvent, BaseEvent)
+
+    def test_tenantless_event_strips_whitespace(self):
+        """TenantlessEvent MUST strip whitespace from string fields."""
+        from app.event_schemas import TenantlessEvent
+
+        event = TenantlessEvent(
+            event_id=uuid.uuid4(),
+            event_type="  system.auth.login  ",
+        )
+        assert event.event_type == "system.auth.login"
+
+
+class TestAuthSuperadminLoginEvent:
+    """Validate AuthSuperadminLoginEvent Pydantic model."""
+
+    def test_superadmin_login_event_defaults(self):
+        """AuthSuperadminLoginEvent MUST have correct defaults."""
+        from app.event_schemas import AuthSuperadminLoginEvent
+
+        event = AuthSuperadminLoginEvent(
+            event_id=uuid.uuid4(),
+            user_id="sa-user",
+            email_hash="d" * 32,
+        )
+        assert event.event_type == "system.auth.login"
+        assert event.is_superadmin is True
+        assert event.tenant_id is None
+
+    def test_superadmin_login_event_inherits_from_tenantless(self):
+        """AuthSuperadminLoginEvent MUST inherit from TenantlessEvent."""
+        from app.event_schemas import AuthSuperadminLoginEvent, TenantlessEvent
+
+        assert issubclass(AuthSuperadminLoginEvent, TenantlessEvent)
+
+    def test_superadmin_login_event_accepts_full_data(self):
+        """AuthSuperadminLoginEvent MUST accept all fields with valid data."""
+        from app.event_schemas import AuthSuperadminLoginEvent
+
+        event = AuthSuperadminLoginEvent(
+            event_id=uuid.uuid4(),
+            user_id="sa-user-1",
+            email_hash="e" * 32,
+            ip_prefix="10.0.0.0/24",
+            user_agent="TestAgent/1.0",
+            is_superadmin=True,
+        )
+        assert event.user_id == "sa-user-1"
+        assert event.email_hash == "e" * 32
+        assert event.ip_prefix == "10.0.0.0/24"
+        assert event.user_agent == "TestAgent/1.0"
+        assert event.is_superadmin is True
+
+
+class TestAuthSuperadminLoginEventSerialization:
+    """Validate serialization of AuthSuperadminLoginEvent."""
+
+    def test_model_dump_omits_tenant_id_if_none(self):
+        """model_dump() MUST include tenant_id as None for TenantlessEvent."""
+        from app.event_schemas import AuthSuperadminLoginEvent
+
+        event = AuthSuperadminLoginEvent(
+            event_id=uuid.uuid4(),
+            user_id="sa-user",
+            email_hash="f" * 32,
+        )
+        data = event.model_dump()
+        assert data["tenant_id"] is None
+        assert data["event_type"] == "system.auth.login"
+        assert data["is_superadmin"] is True
+
+    def test_model_dump_json_includes_system_auth_login(self):
+        """model_dump_json() MUST contain system.auth.login type."""
+        from app.event_schemas import AuthSuperadminLoginEvent
+
+        event = AuthSuperadminLoginEvent(
+            event_id=uuid.uuid4(),
+            user_id="sa-user",
+            email_hash="g" * 32,
+        )
+        json_str = event.model_dump_json()
+        assert "system.auth.login" in json_str
+        assert "is_superadmin" in json_str
+
+    def test_model_validate_round_trip(self):
+        """model_validate() MUST reconstruct an identical superadmin event."""
+        from app.event_schemas import AuthSuperadminLoginEvent
+
+        original = AuthSuperadminLoginEvent(
+            event_id=uuid.uuid4(),
+            user_id="sa-user-2",
+            email_hash="h" * 32,
+            ip_prefix="192.168.1.0/24",
+            user_agent="RoundTrip/1.0",
+        )
+        data = original.model_dump()
+        restored = AuthSuperadminLoginEvent.model_validate(data)
+        assert restored.user_id == original.user_id
+        assert restored.email_hash == original.email_hash
+        assert restored.ip_prefix == original.ip_prefix
+        assert restored.user_agent == original.user_agent
+        assert restored.event_id == original.event_id
+        assert restored.tenant_id is None
+        assert restored.is_superadmin is True
+        assert restored.event_type == "system.auth.login"

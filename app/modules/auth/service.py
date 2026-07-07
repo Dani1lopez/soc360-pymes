@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import select, update, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -384,20 +385,32 @@ async def login(
     await track_jti(str(user.id), jti, redis)
     refresh_token = await _create_refresh_token(user.id, db, created_from_ip=request_ip)
 
-    # Publish auth.login event (non-blocking on failure)
+    # Publish login event (non-blocking on failure)
     try:
         event_bus = await get_event_bus()
-        from app.event_schemas import AuthLoginEvent
-        await event_bus.publish(AuthLoginEvent(
-            event_id=uuid4(),
-            tenant_id=user.tenant_id,
-            user_id=str(user.id),
-            email_hash=hash_email(user.email),
-            ip_prefix=mask_ip(request_ip),
-            user_agent=user_agent,
-        ))
+        if user.is_superadmin:
+            from app.event_schemas import AuthSuperadminLoginEvent
+            await event_bus.publish(AuthSuperadminLoginEvent(
+                event_id=uuid4(),
+                user_id=str(user.id),
+                email_hash=hash_email(user.email),
+                ip_prefix=mask_ip(request_ip),
+                user_agent=user_agent,
+            ))
+        else:
+            from app.event_schemas import AuthLoginEvent
+            await event_bus.publish(AuthLoginEvent(
+                event_id=uuid4(),
+                tenant_id=user.tenant_id,
+                user_id=str(user.id),
+                email_hash=hash_email(user.email),
+                ip_prefix=mask_ip(request_ip),
+                user_agent=user_agent,
+            ))
+    except RedisError:
+        logger.warning("event_publish_failed", event_type="auth.login", reason="redis_error")
     except Exception:
-        logger.warning("event_publish_failed", event_type="auth.login")
+        logger.critical("event_publish_programming_error", event_type="auth.login")
 
     return TokenResponse(
         access_token=access_token,

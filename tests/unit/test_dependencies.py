@@ -47,10 +47,10 @@ class TestGetCurrentUserTenantContext:
         mock_user.is_superadmin = True
         mock_user.tenant_id = uuid4()
 
-        with patch("app.dependencies.decode_access_token", return_value=valid_token_payload), \
-             patch("app.dependencies.check_redis_healthy", AsyncMock(return_value=True)), \
-             patch("app.dependencies.is_token_revoked", AsyncMock(return_value=False)), \
-             patch("app.dependencies.set_tenant_context", AsyncMock()) as mock_set_ctx:
+        with patch("app.dependencies.auth.decode_access_token", return_value=valid_token_payload), \
+             patch("app.dependencies.auth.check_redis_healthy", AsyncMock(return_value=True)), \
+             patch("app.dependencies.auth.is_token_revoked", AsyncMock(return_value=False)), \
+             patch("app.dependencies.auth.set_tenant_context", AsyncMock()) as mock_set_ctx:
             from app.dependencies import get_current_user
             result = await get_current_user(
                 token="Bearer token",
@@ -72,10 +72,10 @@ class TestGetCurrentUserTenantContext:
         mock_user.is_superadmin = False
         mock_user.tenant_id = uuid4()
 
-        with patch("app.dependencies.decode_access_token", return_value=valid_token_payload), \
-             patch("app.dependencies.check_redis_healthy", AsyncMock(return_value=True)), \
-             patch("app.dependencies.is_token_revoked", AsyncMock(return_value=False)), \
-             patch("app.dependencies.set_tenant_context", AsyncMock()) as mock_set_ctx:
+        with patch("app.dependencies.auth.decode_access_token", return_value=valid_token_payload), \
+             patch("app.dependencies.auth.check_redis_healthy", AsyncMock(return_value=True)), \
+             patch("app.dependencies.auth.is_token_revoked", AsyncMock(return_value=False)), \
+             patch("app.dependencies.auth.set_tenant_context", AsyncMock()) as mock_set_ctx:
             from app.dependencies import get_current_user
             result = await get_current_user(
                 token="Bearer token",
@@ -97,10 +97,10 @@ class TestGetCurrentUserTenantContext:
         mock_user.is_superadmin = False
         mock_user.tenant_id = None
 
-        with patch("app.dependencies.decode_access_token", return_value=valid_token_payload), \
-             patch("app.dependencies.check_redis_healthy", AsyncMock(return_value=True)), \
-             patch("app.dependencies.is_token_revoked", AsyncMock(return_value=False)), \
-             patch("app.dependencies.set_tenant_context", AsyncMock()) as mock_set_ctx:
+        with patch("app.dependencies.auth.decode_access_token", return_value=valid_token_payload), \
+             patch("app.dependencies.auth.check_redis_healthy", AsyncMock(return_value=True)), \
+             patch("app.dependencies.auth.is_token_revoked", AsyncMock(return_value=False)), \
+             patch("app.dependencies.auth.set_tenant_context", AsyncMock()) as mock_set_ctx:
             from app.dependencies import get_current_user
             with pytest.raises(HTTPException) as exc_info:
                 await get_current_user(
@@ -121,7 +121,7 @@ class TestGetEventBus:
         """get_event_bus() MUST return an EventBus instance with a redis client."""
         # Patch get_redis_client so we don't need real Redis
         mock_redis = FakeRedis()
-        with patch("app.dependencies.get_redis_client", AsyncMock(return_value=mock_redis)):
+        with patch("app.dependencies.event_deps.get_redis_client", AsyncMock(return_value=mock_redis)):
             # Import inside to allow patching first
             from app.dependencies import get_event_bus
 
@@ -136,7 +136,7 @@ class TestGetEventBus:
     async def test_get_event_bus_returns_singleton(self):
         """get_event_bus() MUST return the SAME instance on repeated calls."""
         mock_redis = FakeRedis()
-        with patch("app.dependencies.get_redis_client", AsyncMock(return_value=mock_redis)):
+        with patch("app.dependencies.event_deps.get_redis_client", AsyncMock(return_value=mock_redis)):
             from app.dependencies import get_event_bus
 
             instance1 = await get_event_bus()
@@ -148,7 +148,7 @@ class TestGetEventBus:
     async def test_get_event_bus_singleton_across_multiple_calls(self):
         """get_event_bus() singleton MUST hold across >2 calls."""
         mock_redis = FakeRedis()
-        with patch("app.dependencies.get_redis_client", AsyncMock(return_value=mock_redis)):
+        with patch("app.dependencies.event_deps.get_redis_client", AsyncMock(return_value=mock_redis)):
             from app.dependencies import get_event_bus
 
             instances = [await get_event_bus() for _ in range(5)]
@@ -174,7 +174,7 @@ class TestLogCrossTenantAttempt:
         caller_id = uuid4()
         target_id = uuid4()
 
-        with patch("app.dependencies.logger") as mock_logger:
+        with patch("app.dependencies.cross_tenant.logger") as mock_logger:
             _log_cross_tenant_attempt(
                 caller_id=caller_id,
                 target_id=target_id,
@@ -230,7 +230,7 @@ class TestGetUserForAdmin:
 
         mock_db = AsyncMock()
         # set_tenant_context is awaited in the finally block.
-        with patch("app.dependencies.set_tenant_context", AsyncMock()) as mock_set_ctx:
+        with patch("app.dependencies.cross_tenant.set_tenant_context", AsyncMock()) as mock_set_ctx:
             mock_db.execute.return_value = mock_result
             row = await _get_user_for_admin(
                 user_id, mock_caller, mock_db, method="GET", endpoint=f"/users/{user_id}"
@@ -260,8 +260,8 @@ class TestGetUserForAdmin:
         mock_result.scalar_one_or_none.return_value = mock_user
 
         mock_db = AsyncMock()
-        with patch("app.dependencies.set_tenant_context", AsyncMock()), \
-             patch("app.dependencies._log_cross_tenant_attempt") as mock_log:
+        with patch("app.dependencies.cross_tenant.set_tenant_context", AsyncMock()), \
+             patch("app.dependencies.cross_tenant._log_cross_tenant_attempt") as mock_log:
             mock_db.execute.return_value = mock_result
             with pytest.raises(HTTPException) as exc_info:
                 await _get_user_for_admin(
@@ -294,7 +294,7 @@ class TestGetUserForAdmin:
         mock_result.scalar_one_or_none.return_value = mock_user
 
         mock_db = AsyncMock()
-        with patch("app.dependencies.set_tenant_context", AsyncMock()):
+        with patch("app.dependencies.cross_tenant.set_tenant_context", AsyncMock()):
             mock_db.execute.return_value = mock_result
             row = await _get_user_for_admin(
                 user_id, mock_caller, mock_db, method="GET", endpoint=f"/users/{user_id}"
@@ -315,8 +315,8 @@ class TestGetUserForAdmin:
         mock_result.scalar_one_or_none.return_value = None
 
         mock_db = AsyncMock()
-        with patch("app.dependencies.set_tenant_context", AsyncMock()), \
-             patch("app.dependencies._log_cross_tenant_attempt") as mock_log:
+        with patch("app.dependencies.cross_tenant.set_tenant_context", AsyncMock()), \
+             patch("app.dependencies.cross_tenant._log_cross_tenant_attempt") as mock_log:
             mock_db.execute.return_value = mock_result
             with pytest.raises(HTTPException) as exc_info:
                 await _get_user_for_admin(
@@ -368,7 +368,7 @@ class TestGetTenantForAdmin:
         mock_caller.tenant_id = uuid4()  # different
 
         mock_db = AsyncMock()
-        with patch("app.dependencies._log_cross_tenant_attempt") as mock_log:
+        with patch("app.dependencies.cross_tenant._log_cross_tenant_attempt") as mock_log:
             with pytest.raises(HTTPException) as exc_info:
                 await _get_tenant_for_admin(
                     tenant_id, mock_caller, mock_db, method="GET", endpoint=f"/tenants/{tenant_id}"

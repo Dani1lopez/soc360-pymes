@@ -123,7 +123,7 @@ class TestRedisFailClosed:
         mock_redis = AsyncMock()
         mock_db = AsyncMock()
 
-        with patch("app.dependencies.check_redis_healthy", return_value=False):
+        with patch("app.dependencies.auth.check_redis_healthy", return_value=False):
             from app.dependencies import get_current_user
 
             with pytest.raises(HTTPException) as exc_info:

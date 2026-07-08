@@ -563,3 +563,194 @@ class TestLoginEventErrorHandling:
 
         assert RedisError is not None
         assert issubclass(RedisError, Exception)
+
+
+class TestUserAgentSanitizationInEvents:
+    """REQ-140-R08: User-Agent must be sanitized before event publication."""
+
+    @pytest.mark.asyncio
+    async def test_login_event_receives_sanitized_ua(self):
+        """AuthLoginEvent MUST receive sanitized user_agent, not raw value."""
+        from app.modules.auth import service
+        from app.event_schemas import AuthLoginEvent
+        from app.event_bus import EventBus
+
+        mock_user = MagicMock()
+        mock_user.id = uuid4()
+        mock_user.email = "ua@test.com"
+        mock_user.hashed_password = "hashed_password"
+        mock_user.tenant_id = uuid4()
+        mock_user.role = "admin"
+        mock_user.is_superadmin = False
+        mock_user.is_active = True
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_redis = AsyncMock()
+
+        published_events: list[AuthLoginEvent] = []
+
+        async def mock_publish(event: AuthLoginEvent) -> bytes:
+            published_events.append(event)
+            return b"1234567890123-0"
+
+        mock_event_bus = AsyncMock(spec=EventBus)
+        mock_event_bus.publish.side_effect = mock_publish
+
+        raw_ua = "Mozilla/5.0\x00Malicious\x1fStuff\x7f   padding"
+
+        with patch.object(service, "_check_account_lockout", return_value=None):
+            with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):
+                with patch("app.modules.auth.service.verify_password_async", return_value=True):
+                    with patch.object(service, "_check_tenant_active", return_value=None):
+                        with patch.object(service, "_clear_login_attempts", return_value=None):
+                            with patch(
+                                "app.modules.auth.service.create_access_token",
+                                return_value=("access_token", "jti-ua"),
+                            ):
+                                with patch.object(
+                                    service, "_create_refresh_token", return_value="refresh_token"
+                                ):
+                                    with patch(
+                                        "app.modules.auth.service.get_event_bus",
+                                        return_value=mock_event_bus,
+                                    ):
+                                        await service.login(
+                                            email="ua@test.com",
+                                            password="password",
+                                            db=mock_db,
+                                            redis=mock_redis,
+                                            request_ip="10.0.0.1",
+                                            user_agent=raw_ua,
+                                        )
+
+        assert len(published_events) == 1
+        event = published_events[0]
+        # Control chars replaced, whitespace collapsed: "Mozilla/5.0 Malicious Stuff padding"
+        assert event.user_agent == "Mozilla/5.0 Malicious Stuff padding"
+
+    @pytest.mark.asyncio
+    async def test_superadmin_event_receives_sanitized_ua(self):
+        """AuthSuperadminLoginEvent MUST receive sanitized user_agent."""
+        from app.modules.auth import service
+        from app.event_schemas import AuthSuperadminLoginEvent
+        from app.event_bus import EventBus
+
+        mock_user = MagicMock()
+        mock_user.id = uuid4()
+        mock_user.email = "sa-ua@test.com"
+        mock_user.hashed_password = "hashed_password"
+        mock_user.tenant_id = None
+        mock_user.role = "superadmin"
+        mock_user.is_superadmin = True
+        mock_user.is_active = True
+        mock_tenant = None
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_redis = AsyncMock()
+
+        published_events: list = []
+
+        async def mock_publish(event) -> bytes:
+            published_events.append(event)
+            return b"1234567890123-0"
+
+        mock_event_bus = AsyncMock(spec=EventBus)
+        mock_event_bus.publish.side_effect = mock_publish
+
+        raw_ua = "x" * 500  # very long UA with no control chars
+
+        with patch.object(service, "_check_account_lockout", return_value=None):
+            with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):
+                with patch("app.modules.auth.service.verify_password_async", return_value=True):
+                    with patch.object(service, "_check_tenant_active", return_value=None):
+                        with patch.object(service, "_clear_login_attempts", return_value=None):
+                            with patch(
+                                "app.modules.auth.service.create_access_token",
+                                return_value=("access_token", "jti-sa-ua"),
+                            ):
+                                with patch.object(
+                                    service, "_create_refresh_token", return_value="refresh_token"
+                                ):
+                                    with patch(
+                                        "app.modules.auth.service.get_event_bus",
+                                        return_value=mock_event_bus,
+                                    ):
+                                        await service.login(
+                                            email="sa-ua@test.com",
+                                            password="password",
+                                            db=mock_db,
+                                            redis=mock_redis,
+                                            request_ip="10.0.0.1",
+                                            user_agent=raw_ua,
+                                        )
+
+        assert len(published_events) == 1
+        event = published_events[0]
+        assert isinstance(event, AuthSuperadminLoginEvent)
+        # Must be capped at 256
+        assert event.user_agent is not None
+        assert len(event.user_agent) == 256
+
+    @pytest.mark.asyncio
+    async def test_missing_ua_sends_none(self):
+        """When User-Agent header is absent, event receives None."""
+        from app.modules.auth import service
+        from app.event_schemas import AuthLoginEvent
+        from app.event_bus import EventBus
+
+        mock_user = MagicMock()
+        mock_user.id = uuid4()
+        mock_user.email = "no-ua@test.com"
+        mock_user.hashed_password = "hashed_password"
+        mock_user.tenant_id = uuid4()
+        mock_user.role = "admin"
+        mock_user.is_superadmin = False
+        mock_user.is_active = True
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = True
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_redis = AsyncMock()
+
+        published_events: list = []
+
+        async def mock_publish(event) -> bytes:
+            published_events.append(event)
+            return b"1234567890123-0"
+
+        mock_event_bus = AsyncMock(spec=EventBus)
+        mock_event_bus.publish.side_effect = mock_publish
+
+        with patch.object(service, "_check_account_lockout", return_value=None):
+            with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):
+                with patch("app.modules.auth.service.verify_password_async", return_value=True):
+                    with patch.object(service, "_check_tenant_active", return_value=None):
+                        with patch.object(service, "_clear_login_attempts", return_value=None):
+                            with patch(
+                                "app.modules.auth.service.create_access_token",
+                                return_value=("access_token", "jti-no-ua"),
+                            ):
+                                with patch.object(
+                                    service, "_create_refresh_token", return_value="refresh_token"
+                                ):
+                                    with patch(
+                                        "app.modules.auth.service.get_event_bus",
+                                        return_value=mock_event_bus,
+                                    ):
+                                        await service.login(
+                                            email="no-ua@test.com",
+                                            password="password",
+                                            db=mock_db,
+                                            redis=mock_redis,
+                                            request_ip="10.0.0.1",
+                                            # No user_agent passed
+                                        )
+
+        assert len(published_events) == 1
+        event = published_events[0]
+        assert event.user_agent is None

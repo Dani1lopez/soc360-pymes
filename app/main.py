@@ -151,7 +151,7 @@ async def lifespan(app: FastAPI):
     await drain_dlq_tasks(timeout=2.0)
     await close_pool()
     # Close the LLM provider's HTTP connection pool (issue #194).
-    from app.core.llm import get_llm_provider
+    # get_llm_provider is already imported at module level (line 13).
     from app.core.llm.providers import _BaseHTTPProvider
     provider = get_llm_provider()
     if isinstance(provider, _BaseHTTPProvider):

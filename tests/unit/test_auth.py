@@ -265,6 +265,111 @@ class TestAuthRouterHelpers:
         assert call_args.kwargs['path'] == "/api/v1/auth"
 
 
+class TestRefreshOldTokenDecode:
+    """REQ-140-R06: Refresh logs InvalidTokenError instead of silent pass."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_old_token_logs_warning_and_continues(self):
+        """Invalid old access token MUST log warning and NOT raise 401."""
+        from app.modules.auth.router import router
+        from app.core.security import InvalidTokenError
+
+        # Build mocks for the refresh endpoint
+        mock_request = MagicMock()
+        mock_request.headers = {"Authorization": "Bearer invalid-token"}
+        mock_request.client = MagicMock()
+        mock_request.client.host = "10.0.0.1"
+
+        mock_response = MagicMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_redis = AsyncMock()
+        mock_rate_limiter = AsyncMock()
+        mock_rate_limiter.check = AsyncMock(
+            return_value=MagicMock(is_locked=False)
+        )
+
+        # Mock service.refresh_tokens to return success
+        from app.modules.auth.schemas import TokenResponse
+        mock_token_response = TokenResponse(
+            access_token="new-access",
+            token_type="bearer",
+            expires_in=3600,
+        )
+
+        with patch("app.modules.auth.router.decode_access_token",
+                   side_effect=InvalidTokenError("Invalid token")), \
+             patch("app.modules.auth.router.service.refresh_tokens",
+                   new=AsyncMock(return_value=(mock_token_response, "new-refresh"))), \
+             patch("app.modules.auth.router.logger") as mock_logger:
+
+            from app.modules.auth.router import refresh
+
+            await refresh(
+                request=mock_request,
+                response=mock_response,
+                db=mock_db,
+                redis=mock_redis,
+                rate_limiter=mock_rate_limiter,
+                refresh_token="valid-refresh-cookie",
+            )
+
+        # Warning MUST be logged with reason and IP
+        mock_logger.warning.assert_called_once_with(
+            "refresh_old_token_decode_failed",
+            reason="InvalidTokenError",
+            ip="10.0.0.1",
+        )
+
+    @pytest.mark.asyncio
+    async def test_valid_old_token_still_uses_jti_path(self):
+        """Valid old access token MUST still pass jti to service (regression)."""
+        from app.modules.auth.router import router
+
+        mock_request = MagicMock()
+        mock_request.headers = {"Authorization": "Bearer valid-token"}
+        mock_request.client = MagicMock()
+        mock_request.client.host = "10.0.0.1"
+
+        mock_response = MagicMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_redis = AsyncMock()
+        mock_rate_limiter = AsyncMock()
+        mock_rate_limiter.check = AsyncMock(
+            return_value=MagicMock(is_locked=False)
+        )
+
+        from app.modules.auth.schemas import TokenResponse
+        mock_token_response = TokenResponse(
+            access_token="new-access",
+            token_type="bearer",
+            expires_in=3600,
+        )
+
+        with patch("app.modules.auth.router.decode_access_token",
+                   return_value={"jti": "old-jti-123", "sub": "user-1"}), \
+             patch("app.modules.auth.router.service.refresh_tokens",
+                   new=AsyncMock(return_value=(mock_token_response, "new-refresh"))) as mock_svc, \
+             patch("app.modules.auth.router.logger") as mock_logger:
+
+            from app.modules.auth.router import refresh
+
+            await refresh(
+                request=mock_request,
+                response=mock_response,
+                db=mock_db,
+                redis=mock_redis,
+                rate_limiter=mock_rate_limiter,
+                refresh_token="valid-refresh-cookie",
+            )
+
+        # old_jti= must be passed to service
+        call_kwargs = mock_svc.await_args.kwargs
+        assert call_kwargs.get("old_jti") == "old-jti-123"
+
+        # No warning should have been logged
+        mock_logger.warning.assert_not_called()
+
+
 class TestTokenResponseSchema:
     """Test TokenResponse schema."""
 

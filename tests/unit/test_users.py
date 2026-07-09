@@ -169,12 +169,12 @@ class TestUserService:
 
     @pytest.mark.asyncio
     async def test_create_user_translates_unique_violation_to_409(self):
-        """create_user must translate asyncpg pgcode '23505' to UserError(409) and roll back.
+        """create_user must translate asyncpg pgcode '23505' to UserError(409).
 
         Regression for PR-B: the pre-check (`_is_email_taken`) can race a concurrent
         INSERT. When the flush hits the unique constraint, the raw asyncpg
-        `UniqueViolationError` (SQLSTATE 23505) must be surfaced as 409, and the
-        session must be rolled back to avoid `PendingRollbackError` on the next call.
+        `UniqueViolationError` (SQLSTATE 23505) must be surfaced as 409.
+        No manual rollback — session.begin() context manager handles it.
         """
         from app.modules.users import service
         from app.core.exceptions import UserError

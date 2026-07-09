@@ -406,13 +406,14 @@ class TestLoginEnumerationResistance:
             with patch.object(service, '_get_active_user', side_effect=AuthError(
                     status_code=401, detail="Credenciales incorrectas"
             )):
-                with pytest.raises(AuthError) as exc_info:
-                    await service.login(
-                        email="noexiste@test.test",
-                        password="AnyPassword123!",
-                        db=mock_db,
-                        redis=mock_redis,
-                    )
+                with patch('app.modules.auth.service.verify_password_async', return_value=False):
+                    with pytest.raises(AuthError) as exc_info:
+                        await service.login(
+                            email="noexiste@test.test",
+                            password="AnyPassword123!",
+                            db=mock_db,
+                            redis=mock_redis,
+                        )
 
         assert exc_info.value.status_code == 401
         # Message must NOT reveal whether user exists
@@ -514,13 +515,14 @@ class TestLoginEnumerationResistance:
         unknown_user_exc = AuthError(status_code=401, detail="Credenciales incorrectas")
         with patch.object(service, '_check_account_lockout', return_value=None):
             with patch.object(service, '_get_active_user', side_effect=unknown_user_exc):
-                with pytest.raises(AuthError) as exc1:
-                    await service.login(
-                        email="noexiste@test.test",
-                        password="WrongPass!",
-                        db=mock_db,
-                        redis=mock_redis,
-                    )
+                with patch('app.modules.auth.service.verify_password_async', return_value=False):
+                    with pytest.raises(AuthError) as exc1:
+                        await service.login(
+                            email="noexiste@test.test",
+                            password="WrongPass!",
+                            db=mock_db,
+                            redis=mock_redis,
+                        )
 
         # --- Case 2: Wrong password ---
         with patch.object(service, '_check_account_lockout', return_value=None):
@@ -568,17 +570,97 @@ class TestLoginEnumerationResistance:
         inactive_exc = AuthError(status_code=401, detail="Credenciales incorrectas")
         with patch.object(service, '_check_account_lockout', return_value=None):
             with patch.object(service, '_get_active_user', side_effect=inactive_exc):
-                with pytest.raises(AuthError) as exc_info:
-                    await service.login(
-                        email="inactive@alpha.test",
-                        password="AnyPassword!",
-                        db=mock_db,
-                        redis=mock_redis,
-                    )
+                with patch('app.modules.auth.service.verify_password_async', return_value=False):
+                    with pytest.raises(AuthError) as exc_info:
+                        await service.login(
+                            email="inactive@alpha.test",
+                            password="AnyPassword!",
+                            db=mock_db,
+                            redis=mock_redis,
+                        )
 
         assert exc_info.value.status_code == 401
         assert "inactivo" not in exc_info.value.detail.lower()
         assert "activo" not in exc_info.value.detail.lower()
+
+    # ------------------------------------------------------------------ #
+    # Timing-enumeration resistance — bcrypt MUST run for ALL non-lockout
+    # login attempts regardless of user existence (fix for issue #207).
+    # ------------------------------------------------------------------ #
+
+    @pytest.mark.asyncio
+    async def test_non_existent_user_runs_verify_password(self):
+        """Non-existent user MUST run verify_password_async once with dummy hash."""
+        from app.modules.auth import service
+        from app.core.exceptions import AuthError
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_redis = AsyncMock()
+
+        with patch.object(service, '_check_account_lockout', return_value=None):
+            with patch.object(service, '_get_active_user', side_effect=AuthError(
+                    status_code=401, detail="Credenciales incorrectas"
+            )):
+                with patch('app.modules.auth.service.verify_password_async', return_value=False) as mock_verify:
+                    with patch.object(service, '_record_failed_attempt', return_value=None) as mock_record:
+                        with pytest.raises(AuthError):
+                            await service.login(
+                                email="noexiste@test.test",
+                                password="AnyPassword123!",
+                                db=mock_db,
+                                redis=mock_redis,
+                            )
+
+        # verify_password_async must have been called exactly once
+        mock_verify.assert_awaited_once()
+        # verify_password_async must have been called with the dummy hash
+        call_args = mock_verify.await_args.args
+        assert call_args[1] == service._DUMMY_PASSWORD_HASH, \
+            f"Expected dummy hash, got {call_args[1]}"
+        # _record_failed_attempt must NOT be called for non-existent user
+        mock_record.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_inactive_user_runs_verify_password(self):
+        """Inactive user MUST run verify_password_async once with dummy hash."""
+        from app.modules.auth import service
+        from app.core.exceptions import AuthError
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_redis = AsyncMock()
+
+        inactive_exc = AuthError(status_code=401, detail="Credenciales incorrectas")
+        with patch.object(service, '_check_account_lockout', return_value=None):
+            with patch.object(service, '_get_active_user', side_effect=inactive_exc):
+                with patch('app.modules.auth.service.verify_password_async', return_value=False) as mock_verify:
+                    with patch.object(service, '_record_failed_attempt', return_value=None) as mock_record:
+                        with pytest.raises(AuthError):
+                            await service.login(
+                                email="inactive@alpha.test",
+                                password="AnyPassword!",
+                                db=mock_db,
+                                redis=mock_redis,
+                            )
+
+        # verify_password_async must have been called exactly once
+        mock_verify.assert_awaited_once()
+        # verify_password_async must have been called with the dummy hash
+        call_args = mock_verify.await_args.args
+        assert call_args[1] == service._DUMMY_PASSWORD_HASH, \
+            f"Expected dummy hash, got {call_args[1]}"
+        # _record_failed_attempt must NOT be called for inactive user
+        mock_record.assert_not_called()
+
+    def test_dummy_hash_cost_matches_live_hash_cost(self):
+        """Dummy hash bcrypt cost factor must match live hash cost factor."""
+        from app.modules.auth.service import _DUMMY_PASSWORD_HASH
+        from app.core.security import hash_password
+
+        dummy_cost = _DUMMY_PASSWORD_HASH.split("$")[2]
+        live_hash = hash_password("test-password")
+        live_cost = live_hash.split("$")[2]
+        assert dummy_cost == live_cost, \
+            f"Dummy hash cost {dummy_cost} must match live hash cost {live_cost}"
 
 
 class TestLoginTenantJoinOptimization:

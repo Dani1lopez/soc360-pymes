@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from collections import Counter
+from math import log2
+
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core._provider_names import _PROVIDER_NAMES
+
+# Secret key strength thresholds (issue #250)
+MIN_SECRET_KEY_LENGTH = 128
+MIN_SECRET_KEY_ENTROPY_BITS_PER_CHAR = 3.0
+MAX_SECRET_KEY_CHAR_FREQUENCY_RATIO = 0.5
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -102,8 +110,32 @@ class Settings(BaseSettings):
     @field_validator("SECRET_KEY")
     @classmethod
     def secret_key_strength(cls, v: str) -> str:
-        if len(v) < 32:
-            raise ValueError("SECRET_KEY debe tener mínimo 32 caracteres")
+        if len(v) < MIN_SECRET_KEY_LENGTH:
+            raise ValueError(
+                f"SECRET_KEY debe tener mínimo {MIN_SECRET_KEY_LENGTH} caracteres"
+            )
+
+        # Reject keys where >50 % of characters are the same (low-entropy pattern)
+        counts = Counter(v)
+        max_freq_ratio = max(counts.values()) / len(v)
+        if max_freq_ratio > MAX_SECRET_KEY_CHAR_FREQUENCY_RATIO:
+            raise ValueError(
+                "SECRET_KEY tiene muy poca entropía: "
+                "no debe tener más del 50% de caracteres repetidos"
+            )
+
+        # Shannon entropy check (reject below 3.0 bits/char)
+        entropy = -sum(
+            (c / len(v)) * log2(c / len(v))
+            for c in counts.values()
+        )
+        if entropy < MIN_SECRET_KEY_ENTROPY_BITS_PER_CHAR:
+            raise ValueError(
+                f"SECRET_KEY tiene muy poca entropía: "
+                f"la entropía ({entropy:.2f} bits/char) es menor que "
+                f"{MIN_SECRET_KEY_ENTROPY_BITS_PER_CHAR} bits/char"
+            )
+
         return v
     
     @field_validator("ENVIRONMENT")

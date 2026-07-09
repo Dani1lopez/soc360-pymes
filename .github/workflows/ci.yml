@@ -47,7 +47,7 @@ jobs:
       DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_app:soc360_test_password@localhost:5432/soc360_pymes_test
       REDIS_URL: redis://localhost:6379/0
       REDIS_PASSWORD: ""
-      SECRET_KEY: test-secret-key-for-ci-only-32chars
+      SECRET_KEY: abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwx
       ACCESS_TOKEN_EXPIRE_MINUTES: 30
       REFRESH_TOKEN_EXPIRE_DAYS: 7
 

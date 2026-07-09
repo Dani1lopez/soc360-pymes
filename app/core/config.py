@@ -9,6 +9,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.core._provider_names import _PROVIDER_NAMES
 
 # Secret key strength thresholds (issue #250)
+# ⚠️  BREAKING CHANGE: raising MIN_SECRET_KEY_LENGTH from 32 to 128 will
+# reject existing deployments with shorter keys. See .env.example for
+# migration instructions.
 MIN_SECRET_KEY_LENGTH = 128
 MIN_SECRET_KEY_ENTROPY_BITS_PER_CHAR = 3.0
 MAX_SECRET_KEY_CHAR_FREQUENCY_RATIO = 0.5

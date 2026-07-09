@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 import pytest
 
+# Deterministic high-entropy key (128 chars, ~4.7 bits/char Shannon entropy)
+# Satisfies SECRET_KEY validator: length >= 128, max freq ratio <= 0.5, entropy >= 3.0
+_TEST_SECRET_KEY = "abcdefghijklmnopqrstuvwxyz" * 5  # 130 chars
 
 class TestLLMSettingsFields:
     """Verify Settings has all required LLM-related fields."""
@@ -12,7 +15,7 @@ class TestLLMSettingsFields:
         from app.core.config import Settings
 
         s = Settings.model_construct(
-            SECRET_KEY="x" * 32,
+            SECRET_KEY=_TEST_SECRET_KEY,
             DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
             DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
             POSTGRES_USER="test",
@@ -27,7 +30,7 @@ class TestLLMSettingsFields:
         from app.core.config import Settings
 
         s = Settings.model_construct(
-            SECRET_KEY="x" * 32,
+            SECRET_KEY=_TEST_SECRET_KEY,
             DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
             DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
             POSTGRES_USER="test",
@@ -42,7 +45,7 @@ class TestLLMSettingsFields:
         from app.core.config import Settings
 
         s = Settings.model_construct(
-            SECRET_KEY="x" * 32,
+            SECRET_KEY=_TEST_SECRET_KEY,
             DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
             DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
             POSTGRES_USER="test",
@@ -57,7 +60,7 @@ class TestLLMSettingsFields:
         from app.core.config import Settings
 
         s = Settings.model_construct(
-            SECRET_KEY="x" * 32,
+            SECRET_KEY=_TEST_SECRET_KEY,
             DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
             DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
             POSTGRES_USER="test",
@@ -72,7 +75,7 @@ class TestLLMSettingsFields:
         from app.core.config import Settings
 
         s = Settings.model_construct(
-            SECRET_KEY="x" * 32,
+            SECRET_KEY=_TEST_SECRET_KEY,
             DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
             DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
             POSTGRES_USER="test",
@@ -100,7 +103,7 @@ class TestLLMProviderValidator:
         # These required fields must be present even if we're testing the validator
         with pytest.raises(ValueError, match="LLM_PROVIDER"):
             Settings(
-                SECRET_KEY="x" * 32,
+                SECRET_KEY=_TEST_SECRET_KEY,
                 DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
                 DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
                 POSTGRES_USER="test",
@@ -116,7 +119,7 @@ class TestLLMProviderValidator:
 
         s = Settings(
             _env_file=None,
-            SECRET_KEY="x" * 32,
+            SECRET_KEY=_TEST_SECRET_KEY,
             DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
             DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
             POSTGRES_USER="test",
@@ -132,7 +135,7 @@ class TestLLMProviderValidator:
         from app.core.config import Settings
 
         s = Settings(
-            SECRET_KEY="x" * 32,
+            SECRET_KEY=_TEST_SECRET_KEY,
             DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
             DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
             POSTGRES_USER="test",
@@ -148,7 +151,7 @@ class TestLLMProviderValidator:
         from app.core.config import Settings
 
         s = Settings(
-            SECRET_KEY="x" * 32,
+            SECRET_KEY=_TEST_SECRET_KEY,
             DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
             DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
             POSTGRES_USER="test",
@@ -165,7 +168,7 @@ class TestLLMProviderValidator:
 
         s = Settings(
             _env_file=None,
-            SECRET_KEY="x" * 32,
+            SECRET_KEY=_TEST_SECRET_KEY,
             DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
             DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
             POSTGRES_USER="test",
@@ -185,7 +188,7 @@ class TestLLMProviderValidator:
         with pytest.raises(ValueError, match="GROQ_API_KEY"):
             Settings(
                 _env_file=None,
-                SECRET_KEY="x" * 32,
+                SECRET_KEY=_TEST_SECRET_KEY,
                 DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
                 DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
                 POSTGRES_USER="test",
@@ -204,7 +207,7 @@ class TestLLMSettingsDefaults:
         from app.core.config import Settings
 
         s = Settings(
-            SECRET_KEY="x" * 32,
+            SECRET_KEY=_TEST_SECRET_KEY,
             DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
             DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
             POSTGRES_USER="test",
@@ -219,7 +222,7 @@ class TestLLMSettingsDefaults:
         from app.core.config import Settings
 
         s = Settings(
-            SECRET_KEY="x" * 32,
+            SECRET_KEY=_TEST_SECRET_KEY,
             DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
             DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
             POSTGRES_USER="test",
@@ -234,7 +237,7 @@ class TestLLMSettingsDefaults:
         from app.core.config import Settings
 
         s = Settings(
-            SECRET_KEY="x" * 32,
+            SECRET_KEY=_TEST_SECRET_KEY,
             DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
             DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
             POSTGRES_USER="test",
@@ -249,7 +252,7 @@ class TestLLMSettingsDefaults:
         from app.core.config import Settings
 
         s = Settings(
-            SECRET_KEY="x" * 32,
+            SECRET_KEY=_TEST_SECRET_KEY,
             DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
             DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
             POSTGRES_USER="test",

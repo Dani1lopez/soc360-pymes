@@ -206,18 +206,30 @@ async def test_update_plan_pro_sets_max_assets_100(
     assert resp.json()["max_assets"] == 100
 
 
-async def test_update_plan_preserves_explicit_max_assets_if_provided(
+async def test_update_plan_preserves_explicit_max_assets_within_limit(
     client: AsyncClient, superadmin_headers, seed_data
 ):
-    """Si se proporciona max_assets explícito, se respeta sobre el plan."""
+    """Si se proporciona max_assets explícito dentro del límite del plan, se respeta."""
+    resp = await client.patch(
+        f"/api/v1/tenants/{TENANT_A_ID}",
+        json={"plan": "enterprise", "max_assets": 400},
+        headers=superadmin_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["plan"] == "enterprise"
+    assert resp.json()["max_assets"] == 400, "max_assets explícito dentro del límite debería tener prioridad"
+
+
+async def test_update_plan_rejects_max_assets_exceeding_plan_limit(
+    client: AsyncClient, superadmin_headers, seed_data
+):
+    """Si max_assets excede el límite del plan, se rechaza con 422."""
     resp = await client.patch(
         f"/api/v1/tenants/{TENANT_A_ID}",
         json={"plan": "enterprise", "max_assets": 750},
         headers=superadmin_headers,
     )
-    assert resp.status_code == 200
-    assert resp.json()["plan"] == "enterprise"
-    assert resp.json()["max_assets"] == 750, "max_assets explícito debería tener prioridad"
+    assert resp.status_code == 422, "max_assets que excede el límite del plan debería fallar"
 
 
 # ---------------------------------------------------------------------------

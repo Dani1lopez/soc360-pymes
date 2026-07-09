@@ -4,6 +4,7 @@ import pytest_asyncio
 from httpx import AsyncClient
 from unittest.mock import patch
 
+from app.core.config import settings
 from app.core.redis import get_redis
 from app.event_bus import EventBus
 from fakeredis.aioredis import FakeRedis
@@ -268,7 +269,7 @@ async def test_regular_user_login_real_path_updates_state_publishes_event_and_ro
         assert user.last_login_at != previous_last_login_at, "last_login_at must change"
 
         # --- Assert auth.login event in Redis stream ---
-        stream_name = "events:auth.login"
+        stream_name = f"{settings.EVENT_STREAM_PREFIX}:auth.login"
         stream_length = await fake_redis.xlen(stream_name)
         assert stream_length >= 1, (
             f"Expected at least 1 message in {stream_name}, "

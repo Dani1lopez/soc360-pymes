@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.security import (
     create_access_token,
+    hash_password,
     hash_password_async,
     verify_password_async,
     validate_password_length,
@@ -39,6 +40,7 @@ MAX_ACTIVE_SESSIONS = 5
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 LOGIN_ATTEMPTS_WINDOW_SECONDS = 900
 LOGIN_ATTEMPTS_MAX = 10
+_DUMMY_PASSWORD_HASH = hash_password("constant-time-dummy-password")
 
 logger = get_logger(__name__)
 
@@ -362,9 +364,23 @@ async def login(
     await set_tenant_context(db, tenant_id=None, is_superadmin=True)
     await _check_account_lockout(email, redis)
 
-    user, tenant = await _get_active_user(email, db)
-    
-    if not await verify_password_async(password, user.hashed_password):
+    try:
+        user, tenant = await _get_active_user(email, db)
+        password_hash = user.hashed_password
+    except AuthError:
+        user = None
+        tenant = None
+        password_hash = _DUMMY_PASSWORD_HASH
+
+    password_ok = await verify_password_async(password, password_hash)
+
+    if user is None:
+        raise AuthError(
+            status_code=401,
+            detail="Credenciales incorrectas",
+        )
+
+    if not password_ok:
         await _record_failed_attempt(email, redis)
         raise AuthError(
             status_code=401,

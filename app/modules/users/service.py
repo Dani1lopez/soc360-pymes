@@ -81,7 +81,9 @@ async def create_user(data: UserCreate | UserInternalCreate, db: AsyncSession) -
         await db.flush()
     except IntegrityError as exc:
         if getattr(exc.orig, "pgcode", None) == "23505":
-            await db.rollback()
+            # No manual rollback — session.begin() context manager handles it.
+            # Calling db.rollback() here leaves the session inactive (SQLA 2.0+)
+            # causing InvalidRequestError on subsequent operations.
             raise UserError(
                 "El email ya está registrado", status_code=409
             ) from exc

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import pytest_asyncio
 from httpx import AsyncClient
+from unittest.mock import patch
 
 from app.core.redis import get_redis
+from app.event_bus import EventBus
+from fakeredis.aioredis import FakeRedis
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -223,6 +226,84 @@ async def test_login_inactive_user_returns_401(client: AsyncClient, seed_data):
         json={"email": "viewer@alpha.test", "password": "ViewerAlpha123!"},
     )
     assert resp.status_code == 401, "Usuario inactivo no debería poder loguear"
+
+
+# ---------------------------------------------------------------------------
+# REAL-PATH LOGIN SUCCESS (fix #183 — over-mocking)
+# ---------------------------------------------------------------------------
+
+async def test_regular_user_login_real_path_updates_state_publishes_event_and_rotates_refresh(
+    client: AsyncClient, seed_data, db_session,
+):
+    """Real-path login: updates last_login_at, publishes auth.login event, rotates refresh.
+
+    Replaces the over-mocked test_login_success with a true integration test
+    that exercises the real router, service, DB, token/cookie path, and event bus.
+    Only get_event_bus is patched so the published event can be observed on a
+    local FakeRedis without reaching external Redis.
+    """
+    user = seed_data["viewer_a"]
+    previous_last_login_at = user.last_login_at
+
+    fake_redis = FakeRedis()
+    try:
+        with patch("app.modules.auth.service.get_event_bus") as mock_get_bus:
+            mock_get_bus.return_value = EventBus(fake_redis)
+
+            resp = await client.post(
+                "/api/v1/auth/login",
+                json={"email": "viewer@alpha.test", "password": "ViewerAlpha123!"},
+            )
+
+        # --- Assert login success ---
+        assert resp.status_code == 200, f"Login failed: {resp.text}"
+        body = resp.json()
+        assert body["access_token"], "access_token must be non-empty"
+        refresh_cookie = client.cookies.get("refresh_token")
+        assert refresh_cookie, "refresh_token cookie must be set"
+
+        # --- Assert last_login_at updated ---
+        await db_session.refresh(user)
+        assert user.last_login_at is not None, "last_login_at must be set after login"
+        assert user.last_login_at != previous_last_login_at, "last_login_at must change"
+
+        # --- Assert auth.login event in Redis stream ---
+        stream_name = "events:auth.login"
+        stream_length = await fake_redis.xlen(stream_name)
+        assert stream_length >= 1, (
+            f"Expected at least 1 message in {stream_name}, "
+            f"got {stream_length}"
+        )
+
+        messages = await fake_redis.xrange(stream_name)
+        found_event = None
+        for _msg_id, fields in messages:
+            field_dict = {
+                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                for k, v in fields.items()
+            }
+            if field_dict.get("event_type") == "auth.login":
+                found_event = field_dict
+                break
+
+        assert found_event is not None, "auth.login event not found in stream"
+        assert found_event["user_id"] == str(user.id), "user_id must match"
+        assert found_event["tenant_id"] == str(user.tenant_id), "tenant_id must match"
+        assert "email_hash" in found_event, "email_hash must be present"
+        assert "email" not in found_event, "raw email must NOT be present"
+
+        # --- Assert refresh token rotation ---
+        first_rt = client.cookies.get("refresh_token")
+
+        refresh_resp = await client.post("/api/v1/auth/refresh")
+        assert refresh_resp.status_code == 200, f"Refresh failed: {refresh_resp.text}"
+
+        second_rt = client.cookies.get("refresh_token")
+        assert second_rt is not None, "refresh_token must be set after refresh"
+        assert second_rt != first_rt, "refresh_token must rotate"
+
+    finally:
+        await fake_redis.aclose()
 
 
 # ---------------------------------------------------------------------------

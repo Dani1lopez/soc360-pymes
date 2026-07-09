@@ -44,46 +44,6 @@ class TestAuthService:
     """Test auth service functions with mocked dependencies."""
     
     @pytest.mark.asyncio
-    async def test_login_success(self):
-        """Test successful login returns tokens."""
-        from app.modules.auth import service
-        
-        # Mock user
-        mock_user = MagicMock()
-        mock_user.id = "user-123"
-        mock_user.email = "test@example.com"
-        mock_user.hashed_password = "hashed_password"
-        mock_user.tenant_id = "tenant-123"
-        mock_user.role = "admin"
-        mock_user.is_superadmin = False
-        mock_user.is_active = True
-        mock_tenant = MagicMock()
-        mock_tenant.is_active = True
-        
-        # Mock DB and Redis
-        mock_db = MagicMock(spec=AsyncSession)
-        mock_redis = AsyncMock()
-        
-        # Mock the helper functions
-        with patch.object(service, '_check_account_lockout', return_value=None):
-            with patch.object(service, '_get_active_user', return_value=(mock_user, mock_tenant)):
-                with patch('app.modules.auth.service.verify_password_async', return_value=True):
-                    with patch.object(service, '_check_tenant_active', return_value=None):
-                        with patch.object(service, '_clear_login_attempts', return_value=None):
-                            with patch('app.modules.auth.service.create_access_token', return_value=("access_token", "jti-123")):
-                                with patch.object(service, '_create_refresh_token', return_value="refresh_token"):
-                                    result = await service.login(
-                                        email="test@example.com",
-                                        password="password",
-                                        db=mock_db,
-                                        redis=mock_redis,
-                                    )
-        
-        token_response, refresh_token = result
-        assert token_response.access_token == "access_token"
-        assert refresh_token == "refresh_token"
-    
-    @pytest.mark.asyncio
     async def test_login_invalid_password(self):
         """Test login with wrong password fails."""
         from app.modules.auth import service

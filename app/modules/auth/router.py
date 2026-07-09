@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from jwt import InvalidTokenError
+from redis.exceptions import RedisError
 
 from app.core.config import settings
 from app.core.exceptions import AppError
@@ -70,7 +71,7 @@ async def login(
     # Check rate limit before attempting login
     # Returns 401 (not 429) to maintain enumeration resistance —
     # attacker can't distinguish between wrong password, unknown user, and rate limit.
-    # Fail-open: if Redis is down, skip rate limiting and let auth proceed.
+    # Fail-closed: if Redis is down, raise generic 401 and do NOT proceed to service.login.
     if settings.RATE_LIMIT_ENABLED:
         try:
             status = await rate_limiter.check(ip, body.email)
@@ -82,6 +83,12 @@ async def login(
                 )
         except HTTPException:
             raise
+        except RedisError:
+            logger.warning("rate_limit_check_failed", reason="redis_error", ip=ip)
+            raise HTTPException(
+                status_code=401,
+                detail="Credenciales incorrectas",
+            )
         except Exception:
             logger.warning("rate_limit_check_failed", reason="redis_error", ip=ip)
 

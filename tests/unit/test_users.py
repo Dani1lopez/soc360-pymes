@@ -74,6 +74,16 @@ class TestUserSchemas:
         valid = UserUpdate(full_name="New Name")
         assert valid.full_name == "New Name"
 
+    def test_user_update_rejects_extra_fields(self):
+        """Test UserUpdate rejects unknown fields (mass assignment prevention)."""
+        from app.modules.users.schemas import UserUpdate
+
+        with pytest.raises(ValueError, match="Extra inputs"):
+            UserUpdate(full_name="New Name", is_superadmin=True)
+
+        with pytest.raises(ValueError, match="Extra inputs"):
+            UserUpdate(full_name="New Name", tenant_id="should-not-pass")
+
 
 class TestUserApiValidation:
     """Test user API request validation without database dependencies."""

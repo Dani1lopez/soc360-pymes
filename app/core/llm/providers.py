@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import ClassVar, Protocol, runtime_checkable
 
 import httpx
@@ -21,6 +22,32 @@ from app.core.exceptions import (
     LLMTimeoutError,
 )
 
+# Maximum length for sanitized user data to prevent context overflow attacks.
+_MAX_SANITIZED_LEN = 8192
+
+
+def _sanitize_prompt_user_data(data: str) -> str:
+    """Sanitize untrusted user data before embedding in an LLM prompt.
+
+    Defense-in-depth against prompt injection (issue #229):
+    1. Strip control characters except newline/tab.
+    2. Remove HTML tags (common in scan banners/responses).
+    3. Collapse excessive whitespace that could be used for formatting attacks.
+    4. Truncate to ``_MAX_SANITIZED_LEN`` to bound context size.
+    """
+    # Remove control chars (keep \n and \t for readability)
+    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", data)
+    # Strip HTML tags
+    cleaned = re.sub(r"<[^>]+>", "", cleaned)
+    # Collapse runs of 3+ newlines into 2
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    # Collapse runs of 4+ spaces into a single space (but preserve newlines)
+    cleaned = re.sub(r"[^\S\n]{4,}", " ", cleaned)
+    # Truncate to bound context size
+    if len(cleaned) > _MAX_SANITIZED_LEN:
+        cleaned = cleaned[:_MAX_SANITIZED_LEN] + "\n[...truncated]"
+    return cleaned
+
 
 @runtime_checkable
 class LLMProvider(Protocol):
@@ -31,8 +58,20 @@ class LLMProvider(Protocol):
         prompt: str,
         max_tokens: int,
         temperature: float,
+        *,
+        system_prompt: str | None = None,
     ) -> str:
-        """Send a prompt to the LLM and return the raw text response."""
+        """Send a prompt to the LLM and return the raw text response.
+
+        Parameters
+        ----------
+        prompt:
+            User-facing prompt text (untrusted data may be embedded here).
+        system_prompt:
+            Optional system-level instructions separated from user data.
+            Providers that support it will place this in the ``system`` role;
+            otherwise it is prepended to the user message as a prefix.
+        """
         ...
 
 
@@ -70,6 +109,8 @@ class _BaseHTTPProvider:
         prompt: str,
         max_tokens: int,
         temperature: float,
+        *,
+        system_prompt: str | None = None,
     ) -> tuple[str, dict[str, str], dict[str, object]]:
         """Return (url, headers, payload) for the HTTP POST."""
         raise NotImplementedError
@@ -83,6 +124,8 @@ class _BaseHTTPProvider:
         prompt: str,
         max_tokens: int,
         temperature: float,
+        *,
+        system_prompt: str | None = None,
     ) -> str:
         """Send a prompt and return the raw text response.
 
@@ -102,7 +145,9 @@ class _BaseHTTPProvider:
         LLMError
             For transport-level failures.
         """
-        url, headers, payload = self._build_request(prompt, max_tokens, temperature)
+        url, headers, payload = self._build_request(
+            prompt, max_tokens, temperature, system_prompt=system_prompt
+        )
 
         _llm_logger.debug(
             "LLM call: provider=%s model=%s endpoint=%s",
@@ -269,15 +314,21 @@ class OpenAICompatProvider(_BaseHTTPProvider):
         prompt: str,
         max_tokens: int,
         temperature: float,
+        *,
+        system_prompt: str | None = None,
     ) -> tuple[str, dict[str, str], dict[str, object]]:
         url = f"{self._base_url}{self.ENDPOINT}"
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
+        messages: list[dict[str, str]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
         payload = {
             "model": self._model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
@@ -315,18 +366,22 @@ class AnthropicProvider(_BaseHTTPProvider):
         prompt: str,
         max_tokens: int,
         temperature: float,
+        *,
+        system_prompt: str | None = None,
     ) -> tuple[str, dict[str, str], dict[str, object]]:
         headers = {
             "x-api-key": self._api_key,
             "anthropic-version": self.API_VERSION,
             "Content-Type": "application/json",
         }
-        payload = {
+        payload: dict[str, object] = {
             "model": self._model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        if system_prompt:
+            payload["system"] = system_prompt
         return self._base_url, headers, payload
 
     def _parse_response(self, data: dict) -> str:
@@ -359,19 +414,23 @@ class GeminiProvider(_BaseHTTPProvider):
         prompt: str,
         max_tokens: int,
         temperature: float,
+        *,
+        system_prompt: str | None = None,
     ) -> tuple[str, dict[str, str], dict[str, object]]:
         url = f"{self._base_url}/models/{self._model}:generateContent"
         headers = {
             "x-goog-api-key": self._api_key,
             "Content-Type": "application/json",
         }
-        payload = {
+        payload: dict[str, object] = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "maxOutputTokens": max_tokens,
                 "temperature": temperature,
             },
         }
+        if system_prompt:
+            payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
         return url, headers, payload
 
     def _parse_response(self, data: dict) -> str:
@@ -383,6 +442,8 @@ async def llm_safe_complete(
     prompt: str,
     max_tokens: int,
     temperature: float,
+    *,
+    system_prompt: str | None = None,
 ) -> tuple[str, bool]:
     """Call provider.complete() and return (text, failed=False) on success.
 
@@ -393,7 +454,9 @@ async def llm_safe_complete(
     The helper performs no network calls itself — the provider does.
     """
     try:
-        text = await provider.complete(prompt, max_tokens, temperature)
+        text = await provider.complete(
+            prompt, max_tokens, temperature, system_prompt=system_prompt
+        )
         return text, False
     except LLMError:
         return "", True

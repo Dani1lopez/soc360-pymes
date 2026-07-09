@@ -25,6 +25,8 @@ class MockLLMProvider:
         prompt: str,
         max_tokens: int,
         temperature: float,
+        *,
+        system_prompt: str | None = None,
     ) -> str:
         """Return the configured response text after the configured delay."""
         if self._delay_seconds > 0:

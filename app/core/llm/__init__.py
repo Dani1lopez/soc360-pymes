@@ -24,5 +24,6 @@ from app.core.llm.providers import (  # noqa: F401
     LLMProvider,
     OpenAICompatProvider,
     _BaseHTTPProvider,
+    _sanitize_prompt_user_data,
     llm_safe_complete,
 )

@@ -19,7 +19,12 @@ from fakeredis.aioredis import FakeRedis
 os.environ.setdefault("ENVIRONMENT", "development")
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://soc360_app:***REMOVED***@localhost:5433/soc360_test")
 os.environ.setdefault("DATABASE_URL_MIGRATION", "postgresql+asyncpg://soc360_migration:***REMOVED***@localhost:5433/soc360_test")
-os.environ.setdefault("SECRET_KEY", "test_secret_key_for_tests_only_32chars_min")
+os.environ.setdefault(
+    "SECRET_KEY",
+    "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+    "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+    "abcdefghijklmnopqrstuvwx",
+)
 os.environ.setdefault("GROQ_API_KEY", "***REMOVED***")
 os.environ.setdefault("POSTGRES_USER", "soc360_app")
 os.environ.setdefault("POSTGRES_PASSWORD", "***REMOVED***")

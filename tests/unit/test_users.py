@@ -213,7 +213,8 @@ class TestUserService:
         assert exc_info.value.status_code == 409
         assert "email" in exc_info.value.detail.lower()
         mock_db.flush.assert_awaited_once()
-        mock_db.rollback.assert_awaited_once()
+        # No manual rollback — session.begin() context manager handles it.
+        mock_db.rollback.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_create_user_propagates_non_unique_integrity_error(self):
@@ -259,12 +260,15 @@ class TestUserService:
 
     @pytest.mark.asyncio
     async def test_create_user_rolls_back_failed_session_for_subsequent_create(self):
-        """After a 409, the session must be usable for a fresh non-duplicate insert.
+        """After a 409, the session remains usable for a fresh non-duplicate insert.
 
-        Regression: if `create_user` raises 409 without rolling back, the next
-        call against the same session raises `PendingRollbackError` because the
-        failed flush left the transaction in a broken state. This test enforces
-        that rollback runs so the session stays usable.
+        Regression guard: the old code called db.rollback() manually inside the
+        IntegrityError handler. This caused InvalidRequestError under SQLAlchemy
+        2.0+ because session.begin() context manager owns the transaction lifecycle.
+
+        The fix removes the manual rollback — the session.begin() context manager
+        rolls back automatically when the UserError propagates. This test verifies
+        that subsequent calls against the same session do not fail.
         """
         from app.modules.users import service
         from app.core.exceptions import UserError
@@ -316,10 +320,11 @@ class TestUserService:
             await service.create_user(data=data_dup, db=mock_db)
         assert exc_info.value.status_code == 409
 
-        # Second call must not raise PendingRollbackError — rollback must have run.
+        # Second call must not raise — session is usable after 409.
         result = await service.create_user(data=data_ok, db=mock_db)
         assert result is not None
-        mock_db.rollback.assert_awaited_once()
+        # No manual rollback — session.begin() context manager handles it.
+        mock_db.rollback.assert_not_awaited()
         assert mock_db.flush.await_count == 2
     
     @pytest.mark.asyncio

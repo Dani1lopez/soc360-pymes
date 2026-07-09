@@ -152,6 +152,13 @@ async def update_tenant(
             tenant.max_assets = _plan_to_max_assets(update_data["plan"])
 
     if "max_assets" in update_data:
+        effective_plan = update_data.get("plan", tenant.plan)
+        plan_limit = _plan_to_max_assets(effective_plan)
+        if update_data["max_assets"] > plan_limit:
+            raise TenantError(
+                f"max_assets {update_data['max_assets']} excede el límite del plan {effective_plan!r} ({plan_limit})",
+                status_code=422,
+            )
         tenant.max_assets = update_data["max_assets"]
 
     if "is_active" in update_data:

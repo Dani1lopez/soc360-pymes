@@ -348,6 +348,161 @@ class TestTenantService:
             assert result.max_assets == 100
 
     @pytest.mark.asyncio
+    async def test_update_tenant_max_assets_exceeds_plan_limit(self):
+        """Test updating max_assets beyond plan limit raises error."""
+        from app.modules.tenants import service
+        from app.modules.tenants.schemas import TenantUpdate
+        from app.core.exceptions import TenantError
+
+        mock_tenant = MagicMock()
+        mock_tenant.id = uuid4()
+        mock_tenant.plan = "free"
+        mock_tenant.max_assets = 10
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_tenant
+        mock_db.execute.return_value = mock_result
+
+        data = TenantUpdate(max_assets=999999)
+
+        with pytest.raises(TenantError) as exc_info:
+            await service.update_tenant(
+                tenant_id=mock_tenant.id,
+                data=data,
+                db=mock_db,
+                redis=AsyncMock(),
+            )
+
+        assert exc_info.value.status_code == 422
+        assert "excede el límite" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_update_tenant_max_assets_within_plan_limit(self):
+        """Test updating max_assets within plan limit succeeds."""
+        from app.modules.tenants import service
+        from app.modules.tenants.schemas import TenantUpdate
+
+        mock_tenant = MagicMock()
+        mock_tenant.id = uuid4()
+        mock_tenant.plan = "free"
+        mock_tenant.max_assets = 10
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_tenant
+        mock_db.execute.return_value = mock_result
+
+        data = TenantUpdate(max_assets=5)
+
+        updated = await service.update_tenant(
+            tenant_id=mock_tenant.id,
+            data=data,
+            db=mock_db,
+            redis=AsyncMock(),
+        )
+
+        assert updated.max_assets == 5
+
+    @pytest.mark.asyncio
+    async def test_update_tenant_max_assets_at_plan_limit(self):
+        """Test updating max_assets exactly at plan limit succeeds."""
+        from app.modules.tenants import service
+        from app.modules.tenants.schemas import TenantUpdate
+
+        mock_tenant = MagicMock()
+        mock_tenant.id = uuid4()
+        mock_tenant.plan = "starter"
+        mock_tenant.max_assets = 25
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_tenant
+        mock_db.execute.return_value = mock_result
+
+        data = TenantUpdate(max_assets=25)
+
+        updated = await service.update_tenant(
+            tenant_id=mock_tenant.id,
+            data=data,
+            db=mock_db,
+            redis=AsyncMock(),
+        )
+
+        assert updated.max_assets == 25
+
+    @pytest.mark.asyncio
+    async def test_update_tenant_max_assets_with_plan_change_validates_new_plan(self):
+        """Test max_assets validation uses new plan when both change."""
+        from app.modules.tenants import service
+        from app.modules.tenants.schemas import TenantUpdate
+        from app.core.exceptions import TenantError
+
+        mock_tenant = MagicMock()
+        mock_tenant.id = uuid4()
+        mock_tenant.plan = "free"
+        mock_tenant.max_assets = 10
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_tenant
+        mock_db.execute.return_value = mock_result
+
+        # Changing to "starter" (limit 25) but setting max_assets=50
+        data = TenantUpdate(plan="starter", max_assets=50)
+
+        with pytest.raises(TenantError) as exc_info:
+            await service.update_tenant(
+                tenant_id=mock_tenant.id,
+                data=data,
+                db=mock_db,
+                redis=AsyncMock(),
+            )
+
+        assert exc_info.value.status_code == 422
+        assert "starter" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_update_tenant_max_assets_with_plan_change_within_new_limit(self):
+        """Test max_assets within new plan limit succeeds when both change."""
+        from app.modules.tenants import service
+        from app.modules.tenants.schemas import TenantUpdate
+
+        mock_tenant = MagicMock()
+        mock_tenant.id = uuid4()
+        mock_tenant.plan = "free"
+        mock_tenant.max_assets = 10
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_tenant
+        mock_db.execute.return_value = mock_result
+
+        # Changing to "pro" (limit 100) with max_assets=80
+        data = TenantUpdate(plan="pro", max_assets=80)
+
+        updated = await service.update_tenant(
+            tenant_id=mock_tenant.id,
+            data=data,
+            db=mock_db,
+            redis=AsyncMock(),
+        )
+
+        assert updated.plan == "pro"
+        assert updated.max_assets == 80
+
+    @pytest.mark.asyncio
     async def test_list_tenants_active_only_default(self):
         """Test listing tenants returns active only by default."""
         from app.modules.tenants import service

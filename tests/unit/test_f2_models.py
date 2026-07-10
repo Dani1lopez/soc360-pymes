@@ -168,12 +168,29 @@ class TestScanModel:
 
     def test_fk_columns(self) -> None:
         """Verify foreign keys point to expected parent tables."""
-        fks = {
-            fk.column.table.name: fk.parent.name
+        pairs = {
+            (fk.column.table.name, fk.parent.name)
             for fk in Scan.__table__.foreign_keys
         }
-        assert fks["tenants"] == "tenant_id"
-        assert fks["assets"] == "asset_id"
+        assert ("tenants", "tenant_id") in pairs
+        assert ("assets", "asset_id") in pairs
+        assert ("assets", "tenant_id") in pairs
+
+    def test_composite_fk_constraint_exists(self) -> None:
+        constraint = next(
+            c for c in Scan.__table__.constraints
+            if isinstance(c, ForeignKeyConstraint)
+            and c.name == "fk_scans_asset_tenant"
+        )
+        assert [column.name for column in constraint.columns] == ["asset_id", "tenant_id"]
+        assert [element.target_fullname for element in constraint.elements] == [
+            "assets.id", "assets.tenant_id"
+        ]
+        assert constraint.ondelete == "CASCADE"
+
+    def test_composite_asset_index_exists(self) -> None:
+        index = next(i for i in Scan.__table__.indexes if i.name == "ix_scans_asset_tenant")
+        assert [column.name for column in index.columns] == ["asset_id", "tenant_id"]
 
     def test_repr_format(self) -> None:
         scan = Scan(

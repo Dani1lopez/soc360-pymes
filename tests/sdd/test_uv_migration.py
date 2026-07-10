@@ -90,7 +90,9 @@ def test_uv_lock_exists_and_is_tracked():
 
 
 def test_requirements_txt_is_removed_and_pins_moved_to_pyproject():
-    assert not (ROOT / "requirements.txt").exists(), "requirements.txt must be removed in PR-3"
+    assert not (
+        ROOT / "requirements.txt"
+    ).exists(), "requirements.txt must be removed in PR-3"
 
     with (ROOT / "pyproject.toml").open("rb") as f:
         deps = tomllib.load(f)["project"]["dependencies"]
@@ -117,7 +119,9 @@ def test_requirements_txt_is_removed_and_pins_moved_to_pyproject():
 
 
 def test_requirements_dev_is_removed_and_dev_pins_moved_to_pyproject():
-    assert not (ROOT / "requirements-dev.txt").exists(), "requirements-dev.txt must be removed in PR-3"
+    assert not (
+        ROOT / "requirements-dev.txt"
+    ).exists(), "requirements-dev.txt must be removed in PR-3"
 
     with (ROOT / "pyproject.toml").open("rb") as f:
         dev = tomllib.load(f)["project"]["optional-dependencies"]["dev"]
@@ -131,7 +135,9 @@ def test_requirements_dev_is_removed_and_dev_pins_moved_to_pyproject():
         "fakeredis==2.34.1",
     ]
     for pin in dev_pins:
-        assert pin in dev, f"{pin} must be preserved in pyproject.toml dev optional dependencies"
+        assert (
+            pin in dev
+        ), f"{pin} must be preserved in pyproject.toml dev optional dependencies"
 
 
 def test_ci_workflow_has_uv_job_only():
@@ -144,11 +150,20 @@ def test_ci_workflow_has_uv_job_only():
             continue
         if in_jobs and line and not line.startswith(" "):
             break
-        if in_jobs and line.startswith("  ") and not line.startswith("    ") and line.rstrip().endswith(":"):
+        if (
+            in_jobs
+            and line.startswith("  ")
+            and not line.startswith("    ")
+            and line.rstrip().endswith(":")
+        ):
             job_ids.append(line.split(":", 1)[0].strip())
 
-    assert job_ids == ["test"], f"CI must contain only the canonical uv test job, found: {job_ids}"
-    assert "pip install -r requirements-dev.txt" not in ci_text, "Legacy pip install step must be removed"
+    assert job_ids == [
+        "test"
+    ], f"CI must contain only the canonical uv test job, found: {job_ids}"
+    assert (
+        "pip install -r requirements-dev.txt" not in ci_text
+    ), "Legacy pip install step must be removed"
     assert "astral-sh/setup-uv@v4" in ci_text
     assert "uv lock --check" in ci_text, "CI must verify uv.lock is fresh"
     assert "uv sync --frozen --extra dev" in ci_text
@@ -170,7 +185,9 @@ def test_ci_uv_job_has_celery_help_step():
 
 def test_uv_run_celery_help_runs():
     if shutil.which("uv") is None:
-        pytest.skip("uv CLI is unavailable; this runtime smoke is covered by the test-uv CI job")
+        pytest.skip(
+            "uv CLI is unavailable; this runtime smoke is covered by the test-uv CI job"
+        )
 
     result = subprocess.run(
         ["uv", "run", "celery", "--help"],
@@ -180,7 +197,9 @@ def test_uv_run_celery_help_runs():
         check=False,
     )
     assert result.returncode == 0, f"uv run celery --help failed: {result.stderr}"
-    assert "Celery command entrypoint" in result.stdout, "Celery CLI usage must be printed"
+    assert (
+        "Celery command entrypoint" in result.stdout
+    ), "Celery CLI usage must be printed"
 
 
 def test_readme_has_uv_quickstart_block():
@@ -201,13 +220,19 @@ def test_no_dockerfile_and_compose_has_only_infrastructure_services():
     assert compose_path.exists()
     compose_text = compose_path.read_text()
     # PR-1 must not introduce any application image or build context.
-    assert "build:" not in compose_text, "docker-compose.yml must not contain a build context"
-    assert "Dockerfile" not in compose_text, "docker-compose.yml must not reference a Dockerfile"
+    assert (
+        "build:" not in compose_text
+    ), "docker-compose.yml must not contain a build context"
+    assert (
+        "Dockerfile" not in compose_text
+    ), "docker-compose.yml must not reference a Dockerfile"
     services = [
         line.split(":")[0].strip()
         for line in compose_text.splitlines()
-        if line.rstrip().endswith(":") and line.startswith("  ") and not line.startswith("    ")
+        if line.rstrip().endswith(":")
+        and line.startswith("  ")
+        and not line.startswith("    ")
     ]
-    assert sorted(services) == ["postgres", "redis"], (
-        f"docker-compose.yml should only define postgres and redis services, found: {services}"
-    )
+    assert (
+        sorted(services) == ["postgres", "postgres-test", "redis"]
+    ), f"docker-compose.yml should only define infrastructure services (postgres, postgres-test, redis), found: {services}"

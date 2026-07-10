@@ -3,7 +3,16 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,9 +33,7 @@ class Scan(Base):
     )
     asset_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("assets.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     scan_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -62,6 +69,13 @@ class Scan(Base):
             name="chk_scans_status",
         ),
         UniqueConstraint("id", "tenant_id", name="uq_scans_id_tenant_id"),
+        ForeignKeyConstraint(
+            ["asset_id", "tenant_id"],
+            ["assets.id", "assets.tenant_id"],
+            ondelete="CASCADE",
+            name="fk_scans_asset_tenant",
+        ),
+        Index("ix_scans_asset_tenant", "asset_id", "tenant_id"),
     )
 
     def __repr__(self) -> str:

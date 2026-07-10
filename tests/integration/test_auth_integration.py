@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import pytest_asyncio
 from httpx import AsyncClient
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from app.core.config import settings
 from app.core.redis import get_redis
 from app.event_bus import EventBus
 from fakeredis.aioredis import FakeRedis
+from redis.exceptions import RedisError
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -869,3 +870,100 @@ async def test_concurrent_refreshes_both_tracked(client: AsyncClient, seed_data)
     resp3 = await client.get("/api/v1/users/me", headers=headers3)
     assert resp2.status_code == 200, "El segundo access token debería funcionar"
     assert resp3.status_code == 200, "El tercer access token debería funcionar"
+
+
+# ---------------------------------------------------------------------------
+# REDIS TRANSPORT ERROR — FAIL CLOSED (#251)
+# ---------------------------------------------------------------------------
+
+
+async def test_login_redis_error_returns_401_and_skips_service(
+    client: AsyncClient, seed_data,
+):
+    """When pre-login RateLimiter.check() raises RedisError, return 401 without calling service.login.
+
+    This is the fail-closed fix for #251. The Redis transport error must short-circuit
+    the login flow before credential evaluation.
+    """
+    mock_token = type("TokenResponse", (), {})()
+    mock_login = AsyncMock(return_value=(mock_token, "fake_refresh_token"))
+
+    with patch(
+        "app.modules.auth.router.RateLimiter.check",
+        side_effect=RedisError("Connection refused"),
+    ), patch(
+        "app.modules.auth.router.service.login",
+        new=mock_login,
+    ):
+        resp = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@alpha.test", "password": "AdminAlpha123!"},
+        )
+
+        assert resp.status_code == 401, (
+            f"Expected 401 on Redis transport error, got {resp.status_code}"
+        )
+        assert resp.json()["detail"] == "Credenciales incorrectas", (
+            f"Expected generic 401 message, got {resp.json()['detail']!r}"
+        )
+        mock_login.assert_not_called()
+
+
+async def test_login_redis_connection_error_also_returns_401(
+    client: AsyncClient, seed_data,
+):
+    """ConnectionError (a RedisError subclass) is also caught and returns 401.
+
+    Triangulation: proves the catch works for all RedisError subtypes, not
+    just the base class.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    mock_token = type("TokenResponse", (), {})()
+    mock_login = AsyncMock(return_value=(mock_token, "fake_refresh_token"))
+
+    with patch(
+        "app.modules.auth.router.RateLimiter.check",
+        side_effect=RedisConnectionError("Connection refused"),
+    ), patch(
+        "app.modules.auth.router.service.login",
+        new=mock_login,
+    ):
+        resp = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "viewer@alpha.test", "password": "ViewerAlpha123!"},
+        )
+
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == "Credenciales incorrectas"
+        mock_login.assert_not_called()
+
+
+async def test_login_rate_limited_skips_service_call(
+    client: AsyncClient, seed_data,
+):
+    """When RateLimiter.check reports locked, return 401 without calling service.login.
+
+    Regression guard: the locked branch already returned 401 before #251, but
+    this test explicitly proves service.login is never reached.
+    """
+    from app.core.rate_limit import LockoutStatus
+
+    mock_token = type("TokenResponse", (), {})()
+    mock_login = AsyncMock(return_value=(mock_token, "fake_refresh_token"))
+
+    with patch(
+        "app.modules.auth.router.RateLimiter.check",
+        return_value=LockoutStatus(is_locked=True, retry_after=60, failures=6),
+    ), patch(
+        "app.modules.auth.router.service.login",
+        new=mock_login,
+    ):
+        resp = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "analyst@alpha.test", "password": "AnalystAlpha123!"},
+        )
+
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == "Credenciales incorrectas"
+        mock_login.assert_not_called()

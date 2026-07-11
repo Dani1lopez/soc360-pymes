@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
+from pathlib import Path
 
 import bcrypt
 import pytest
@@ -38,7 +40,6 @@ os.environ.setdefault("POSTGRES_DB", "soc360_test")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 
 from app.main import create_app
-from app.core.database import Base
 from app.core.redis import get_redis
 from app.dependencies import get_db, get_db_with_tenant
 from app.modules.users.models import User
@@ -60,17 +61,31 @@ def _seed_password_hash(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
+def _run_alembic(*args: str) -> None:
+    """Run alembic command with MIGRATION_DATABASE_URL env."""
+    env = {
+        **os.environ,
+        "DATABASE_URL_MIGRATION": MIGRATION_DATABASE_URL,
+    }
+    result = subprocess.run(
+        ["uv", "run", "alembic", *args],
+        cwd=Path(__file__).resolve().parent.parent,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"alembic {' '.join(args)} failed:\n"
+            f"stdout: {result.stdout}\n"
+            f"stderr: {result.stderr}"
+        )
+
+
 # ✅ SYNC fixture — usa asyncio.run() para no contaminar ningún loop de test
 @pytest.fixture(scope="session", autouse=True)
 def prepare_database():
-    from app.modules.assets.models import Asset  # noqa: F401
-    from app.modules.auth.models import RefreshToken  # noqa: F401
-    from app.modules.reports.models import Report  # noqa: F401
-    from app.modules.scans.models import Scan  # noqa: F401
-    from app.modules.tenants.models import Tenant  # noqa: F401
-    from app.modules.users.models import User  # noqa: F401
-    from app.modules.vulnerabilities.models import Vulnerability  # noqa: F401
-
     async def _ensure_app_role() -> None:
         """Idempotently create the soc360_app login role for test GRANTs.
 
@@ -100,56 +115,31 @@ def prepare_database():
             port=parsed.port,
             database=parsed.database,
         )
+        # Extract the password for soc360_app from the test DATABASE_URL
+        # so _ensure_app_role and db_session use the same credential.
+        app_parsed = make_url(TEST_DATABASE_URL)
+        app_password = app_parsed.password or "AppSoc360Pass2000futureDev"
         try:
-            await conn.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT FROM pg_catalog.pg_roles
-                        WHERE rolname = 'soc360_app'
-                    ) THEN
-                        CREATE ROLE soc360_app
-                            WITH LOGIN PASSWORD 'AppSoc360Pass2000futureDev';
-                    END IF;
-                END
-                $$;
-            """)
+            role_exists = await conn.fetchval(
+                "SELECT 1 FROM pg_roles WHERE rolname = 'soc360_app'"
+            )
+            action = "ALTER" if role_exists else "CREATE"
+            await conn.execute(
+                f"{action} ROLE soc360_app WITH LOGIN PASSWORD '{app_password}' "
+                "NOSUPERUSER NOBYPASSRLS"
+            )
         finally:
             await conn.close()
 
     async def _setup() -> None:
         await _ensure_app_role()
-        engine = create_async_engine(
-            MIGRATION_DATABASE_URL, echo=False, poolclass=NullPool
-        )
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-            await conn.run_sync(Base.metadata.create_all)
-            await conn.execute(
-                text("GRANT ALL ON ALL TABLES IN SCHEMA public TO soc360_app")
-            )
-            await conn.execute(
-                text("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO soc360_app")
-            )
-            await conn.execute(
-                text(
-                    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO soc360_app"
-                )
-            )
-            await conn.execute(
-                text(
-                    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO soc360_app"
-                )
-            )
-        await engine.dispose()
+        # Drop everything and re-run the full Alembic chain so RLS policies,
+        # GRANTs, triggers, and indexes are created exactly as in production.
+        _run_alembic("downgrade", "base")
+        _run_alembic("upgrade", "head")
 
     async def _teardown() -> None:
-        engine = create_async_engine(
-            MIGRATION_DATABASE_URL, echo=False, poolclass=NullPool
-        )
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-        await engine.dispose()
+        _run_alembic("downgrade", "base")
 
     asyncio.run(_setup())
     yield
@@ -426,9 +416,10 @@ async def isolated_db_session(pooled_engine):
     """Factory that yields function-scoped AsyncSession instances from a pooled engine.
 
     Usage in concurrency tests:
-        session1 = await isolated_db_session()
-        session2 = await isolated_db_session()
-    Each call returns a fresh session with its own DB connection.
+        session1 = isolated_db_session()
+        session2 = isolated_db_session()
+    Each call returns a fresh AsyncSession with its own DB connection.
+    Note: isolated_db_session is a sync factory (not async) — do NOT await it.
     """
     session_factory = async_sessionmaker(
         bind=pooled_engine, class_=AsyncSession, expire_on_commit=False

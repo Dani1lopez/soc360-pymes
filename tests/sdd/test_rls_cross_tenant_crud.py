@@ -18,7 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import set_tenant_context
-from tests.conftest import TENANT_A_ID, TENANT_B_ID
+from tests.conftest import ADMIN_B_ID, TENANT_A_ID, TENANT_B_ID
 from tests.sdd.conftest import PROTECTED_TABLES
 
 
@@ -44,8 +44,18 @@ def _select_b_tenant_rows(table: str) -> str:
         return f"SELECT id FROM {table} WHERE tenant_id = '{TENANT_B_ID}'"
 
 
-def _insert_b_row(table: str) -> str | None:
-    """Return INSERT for a Tenant B row (to verify RLS blocks it)."""
+def _insert_b_row(table: str, seed: dict) -> str | None:
+    """Return INSERT for a Tenant B row (to verify RLS blocks it).
+
+    `seed` is the dict produced by `seed_two_tenants` with shape:
+        seed["<table>"]["tenant_a" | "tenant_b"] -> UUID
+
+    Tables that reference parent rows owned by Tenant B (scans -> assets,
+    vulnerabilities -> scans, reports -> assets, refresh_tokens -> users) use
+    the seeded Tenant B IDs so the FK is logically valid; the INSERT itself
+    must still be rejected because the session is scoped to Tenant A and the
+    RLS WITH CHECK policy does not allow Tenant B ownership.
+    """
     if table == "tenants":
         return (
             f"INSERT INTO {table} (id, name, slug, plan, is_active, max_assets) "
@@ -61,16 +71,40 @@ def _insert_b_row(table: str) -> str | None:
             f"'Intruder', 'viewer', true, false)"
         )
     elif table == "refresh_tokens":
-        # INSERT with user_id from Tenant B — RLS on users FK blocks it
-        return None  # skip — handled separately via FK path
+        # INSERT owned by Tenant B's admin user — FK to users holds; RLS on
+        # refresh_tokens (which scopes by users.tenant_id) must reject.
+        return (
+            f"INSERT INTO {table} (id, user_id, token_hash, expires_at) "
+            f"VALUES (gen_random_uuid(), '{ADMIN_B_ID}', "
+            f"'intruder_refresh_hash', '2030-01-01T00:00:00Z')"
+        )
     elif table == "assets":
         return (
             f"INSERT INTO {table} (id, tenant_id, name, hostname, asset_type, status) "
             f"VALUES ('{UUID('55555555-5555-5555-5555-555555555555')}', "
             f"'{TENANT_B_ID}', 'Intruder Asset', 'intruder-host', 'host', 'active')"
         )
-    elif table in ("scans", "vulnerabilities", "reports"):
-        return None  # skip — these require valid parent FK references in Tenant B
+    elif table == "scans":
+        return (
+            f"INSERT INTO {table} (id, tenant_id, asset_id, name, scan_type, status) "
+            f"VALUES (gen_random_uuid(), '{TENANT_B_ID}', "
+            f"'{seed['assets']['tenant_b']}', "
+            f"'Intruder Scan', 'vulnerability', 'pending')"
+        )
+    elif table == "vulnerabilities":
+        return (
+            f"INSERT INTO {table} (id, tenant_id, scan_id, title, severity, status) "
+            f"VALUES (gen_random_uuid(), '{TENANT_B_ID}', "
+            f"'{seed['scans']['tenant_b']}', "
+            f"'Intruder Vuln', 'high', 'open')"
+        )
+    elif table == "reports":
+        return (
+            f"INSERT INTO {table} (id, tenant_id, asset_id, name, report_type, status) "
+            f"VALUES (gen_random_uuid(), '{TENANT_B_ID}', "
+            f"'{seed['assets']['tenant_b']}', "
+            f"'Intruder Report', 'vulnerability', 'pending')"
+        )
     return None
 
 
@@ -162,33 +196,38 @@ async def test_cross_tenant_write_blocked(
 ):
     """Tenant A cannot INSERT/UPDATE/DELETE Tenant B rows.
 
-    Tests INSERT, UPDATE, and DELETE for each table. Skips operations that
-    require FK references that are invisible to the Tenant A session.
+    Tests INSERT, UPDATE, and DELETE for each table. For INSERT we are
+    strict: an RLS rejection MUST surface as SQLSTATE 42501
+    (insufficient_privilege). Generic IntegrityError (unique/unrelated FK) or
+    broken SQL would otherwise be silently accepted as "RLS enforcement",
+    which masks real regressions.
     """
-    from sqlalchemy.exc import IntegrityError, ProgrammingError
-
     await set_tenant_context(db_session, UUID(TENANT_A_ID), is_superadmin=False)
 
     # --- INSERT ---
-    insert_sql = _insert_b_row(table_name)
+    insert_sql = _insert_b_row(table_name, seed_two_tenants)
     if insert_sql is not None:
+        from sqlalchemy.exc import DBAPIError
+
         try:
             result = await db_session.execute(text(insert_sql))
             await db_session.flush()
+        except DBAPIError as exc:
+            await db_session.rollback()
+            await set_tenant_context(
+                db_session, UUID(TENANT_A_ID), is_superadmin=False
+            )
+            sqlstate = getattr(exc.orig, "sqlstate", None)
+            assert sqlstate == "42501", (
+                f"INSERT on {table_name} was rejected with SQLSTATE "
+                f"{sqlstate!r}, expected '42501' (RLS insufficient_privilege). "
+                f"A generic constraint error does not prove RLS enforcement."
+            )
+        else:
             assert result.rowcount == 0, (
                 f"INSERT on {table_name} affected {result.rowcount} rows "
-                f"for Tenant B when scoped to Tenant A"
+                f"for Tenant B when scoped to Tenant A (RLS bypassed?)"
             )
-        except (IntegrityError, ProgrammingError):
-            await db_session.rollback()
-            await set_tenant_context(db_session, UUID(TENANT_A_ID), is_superadmin=False)
-            # IntegrityError (FK violation) and ProgrammingError
-            # (InsufficientPrivilegeError — RLS rejects new row) are both
-            # acceptable RLS enforcement mechanisms
-            pass
-    else:
-        # Skip tables that require invisible FK parents
-        pass
 
     # --- UPDATE ---
     update_sql = _update_b_rows(table_name)

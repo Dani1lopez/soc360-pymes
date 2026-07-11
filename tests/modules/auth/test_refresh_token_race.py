@@ -148,10 +148,19 @@ async def test_refresh_token_concurrent_race(isolated_db_session):
     """
     user_id = UUID(ADMIN_A_ID)
 
-    # Seed user (committed so login queries can find it)
+    # Seed user (committed so login queries can find it) and hard-DELETE any
+    # pre-existing refresh tokens for this user. The hard DELETE (not revoke)
+    # is required because `after_total` counts ALL rows including revoked
+    # ones; without this, prior tests (e.g. session_cap) that committed
+    # tokens for the same user would pollute the absolute-count assertion.
     seed = isolated_db_session()
     async with seed.begin():
         await _ensure_user_exists(seed)
+        await seed.execute(text("SET LOCAL app.is_superadmin = 'true'"))
+        await seed.execute(
+            text("DELETE FROM refresh_tokens WHERE user_id = :uid"),
+            {"uid": user_id},
+        )
         await seed.commit()
 
     # Login to obtain a refresh token

@@ -45,12 +45,14 @@ async def _refresh_with_cookie(client: AsyncClient, refresh_token: str) -> Respo
 
 
 async def _count_refresh_tokens(db_session: AsyncSession, user_id: UUID) -> int:
+    await db_session.execute(text("SET LOCAL app.is_superadmin = 'true'"))
     return await db_session.scalar(
         select(func.count()).select_from(RefreshToken).where(RefreshToken.user_id == user_id)
     ) or 0
 
 
 async def _count_active_refresh_tokens(db_session: AsyncSession, user_id: UUID) -> int:
+    await db_session.execute(text("SET LOCAL app.is_superadmin = 'true'"))
     return await db_session.scalar(
         select(func.count())
         .select_from(RefreshToken)
@@ -71,7 +73,12 @@ ADMIN_A_PASSWORD = "AdminAlpha123!"
 
 
 async def _ensure_user_exists(db: AsyncSession) -> None:
-    """Seed tenant + user if not present (idempotent, conflict-safe)."""
+    """Seed tenant + user if not present (idempotent, conflict-safe).
+
+    Runs under superadmin context so the RLS WITH CHECK on `tenants` (and the
+    refresh_tokens/users policies) do not reject test bookkeeping writes.
+    """
+    await db.execute(text("SET LOCAL app.is_superadmin = 'true'"))
     tenant_exists = await db.scalar(
         select(func.count()).select_from(Tenant).where(Tenant.id == UUID(TENANT_A_ID))
     )
@@ -88,7 +95,6 @@ async def _ensure_user_exists(db: AsyncSession) -> None:
         select(func.count()).select_from(User).where(User.id == UUID(ADMIN_A_ID))
     )
     if not user_exists:
-        await db.execute(text("SET LOCAL app.is_superadmin = 'true'"))
         await db.execute(
             pg_insert(User).values(
                 id=UUID(ADMIN_A_ID), tenant_id=UUID(TENANT_A_ID),

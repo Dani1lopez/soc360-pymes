@@ -3,7 +3,17 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Numeric, String, Text, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -63,6 +73,7 @@ class Vulnerability(Base):
             ondelete="CASCADE",
             name="fk_vulnerabilities_scan_tenant",
         ),
+        Index("ix_vulnerabilities_scan_tenant", "scan_id", "tenant_id"),
     )
 
     def __repr__(self) -> str:

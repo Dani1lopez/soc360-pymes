@@ -57,6 +57,26 @@ TEST_DATABASE_URL = os.environ["DATABASE_URL"]
 MIGRATION_DATABASE_URL = os.environ["DATABASE_URL_MIGRATION"]
 
 
+def _assert_safe_test_database() -> None:
+    """Fail closed before any destructive migration reset.
+
+    Guards against a misconfigured MIGRATION_DATABASE_URL wiping a real
+    database: the environment must not be production/staging and the target
+    DB name must look like a test database.
+    """
+    env = os.environ.get("ENVIRONMENT", "").lower()
+    if env in {"production", "prod", "staging"}:
+        raise RuntimeError(
+            f"Refusing destructive DB reset in ENVIRONMENT={env!r}"
+        )
+    db_name = (make_url(MIGRATION_DATABASE_URL).database or "").lower()
+    if "test" not in db_name:
+        raise RuntimeError(
+            f"Refusing 'alembic downgrade base': database {db_name!r} does not "
+            "look like a test database (name must contain 'test')."
+        )
+
+
 def _seed_password_hash(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
@@ -132,6 +152,7 @@ def prepare_database():
             await conn.close()
 
     async def _setup() -> None:
+        _assert_safe_test_database()
         await _ensure_app_role()
         # Drop everything and re-run the full Alembic chain so RLS policies,
         # GRANTs, triggers, and indexes are created exactly as in production.
@@ -139,6 +160,7 @@ def prepare_database():
         _run_alembic("upgrade", "head")
 
     async def _teardown() -> None:
+        _assert_safe_test_database()
         _run_alembic("downgrade", "base")
 
     asyncio.run(_setup())

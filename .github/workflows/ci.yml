@@ -81,6 +81,11 @@ jobs:
           BEGIN
             IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='soc360_app') THEN
               CREATE ROLE soc360_app WITH LOGIN PASSWORD 'soc360_test_password' NOSUPERUSER NOBYPASSRLS;
+            ELSE
+              -- Re-harden a wrong-state role (e.g. left over from a pre-hardening CI run
+              -- that created it as SUPERUSER). Without this, IF NOT EXISTS would skip
+              -- the role and RLS would be silently bypassed.
+              ALTER ROLE soc360_app WITH NOSUPERUSER NOBYPASSRLS;
             END IF;
           END
           $$;

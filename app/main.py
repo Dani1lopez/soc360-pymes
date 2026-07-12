@@ -4,9 +4,12 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
+from sqlalchemy import text
 
 from app.core.config import settings
+from app.core.database import engine
 from app.core.logging import setup_logging, get_logger
 from app.core.middleware import HTTPSRedirectMiddleware, SecurityHeadersMiddleware
 from app.core.redis import ping_redis_with_retry, close_pool, get_redis_client
@@ -195,7 +198,52 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["system"])
     async def health():
         return {"status": "ok", "version": APP_VERSION}
-    
+
+    # ─── Database health — index invalidity probe ────────────────────────
+    # Inline (not a router) so it lives next to its sibling /health route.
+    # No auth, no tenant scoping: PostgreSQL indexes are schema-global, not
+    # per-tenant. Uses the bare `engine` from app.core.database with the
+    # AUTOCOMMIT isolation level so SQLAlchemy 2.x does NOT auto-begin a
+    # transaction (spec db-index-health-check REQ-5).
+    @app.get(
+        "/health/db/indexes",
+        tags=["system"],
+        summary="List invalid public-schema indexes (k8s probe target).",
+    )
+    async def db_index_health():
+        sql = text(
+            "SELECT c.relname AS indexname "
+            "FROM pg_index i "
+            "JOIN pg_class c ON c.oid = i.indexrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'public' AND NOT i.indisvalid"
+        )
+        try:
+            autocommit_engine = engine.execution_options(
+                isolation_level="AUTOCOMMIT"
+            )
+            async with autocommit_engine.connect() as conn:
+                rows = (await conn.execute(sql)).fetchall()
+        except Exception as exc:
+            logger.warning(
+                "db_index_health.connection_failed", error=str(exc)
+            )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "degraded",
+                    "invalid": [],
+                    "error": "db_unreachable",
+                },
+            )
+        invalid = [r[0] for r in rows]
+        if invalid:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "degraded", "invalid": invalid},
+            )
+        return {"status": "ok", "invalid": []}
+
     return app
 
 

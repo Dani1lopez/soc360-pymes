@@ -23,6 +23,7 @@ Strict TDD mode is inferred `false` (init cache did not expose strict_tdd: true)
 If this project later enforces RED-before-GREEN via CI hooks, surface that in
 the apply-progress risks rather than silently proceeding.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,7 +31,6 @@ import importlib.util
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -190,9 +190,7 @@ def test_scn_1_1_empty_upgrade_creates_four_indexes() -> None:
 
         post = _list_target_indexes()
         missing = FOUR_INDEX_NAMES - post.keys()
-        assert not missing, (
-            f"SCN-1.1 failed — missing indexes after upgrade: {missing}"
-        )
+        assert not missing, f"SCN-1.1 failed — missing indexes after upgrade: {missing}"
     finally:
         # Always restore head state for the rest of the test session.
         _run_alembic("upgrade", "head")
@@ -281,12 +279,31 @@ def test_scn_1_2_populated_upgrade_completes() -> None:
 
         post = _list_target_indexes()
         missing = FOUR_INDEX_NAMES - post.keys()
-        assert not missing, (
-            f"SCN-1.2 failed — missing indexes after upgrade: {missing}"
-        )
+        assert not missing, f"SCN-1.2 failed — missing indexes after upgrade: {missing}"
     finally:
         # Restore baseline state — run downgrade then upgrade to start fresh.
         _run_alembic("upgrade", "head")
+
+        # CRITICAL: the rows above were inserted via raw asyncpg (autocommit),
+        # so they are committed and NOT rolled back by the db_session fixture.
+        # Leaving them behind pollutes the shared soc360_test database — most
+        # notably the 'superadmin@soc360.test' user with a non-bcrypt
+        # 'fakehash', which breaks later auth/user/tenant tests with
+        # "ValueError: Invalid salt". Delete them in FK-safe order.
+        for _sql in (
+            "DELETE FROM reports WHERE id = " "'aaaaaaaa-3333-0000-0000-aaaaaaaaaaaa'",
+            "DELETE FROM vulnerabilities WHERE id = "
+            "'aaaaaaaa-2222-0000-0000-aaaaaaaaaaaa'",
+            "DELETE FROM scans WHERE id = " "'aaaaaaaa-1111-0000-0000-aaaaaaaaaaaa'",
+            "DELETE FROM assets WHERE id = " "'aaaaaaaa-0000-0000-0000-aaaaaaaaaaaa'",
+            "DELETE FROM users WHERE id IN "
+            "('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', "
+            "'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb')",
+            "DELETE FROM tenants WHERE id IN "
+            "('11111111-1111-1111-1111-111111111111', "
+            "'22222222-2222-2222-2222-222222222222')",
+        ):
+            _sync_execute(_sql)
 
 
 # ---------------------------------------------------------------------------
@@ -323,9 +340,9 @@ def test_scn_2_1_every_concurrent_create_is_in_autocommit_block() -> None:
         source,
         re.DOTALL,
     )
-    assert create_helper_match is not None, (
-        "SCN-2.1 failed — `_concurrent_create` helper not found in migration"
-    )
+    assert (
+        create_helper_match is not None
+    ), "SCN-2.1 failed — `_concurrent_create` helper not found in migration"
     create_body = create_helper_match.group("body")
     assert "CREATE INDEX CONCURRENTLY" in create_body, (
         "SCN-2.1 failed — `_concurrent_create` body does not issue "
@@ -343,9 +360,9 @@ def test_scn_2_1_every_concurrent_create_is_in_autocommit_block() -> None:
         source,
         re.DOTALL,
     )
-    assert drop_helper_match is not None, (
-        "SCN-2.1 failed — `_concurrent_drop` helper not found in migration"
-    )
+    assert (
+        drop_helper_match is not None
+    ), "SCN-2.1 failed — `_concurrent_drop` helper not found in migration"
     drop_body = drop_helper_match.group("body")
     assert "DROP INDEX CONCURRENTLY" in drop_body, (
         "SCN-2.1 failed — `_concurrent_drop` body does not issue "
@@ -357,18 +374,16 @@ def test_scn_2_1_every_concurrent_create_is_in_autocommit_block() -> None:
     )
 
     # 4. upgrade() invokes _concurrent_create for each of the 4 names.
-    upgrade_section = source.split("def upgrade()", 1)[1].split(
-        "def downgrade()", 1
-    )[0]
+    upgrade_section = source.split("def upgrade()", 1)[1].split("def downgrade()", 1)[0]
     create_calls = upgrade_section.count("_concurrent_create(")
     assert create_calls == 4, (
         f"SCN-2.1 failed — upgrade() should call _concurrent_create 4 times, "
         f"found {create_calls}"
     )
     for name in FOUR_INDEX_NAMES:
-        assert name in upgrade_section, (
-            f"SCN-2.1 failed — upgrade() does not reference index {name!r}"
-        )
+        assert (
+            name in upgrade_section
+        ), f"SCN-2.1 failed — upgrade() does not reference index {name!r}"
 
     # 5. downgrade() invokes _concurrent_drop for each of the 4 names.
     downgrade_section = source.split("def downgrade()", 1)[1]
@@ -377,9 +392,9 @@ def test_scn_2_1_every_concurrent_create_is_in_autocommit_block() -> None:
     if drop_calls == 1:
         # Loop pattern — count the names in the iterable.
         for name in FOUR_INDEX_NAMES:
-            assert name in downgrade_section, (
-                f"SCN-2.1 failed — downgrade() does not drop index {name!r}"
-            )
+            assert (
+                name in downgrade_section
+            ), f"SCN-2.1 failed — downgrade() does not drop index {name!r}"
     else:
         assert drop_calls == 4, (
             f"SCN-2.1 failed — downgrade() should drop 4 indexes "
@@ -437,6 +452,7 @@ def test_scn_3_2_invalid_flag_detection() -> None:
         async def _run() -> None:
             engine = create_async_engine(MIGRATION_DATABASE_URL)
             async with engine.connect() as conn:
+
                 def _call(sync_conn: object) -> None:
                     ctx = MigrationContext.configure(sync_conn)
                     mod.op = Operations(ctx)
@@ -486,9 +502,9 @@ def test_scn_3_3_offline_sql_skips_catalog_validation() -> None:
             text=True,
             timeout=60,
         )
-        assert result.returncode == 0, (
-            f"`alembic upgrade --sql` failed: {result.stderr}"
-        )
+        assert (
+            result.returncode == 0
+        ), f"`alembic upgrade --sql` failed: {result.stderr}"
         sql_text = result.stdout
 
         create_count = sql_text.count("CREATE INDEX CONCURRENTLY")
@@ -534,9 +550,9 @@ def test_scn_5_1_concurrent_downgrade_drops_all_four() -> None:
 
     post = _list_target_indexes()
     leftover = FOUR_INDEX_NAMES & post.keys()
-    assert not leftover, (
-        f"SCN-5.1 failed — indexes still present after downgrade: {leftover}"
-    )
+    assert (
+        not leftover
+    ), f"SCN-5.1 failed — indexes still present after downgrade: {leftover}"
 
     # Restore head for the rest of the session.
     _run_alembic("upgrade", "head")
@@ -563,23 +579,21 @@ def test_scn_6_1_revision_chain_preserved() -> None:
         text=True,
         timeout=60,
     )
-    assert result.returncode == 0, (
-        f"`alembic history` failed: {result.stderr}"
-    )
+    assert result.returncode == 0, f"`alembic history` failed: {result.stderr}"
     history = result.stdout
 
-    assert "a1b2c3d4e5f6" in history, (
-        "SCN-6.1 failed — revision `a1b2c3d4e5f6` missing from history"
-    )
-    assert "c1d2e3f4a5b6" in history, (
-        "SCN-6.1 failed — revision `c1d2e3f4a5b6` missing from history"
-    )
+    assert (
+        "a1b2c3d4e5f6" in history
+    ), "SCN-6.1 failed — revision `a1b2c3d4e5f6` missing from history"
+    assert (
+        "c1d2e3f4a5b6" in history
+    ), "SCN-6.1 failed — revision `c1d2e3f4a5b6` missing from history"
 
     # Verify the parent chain in the migration file itself.
     source = MIGRATION_FILE.read_text()
-    assert 'revision: str = "a1b2c3d4e5f6"' in source, (
-        "SCN-6.1 failed — migration source has wrong revision_id"
-    )
-    assert 'down_revision: Union[str, None] = "c1d2e3f4a5b6"' in source, (
-        "SCN-6.1 failed — migration source has wrong down_revision"
-    )
+    assert (
+        'revision: str = "a1b2c3d4e5f6"' in source
+    ), "SCN-6.1 failed — migration source has wrong revision_id"
+    assert (
+        'down_revision: Union[str, None] = "c1d2e3f4a5b6"' in source
+    ), "SCN-6.1 failed — migration source has wrong down_revision"

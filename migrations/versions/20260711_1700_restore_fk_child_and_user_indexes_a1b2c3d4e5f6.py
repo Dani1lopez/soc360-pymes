@@ -54,15 +54,9 @@ _EXPECTED_INDEX_DEFS: dict[str, str] = {
     "ix_vulnerabilities_scan_tenant": (
         "ON public.vulnerabilities USING btree (scan_id, tenant_id)"
     ),
-    "ix_reports_asset_tenant": (
-        "ON public.reports USING btree (asset_id, tenant_id)"
-    ),
-    "ix_users_email_lower": (
-        "ON public.users USING btree (lower((email)::text))"
-    ),
-    "ix_users_tenant_active": (
-        "ON public.users USING btree (tenant_id, is_active)"
-    ),
+    "ix_reports_asset_tenant": ("ON public.reports USING btree (asset_id, tenant_id)"),
+    "ix_users_email_lower": ("ON public.users USING btree (lower((email)::text))"),
+    "ix_users_tenant_active": ("ON public.users USING btree (tenant_id, is_active)"),
 }
 
 
@@ -73,10 +67,7 @@ def _concurrent_create(name: str, table: str, expr: str) -> None:
     ``op.get_context().autocommit_block()`` because PostgreSQL refuses to
     run concurrent DDL inside an explicit transaction.
     """
-    sql = (
-        f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} "
-        f"ON {table} {expr}"
-    )
+    sql = f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} " f"ON {table} {expr}"
     with op.get_context().autocommit_block():
         op.execute(sql)
 

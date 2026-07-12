@@ -19,8 +19,11 @@ Indexes rebuilt:
 Post-upgrade, each index's definition is re-read from ``pg_indexes`` and its
 ``pg_index`` flag triple (``indisvalid``, ``indisready``, ``indislive``) is
 checked. A state mismatch raises ``RuntimeError`` so an unhealthy concurrent
-build fails the migration instead of leaving a silently-broken index. Both
-catalog checks are skipped in offline ``--sql`` mode (which has no live
+build fails the migration instead of leaving a silently-broken index. To
+prevent a permanent lockup when a previous concurrent attempt already left
+the index name present-but-invalid, ``_concurrent_create`` drops and
+rebuilds it concurrently so a migration retry self-heals. Both catalog
+checks are skipped in offline ``--sql`` mode (which has no live
 connection to read them back).
 
 ``ix_scans_asset_tenant`` already exists (created by ``c1d2e3f4a5b6``) and is
@@ -66,7 +69,20 @@ def _concurrent_create(name: str, table: str, expr: str) -> None:
     REQ-2: each CREATE INDEX CONCURRENTLY MUST execute inside its own
     ``op.get_context().autocommit_block()`` because PostgreSQL refuses to
     run concurrent DDL inside an explicit transaction.
+
+    Auto-recovery: a previous concurrent build may have left the index row
+    present-but-invalid (``indisvalid=false``). Against that, plain
+    ``CREATE INDEX CONCURRENTLY IF NOT EXISTS`` no-ops while the runtime
+    check below would still raise. To prevent the schema from locking up
+    behind the missing name, this helper probes ``pg_index`` via
+    ``_index_exists_and_is_invalid`` and — when an invalid index is found
+    — drops it concurrently inside its own ``autocommit_block()`` before
+    the CREATE step. Both the probe and the recovery drop are skipped in
+    offline ``--sql`` mode (no live catalog to inspect or mutate).
     """
+    if not context.is_offline_mode() and _index_exists_and_is_invalid(name):
+        with op.get_context().autocommit_block():
+            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
     sql = f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} " f"ON {table} {expr}"
     with op.get_context().autocommit_block():
         op.execute(sql)
@@ -80,6 +96,31 @@ def _concurrent_drop(name: str) -> None:
     """
     with op.get_context().autocommit_block():
         op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
+
+
+def _index_exists_and_is_invalid(name: str) -> bool:
+    """Return True if a public-schema index named ``name`` exists with ``indisvalid`` false.
+
+    Probed by ``_concurrent_create`` before its CREATE step: a previously-
+    failed concurrent build can leave the index row in the catalog while
+    unfit for the planner. PostgreSQL refuses ``CREATE INDEX CONCURRENTLY``
+    against an existing index, and the ``IF NOT EXISTS`` clause masks the
+    rebuild — without this pre-check the only recovery path is a manual
+    ``DROP INDEX CONCURRENTLY`` issued by a human operator.
+    """
+    sql = text(
+        """
+        SELECT i.indisvalid
+        FROM pg_index i
+        JOIN pg_class c ON c.oid = i.indexrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relname = :n AND n.nspname = 'public'
+        """
+    )
+    rows = op.get_bind().execute(sql, {"n": name}).fetchall()
+    if not rows:
+        return False
+    return not bool(rows[0][0])
 
 
 def _assert_index_def(name: str, expected_substring: str) -> None:

@@ -531,6 +531,61 @@ def test_scn_3_3_offline_sql_skips_catalog_validation() -> None:
 
 
 # ---------------------------------------------------------------------------
+# SCN-3.4 — auto-recovery from a previously-failed concurrent build
+# ---------------------------------------------------------------------------
+
+
+def test_scn_3_4_auto_recovery_drops_invalid_index_and_rebuilds() -> None:
+    """When a previous concurrent build left an index row present-but-invalid
+    (``indisvalid=false``), ``_concurrent_create`` drops and rebuilds it so a
+    migration retry self-heals instead of locking up behind
+    ``CREATE INDEX CONCURRENTLY IF NOT EXISTS``.
+    """
+    _assert_safe_test_database()
+    _run_alembic("downgrade", "c1d2e3f4a5b6")
+    try:
+        target = "ix_users_email_lower"
+
+        # Simulate a previously-failed concurrent build: create the index via
+        # a non-concurrent CREATE (succeeds on an empty table) and then force
+        # indisvalid=false through the same UPDATE pg_index trick SCN-3.2
+        # uses to mark the catalog row invalid.
+        _sync_execute(
+            f"CREATE INDEX {target} ON public.users "
+            "(lower((email)::text))"
+        )
+        _set_index_validity(target, False)
+
+        # Sanity: confirm the simulated invalid state pre-upgrade.
+        valid, ready, live = _index_health(target)
+        assert valid is False, (
+            f"Precondition failed — expected {target!r} indisvalid=false "
+            f"before upgrade, got indisvalid={valid}"
+        )
+
+        # Run upgrade head. The helper must detect the invalid row, drop it
+        # concurrently, and rebuild — leaving the index fully healthy.
+        _run_alembic("upgrade", "head")
+
+        valid, ready, live = _index_health(target)
+        assert valid and ready and live, (
+            f"SCN-3.4 failed — auto-recovery did not heal {target!r}: "
+            f"indisvalid={valid}, indisready={ready}, indislive={live}"
+        )
+        # The remaining three indexes take the normal create path because
+        # their names do not exist in the catalog — they must also end up
+        # fully healthy post-upgrade.
+        for name in FOUR_INDEX_NAMES - {target}:
+            v, r, l = _index_health(name)
+            assert v and r and l, (
+                f"SCN-3.4 failed — sibling {name!r} unhealthy after "
+                f"upgrade: indisvalid={v}, indisready={r}, indislive={l}"
+            )
+    finally:
+        _run_alembic("upgrade", "head")
+
+
+# ---------------------------------------------------------------------------
 # SCN-5.1 — concurrent downgrade drops all four indexes
 # ---------------------------------------------------------------------------
 

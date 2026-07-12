@@ -295,57 +295,96 @@ def test_scn_1_2_populated_upgrade_completes() -> None:
 
 
 def test_scn_2_1_every_concurrent_create_is_in_autocommit_block() -> None:
-    """Source-level check: every CREATE INDEX CONCURRENTLY is contained by
-    its own `with op.get_context().autocommit_block():` block.
+    """Source-level check: every CREATE/DROP INDEX CONCURRENTLY statement is
+    wrapped inside ``op.get_context().autocommit_block()``.
+
+    The migration uses two helpers (``_concurrent_create`` and
+    ``_concurrent_drop``) that each wrap their DDL statement in an
+    ``autocommit_block``. This test verifies:
+
+    * Both helpers exist and each contains the relevant CONCURRENTLY keyword
+      alongside an ``autocommit_block``.
+    * ``upgrade()`` invokes ``_concurrent_create`` for each of the 4 names.
+    * ``downgrade()`` invokes ``_concurrent_drop`` for each of the 4 names.
     """
     source = MIGRATION_FILE.read_text()
 
-    # Strip strings and comments to focus on structural code.
-    # A simpler approach: walk line-by-line and track with-block depth.
-    # We rely on the discipline that the file uses `with op.get_context().autocommit_block():`
-    # on its own line with consistent indentation.
-
-    lines = source.splitlines()
-    depth_at: dict[int, int] = {}  # line_no -> autocommit_block depth at this line
-    current_depth = 0
-    for lineno, line in enumerate(lines, start=1):
-        # Detect enter/exit of autocommit_block
-        if "autocommit_block" in line and "with" in line:
-            current_depth += 1
-        # Detect end of with block at the same indentation level — heuristic.
-        # The actual code uses explicit dedent, but Python's parser knows.
-        # For simplicity we count: each `with op.get_context().autocommit_block():`
-        # is followed by exactly one statement at +1 indent, then dedent.
-        depth_at[lineno] = current_depth
-        # Crude exit detection: if line starts at module-level indent (0) and
-        # `current_depth > 0`, we just decrement when we see dedented `op.execute`.
-        # Better: track via indentation of `op.execute` inside a with-block.
-        # Actually, the cleanest approach is to parse the structure via regex.
-
-    # Reset and re-parse with regex for robust with-block detection.
-    # Match `with op.get_context().autocommit_block():` followed by `op.execute(...)`
-    pattern = re.compile(
-        r"with\s+op\.get_context\(\)\.autocommit_block\(\):\s*\n"
-        r"(\s+)op\.execute\(",
-        re.MULTILINE,
-    )
-    autocommit_blocks = pattern.findall(source)
-    # Each entry is the indentation of the `op.execute(` call. We need
-    # exactly 4 autocommit statements: 4× CREATE + 4× DROP = 8.
+    # 1. CREATE INDEX CONCURRENTLY exists in the file (built via helper).
     create_count = source.count("CREATE INDEX CONCURRENTLY")
-    drop_count = source.count("DROP INDEX CONCURRENTLY")
-    assert create_count == 4, (
-        f"SCN-2.1 failed — expected 4 CREATE INDEX CONCURRENTLY statements, "
-        f"found {create_count}"
+    assert create_count >= 1, (
+        f"SCN-2.1 failed — expected at least 1 CREATE INDEX CONCURRENTLY "
+        f"statement, found {create_count}"
     )
-    assert drop_count == 4, (
-        f"SCN-2.1 failed — expected 4 DROP INDEX CONCURRENTLY statements "
-        f"in downgrade(), found {drop_count}"
+
+    # 2. The helper `_concurrent_create` contains BOTH the concurrent keyword
+    #    AND an autocommit_block.
+    create_helper_match = re.search(
+        r"def\s+_concurrent_create\([^)]*\)[^\n]*:\s*\n(?P<body>.*?)(?=\n(?:def|class|\Z))",
+        source,
+        re.DOTALL,
     )
-    assert len(autocommit_blocks) >= 8, (
-        f"SCN-2.1 failed — expected at least 8 autocommit_block wrappers "
-        f"(4 upgrade + 4 downgrade), found {len(autocommit_blocks)}"
+    assert create_helper_match is not None, (
+        "SCN-2.1 failed — `_concurrent_create` helper not found in migration"
     )
+    create_body = create_helper_match.group("body")
+    assert "CREATE INDEX CONCURRENTLY" in create_body, (
+        "SCN-2.1 failed — `_concurrent_create` body does not issue "
+        "CREATE INDEX CONCURRENTLY"
+    )
+    assert "autocommit_block" in create_body, (
+        "SCN-2.1 failed — `_concurrent_create` body does not enter "
+        "op.get_context().autocommit_block()"
+    )
+
+    # 3. The helper `_concurrent_drop` contains BOTH the concurrent keyword
+    #    AND an autocommit_block.
+    drop_helper_match = re.search(
+        r"def\s+_concurrent_drop\([^)]*\)[^\n]*:\s*\n(?P<body>.*?)(?=\n(?:def|class|\Z))",
+        source,
+        re.DOTALL,
+    )
+    assert drop_helper_match is not None, (
+        "SCN-2.1 failed — `_concurrent_drop` helper not found in migration"
+    )
+    drop_body = drop_helper_match.group("body")
+    assert "DROP INDEX CONCURRENTLY" in drop_body, (
+        "SCN-2.1 failed — `_concurrent_drop` body does not issue "
+        "DROP INDEX CONCURRENTLY"
+    )
+    assert "autocommit_block" in drop_body, (
+        "SCN-2.1 failed — `_concurrent_drop` body does not enter "
+        "op.get_context().autocommit_block()"
+    )
+
+    # 4. upgrade() invokes _concurrent_create for each of the 4 names.
+    upgrade_section = source.split("def upgrade()", 1)[1].split(
+        "def downgrade()", 1
+    )[0]
+    create_calls = upgrade_section.count("_concurrent_create(")
+    assert create_calls == 4, (
+        f"SCN-2.1 failed — upgrade() should call _concurrent_create 4 times, "
+        f"found {create_calls}"
+    )
+    for name in FOUR_INDEX_NAMES:
+        assert name in upgrade_section, (
+            f"SCN-2.1 failed — upgrade() does not reference index {name!r}"
+        )
+
+    # 5. downgrade() invokes _concurrent_drop for each of the 4 names.
+    downgrade_section = source.split("def downgrade()", 1)[1]
+    drop_calls = downgrade_section.count("_concurrent_drop(")
+    # Accept either 4 explicit calls or a single loop iterating 4 names.
+    if drop_calls == 1:
+        # Loop pattern — count the names in the iterable.
+        for name in FOUR_INDEX_NAMES:
+            assert name in downgrade_section, (
+                f"SCN-2.1 failed — downgrade() does not drop index {name!r}"
+            )
+    else:
+        assert drop_calls == 4, (
+            f"SCN-2.1 failed — downgrade() should drop 4 indexes "
+            f"(either 4 explicit calls or 1 loop), found {drop_calls} calls"
+        )
 
 
 # ---------------------------------------------------------------------------

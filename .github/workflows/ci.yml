@@ -18,12 +18,12 @@ jobs:
         image: postgres:16-alpine
         env:
           POSTGRES_DB: soc360_pymes_test
-          POSTGRES_USER: soc360_app
+          POSTGRES_USER: soc360_migration
           POSTGRES_PASSWORD: soc360_test_password
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U soc360_app -d soc360_pymes_test"
+          --health-cmd "pg_isready -U soc360_migration -d soc360_pymes_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -40,11 +40,11 @@ jobs:
 
     env:
       ENVIRONMENT: development
-      POSTGRES_USER: soc360_app
+      POSTGRES_USER: soc360_migration
       POSTGRES_PASSWORD: soc360_test_password
       POSTGRES_DB: soc360_pymes_test
       DATABASE_URL: postgresql+asyncpg://soc360_app:soc360_test_password@localhost:5432/soc360_pymes_test
-      DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_app:soc360_test_password@localhost:5432/soc360_pymes_test
+      DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_migration:soc360_test_password@localhost:5432/soc360_pymes_test
       REDIS_URL: redis://localhost:6379/0
       REDIS_PASSWORD: ""
       SECRET_KEY: abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwx
@@ -71,6 +71,25 @@ jobs:
 
       - name: Smoke test Celery CLI help
         run: uv run celery --help
+
+      - name: Setup app role
+        env:
+          PGPASSWORD: soc360_test_password
+        run: |
+          psql -U soc360_migration -d soc360_pymes_test -h localhost <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='soc360_app') THEN
+              CREATE ROLE soc360_app WITH LOGIN PASSWORD 'soc360_test_password' NOSUPERUSER NOBYPASSRLS;
+            END IF;
+          END
+          $$;
+          GRANT USAGE ON SCHEMA public TO soc360_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO soc360_app;
+          GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO soc360_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO soc360_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO soc360_app;
+          SQL
 
       - name: Run tests
         run: uv run pytest

@@ -10,6 +10,7 @@ import pytest
 from fakeredis.aioredis import FakeRedis
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import func, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.database import Base
@@ -36,6 +37,10 @@ def _hash_token(raw: str) -> str:
 
 
 async def _count_active(db: AsyncSession, user_id: UUID) -> int:
+    # Read under superadmin context: refresh_tokens is RLS-protected via the
+    # users subquery, so a session without tenant/superadmin context sees zero
+    # rows regardless of what was actually persisted.
+    await db.execute(text("SET LOCAL app.is_superadmin = 'true'"))
     return await db.scalar(
         select(func.count())
         .select_from(RefreshToken)
@@ -46,26 +51,33 @@ async def _count_active(db: AsyncSession, user_id: UUID) -> int:
 
 
 async def _ensure_user_exists(db: AsyncSession) -> None:
-    """Seed tenant + user if not present (idempotent for concurrency tests)."""
+    """Seed tenant + user if not present (idempotent for concurrency tests).
+
+    Runs under superadmin context so the RLS WITH CHECK policies do not reject
+    test bookkeeping writes, and uses ON CONFLICT DO NOTHING so residual state
+    from a prior test run does not raise a duplicate-key error.
+    """
+    await db.execute(text("SET LOCAL app.is_superadmin = 'true'"))
     exists = await db.scalar(
         select(func.count()).select_from(User).where(User.id == UUID(ADMIN_A_ID))
     )
     if exists:
         return
 
-    tenant = Tenant(
-        id=UUID(TENANT_A_ID), name="Empresa Alpha", slug="empresa-alpha",
-        plan="starter", is_active=True, max_assets=50,
+    await db.execute(
+        pg_insert(Tenant).values(
+            id=UUID(TENANT_A_ID), name="Empresa Alpha", slug="empresa-alpha",
+            plan="starter", is_active=True, max_assets=50,
+        ).on_conflict_do_nothing(index_elements=["id"])
     )
-    user = User(
-        id=UUID(ADMIN_A_ID), tenant_id=UUID(TENANT_A_ID),
-        email=ADMIN_A_EMAIL, hashed_password=hash_password(ADMIN_A_PASSWORD),
-        full_name="Admin Alpha", role="admin", is_active=True, is_superadmin=False,
-    )
-    await db.execute(text("SET LOCAL app.is_superadmin = 'true'"))
-    db.add(tenant)
     await db.flush()
-    db.add(user)
+    await db.execute(
+        pg_insert(User).values(
+            id=UUID(ADMIN_A_ID), tenant_id=UUID(TENANT_A_ID),
+            email=ADMIN_A_EMAIL, hashed_password=hash_password(ADMIN_A_PASSWORD),
+            full_name="Admin Alpha", role="admin", is_active=True, is_superadmin=False,
+        ).on_conflict_do_nothing(index_elements=["id"])
+    )
     await db.flush()
 
 

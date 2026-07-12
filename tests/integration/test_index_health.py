@@ -31,6 +31,24 @@ pytestmark = pytest.mark.integration
 
 TARGET_INDEX_FOR_MUTATION = "ix_vulnerabilities_scan_tenant"
 
+
+# ---------------------------------------------------------------------------
+# Fixture — dispose the module-level engine between tests to avoid
+# cross-event-loop connection reuse. Each pytest-asyncio function-scoped
+# test gets its own loop, and the global engine's pool would otherwise bind
+# connections to a previous loop and fail with "Event loop is closed".
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_app_engine_between_tests() -> "AsyncIterator[None]":
+    """Dispose app.core.database.engine before each test so the pool is empty
+    when the new event loop takes ownership.
+    """
+    await app_engine.dispose()
+    yield
+    await app_engine.dispose()
+
 # ---------------------------------------------------------------------------
 # Helpers — direct DB access for pg_index mutation (test-only)
 # ---------------------------------------------------------------------------

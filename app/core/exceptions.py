@@ -63,6 +63,45 @@ class LLMResponseError(LLMError):
         super().__init__(detail, status_code=502)
 
 
+# ── Redis Outage Exceptions (PR2 #260) ─────────────────────────────────
+
+class RedisOutageError(AppError):
+    """Base for all Redis transport-layer failures — always fail-closed (503).
+
+    Four subclasses: Unreachable, Timeout, ResponseError, PartialFailure.
+    """
+
+    def __init__(self, detail: Any = None) -> None:
+        super().__init__(detail=detail or "Redis service unavailable", status_code=503)
+
+
+class RedisUnreachableError(RedisOutageError):
+    """Redis connection refused / host unreachable / socket closed."""
+
+
+class RedisTimeoutError(RedisOutageError):
+    """Redis operation exceeded its deadline."""
+
+
+class RedisResponseError(RedisOutageError):
+    """Redis returned an error response (e.g. ERR, WRONGTYPE)."""
+
+
+class PartialFailureError(RedisOutageError):
+    """Some Redis keys succeeded but others failed — partial state."""
+
+
+class TemporaryUnavailableError(AppError):
+    """Coordinated temporary unavailability (lock timeout, bulk grace period).
+
+    NOT a RedisOutageError subclass — this is a coordination / lock domain
+    signal, not a Redis transport failure.
+    """
+
+    def __init__(self, detail: Any = None) -> None:
+        super().__init__(detail=detail or "Temporarily unavailable", status_code=503)
+
+
 # ── F2 Domain Exceptions ───────────────────────────────────────────────
 
 class AssetError(AppError):

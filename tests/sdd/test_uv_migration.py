@@ -234,5 +234,5 @@ def test_no_dockerfile_and_compose_has_only_infrastructure_services():
         and not line.startswith("    ")
     ]
     assert (
-        sorted(services) == ["postgres", "postgres-test", "redis"]
-    ), f"docker-compose.yml should only define infrastructure services (postgres, postgres-test, redis), found: {services}"
+        sorted(services) == ["postgres", "postgres-test", "redis", "toxiproxy"]
+    ), f"docker-compose.yml should only define infrastructure services (postgres, postgres-test, redis, toxiproxy), found: {services}"

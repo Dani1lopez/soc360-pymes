@@ -15,8 +15,12 @@ logger = get_logger(__name__)
 def get_pool() -> ConnectionPool:
     global _pool
     if _pool is None:
-        _pool = ConnectionPool.from_url(
-            str(settings.REDIS_URL),
+        password = settings.REDIS_PASSWORD.get_secret_value()
+        _pool = ConnectionPool(
+            host=settings.REDIS_HOST,
+            port=settings.REDIS_PORT,
+            db=settings.REDIS_DB,
+            password=password or None,
             decode_responses=True,
             max_connections=settings.REDIS_MAX_CONNECTIONS,
         )

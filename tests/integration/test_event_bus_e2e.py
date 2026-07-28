@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import pytest
 import pytest_asyncio
@@ -32,12 +33,28 @@ from app.event_schemas import AuthLoginEvent
 async def _redis_is_available() -> bool:
     """Check if Redis is reachable."""
     try:
-        client = Redis.from_url(settings.REDIS_URL, decode_responses=False)
+        client = Redis.from_url(_redis_url(), decode_responses=False)
         await client.ping()
         await client.aclose()
         return True
     except Exception:
         return False
+
+
+def _redis_url() -> str:
+    """Build a Redis URL from the structured settings contract.
+
+    Mirrors the production ``get_pool`` construction: an empty password is
+    treated as no authentication, and the password is percent-encoded so
+    special characters survive the URL format.
+    """
+    password = settings.REDIS_PASSWORD.get_secret_value()
+    if password:
+        return (
+            f"redis://:{quote(password, safe='')}@"
+            f"{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
+        )
+    return f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
 
 
 # Skip all tests in this module if Redis is not available
@@ -54,7 +71,7 @@ async def redis_client() -> Redis:
     """Provide a real Redis client for E2E tests."""
     if not await _redis_is_available():
         pytest.skip("Redis not available — E2E tests require a running Redis instance")
-    client = Redis.from_url(settings.REDIS_URL, decode_responses=False)
+    client = Redis.from_url(_redis_url(), decode_responses=False)
     # Cleanup BEFORE test to ensure clean state
     try:
         keys = await client.keys("events:*")

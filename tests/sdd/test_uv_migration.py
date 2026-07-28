@@ -215,7 +215,13 @@ def test_readme_es_has_uv_quickstart_block():
 
 
 def test_no_dockerfile_and_compose_has_only_infrastructure_services():
-    assert not (ROOT / "Dockerfile").exists(), "No Dockerfile should exist in PR-1"
+    # PR1 (uv migration) forbids a root Dockerfile; from PR3 onwards the
+    # production Gunicorn image legitimately requires a root Dockerfile +
+    # entrypoint.sh to set PROMETHEUS_MULTIPROC_DIR before Python imports.
+    # CI sets SDD_PR_CONTEXT=PRn from the PR title; only enforce the no-Dockerfile
+    # check when the slice is PR1. The compose-only contract below is permanent.
+    if os.getenv("SDD_PR_CONTEXT") == "PR1":
+        assert not (ROOT / "Dockerfile").exists(), "No Dockerfile should exist in PR-1"
     compose_path = ROOT / "docker-compose.yml"
     assert compose_path.exists()
     compose_text = compose_path.read_text()

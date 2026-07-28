@@ -102,5 +102,17 @@ jobs:
           ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO soc360_app;
           SQL
 
+      - name: Detect SDD PR context from PR title
+        id: sdd_pr
+        if: github.event_name == 'pull_request'
+        run: |
+          if [[ "${{ github.event.pull_request.title }}" =~ \(PR([0-9]+) ]]; then
+            echo "context=PR${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "context=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run tests
+        env:
+          SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
         run: uv run pytest

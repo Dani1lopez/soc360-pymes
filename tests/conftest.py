@@ -37,7 +37,11 @@ os.environ.setdefault("GROQ_API_KEY", "gsk_test_fake_key_for_tests_only")
 os.environ.setdefault("POSTGRES_USER", "soc360_app")
 os.environ.setdefault("POSTGRES_PASSWORD", "soc360_dev_password")
 os.environ.setdefault("POSTGRES_DB", "soc360_test")
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
+# Structured Redis settings (PR1 #260 — REDIS_URL is rejected)
+os.environ.setdefault("REDIS_HOST", "localhost")
+os.environ.setdefault("REDIS_PORT", "6379")
+os.environ.setdefault("REDIS_DB", "15")
+os.environ.setdefault("REDIS_PASSWORD", "test_redis_password")
 
 from app.main import create_app
 from app.core.redis import get_redis
@@ -457,3 +461,31 @@ async def isolated_db_session(pooled_engine):
 
     for s in sessions:
         await s.close()
+
+
+# ---------------------------------------------------------------------------
+# Toxiproxy session fixture — PR1 #260 baseline fault-injection harness
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def toxiproxy_session():
+    """Set up the Toxiproxy Redis proxy for the test session.
+
+    Creates the proxy if it does not exist, ensures it is enabled,
+    and asserts clean Redis state through the proxy. Setup and teardown
+    failures are propagated because this is a mandatory CI baseline.
+    """
+    from tests.helpers.toxiproxy import ToxiproxyTransportController
+
+    controller = ToxiproxyTransportController()
+    await controller.ensure_proxy(
+        name="redis",
+        listen="0.0.0.0:26379",
+        upstream="redis:6379",
+    )
+
+    yield controller
+
+    # Teardown: ensure proxy is re-enabled for the next session
+    await controller.enable_proxy("redis")

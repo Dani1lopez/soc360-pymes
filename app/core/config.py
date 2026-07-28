@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import os
 from collections import Counter
 from math import log2
 
-from pydantic import field_validator, model_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core._provider_names import _PROVIDER_NAMES
@@ -21,6 +22,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
     
     #Aplicacion
@@ -90,13 +92,23 @@ class Settings(BaseSettings):
     # crashed processes are reclaimed automatically after this many seconds.
     EVENT_RETRY_TTL_SECONDS: int = 86400
 
-    #Redis
-    REDIS_PASSWORD: str | None = None
-    REDIS_URL: str = "redis://localhost:6379/0"
+    #Redis — structured settings; REDIS_URL is rejected (PR1 #260)
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+    REDIS_PASSWORD: SecretStr = SecretStr("")
     REDIS_MAX_CONNECTIONS: int = 20
     # Startup ping retry — rides out transient Redis blips during lifespan (issue #128)
     REDIS_STARTUP_MAX_ATTEMPTS: int = 3
     REDIS_STARTUP_BACKOFF_BASE_SECONDS: float = 1.0
+
+    def __init__(self, **values):
+        if any(str(key).upper() == "REDIS_URL" for key in values):
+            raise ValueError(
+                "REDIS_URL is no longer supported. "
+                "Use REDIS_HOST, REDIS_PORT, REDIS_DB, and REDIS_PASSWORD instead."
+            )
+        super().__init__(**values)
     
     # Rate Limiting (progressive lockout)
     RATE_LIMIT_ENABLED: bool = True
@@ -171,19 +183,29 @@ class Settings(BaseSettings):
             raise ValueError("CORS_ORIGINS no puede contener wildcard '*'")
         return v
     
-    @field_validator("REDIS_URL")
+    @model_validator(mode="before")
     @classmethod
-    def redis_auth_in_production(cls, v: str, info) -> str:
-        environment = info.data.get("ENVIRONMENT", "development")
-        redis_password = info.data.get("REDIS_PASSWORD")
-        if redis_password and "@" not in v:
-            raise ValueError("REDIS_URL debe incluir autenticación cuando REDIS_PASSWORD está configurado")
-        if environment == "production" and "@" not in v:
-            raise ValueError("REDIS_URL debe incluir autenticación en producción")
-        if environment == "production" and not redis_password:
-            raise ValueError("REDIS_PASSWORD es requerido en producción")
-        return v
-    
+    def reject_redis_url(cls, data):
+        """Reject REDIS_URL from kwargs, environment, or dotenv (PR1 #260)."""
+        dotenv_or_kwargs = isinstance(data, dict) and any(
+            str(key).upper() == "REDIS_URL" for key in data
+        )
+        if dotenv_or_kwargs or any(key.upper() == "REDIS_URL" for key in os.environ):
+            raise ValueError(
+                "REDIS_URL is no longer supported. "
+                "Use REDIS_HOST, REDIS_PORT, REDIS_DB, and REDIS_PASSWORD instead."
+            )
+        return data
+
+    @model_validator(mode="after")
+    def redis_password_required_in_production(self) -> Settings:
+        """Production must have a non-empty REDIS_PASSWORD."""
+        if self.ENVIRONMENT == "production":
+            if not self.REDIS_PASSWORD.get_secret_value():
+                raise ValueError("REDIS_PASSWORD is required in production")
+        return self
+
+
     @field_validator("LLM_PROVIDER")
     @classmethod
     def llm_provider_valid(cls, v: str) -> str:

@@ -30,13 +30,22 @@ jobs:
 
       redis:
         image: redis:7-alpine
-        ports:
-          - 6379:6379
+        env:
+          REDIS_PASSWORD: ci_test_redis_password
         options: >-
-          --health-cmd "redis-cli ping"
+          --health-cmd "redis-cli -a ci_test_redis_password ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+        command: redis-server --requirepass ci_test_redis_password
+        ports:
+          - 6379:6379
+
+      toxiproxy:
+        image: ghcr.io/shopify/toxiproxy:2.9.0
+        ports:
+          - 8474:8474
+          - 26379:26379
 
     env:
       ENVIRONMENT: development
@@ -45,8 +54,10 @@ jobs:
       POSTGRES_DB: soc360_pymes_test
       DATABASE_URL: postgresql+asyncpg://soc360_app:soc360_test_password@localhost:5432/soc360_pymes_test
       DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_migration:soc360_test_password@localhost:5432/soc360_pymes_test
-      REDIS_URL: redis://localhost:6379/0
-      REDIS_PASSWORD: ""
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      REDIS_DB: 15
+      REDIS_PASSWORD: ci_test_redis_password
       SECRET_KEY: abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwx
       ACCESS_TOKEN_EXPIRE_MINUTES: 30
       REFRESH_TOKEN_EXPIRE_DAYS: 7

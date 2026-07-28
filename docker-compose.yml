@@ -46,15 +46,27 @@ services:
       redis-server
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
-      --requirepass ${REDIS_PASSWORD}
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
     # Host port mapping for local dev ONLY — do not expose in staging/production
     ports:
       - "6379:6379"
     volumes:
       - ./docker/redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}", "ping"]
       interval: 10s
       timeout: 6s
       retries: 5
+    restart: unless-stopped
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    container_name: soc360_toxiproxy
+    profiles: [dev, test]
+    ports:
+      - "8474:8474"
+      - "26379:26379"
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped

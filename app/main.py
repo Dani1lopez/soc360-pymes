@@ -2,15 +2,25 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+
+import prometheus_client
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CollectorRegistry
+from prometheus_client import multiprocess
 from redis.asyncio import Redis
 from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.database import engine
+from app.core.exceptions import RedisOutageError
 from app.core.logging import setup_logging, get_logger
+from app.core.metrics_auth import (
+    _extract_header,
+    _unauthorized_response,
+    verify_metrics_token,
+)
 from app.core.middleware import HTTPSRedirectMiddleware, SecurityHeadersMiddleware
 from app.core.redis import ping_redis_with_retry, close_pool, get_redis_client
 from app.core.llm import get_llm_provider
@@ -171,13 +181,13 @@ def create_app() -> FastAPI:
         openapi_url="/api/openapi.json" if settings.ENVIRONMENT != "production" else None,
         lifespan=lifespan,
     )
-    
+
     #Guardia: credentials + wildcard es inseguro
     if "*" in settings.CORS_ORIGINS:
         raise ValueError(
             "CORS_ORIGINS no puede contener '*' cuando allow_credentials=True"
         )
-    
+
     #Filtrado de dominios permitidos
     app.add_middleware(
         CORSMiddleware,
@@ -188,12 +198,62 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(HTTPSRedirectMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
-    
+
+    # PR4 #260 — RedisOutageError global handler (registered before any AppError handler
+    # so a future catch-all cannot shadow the 503 translation).
+
+    async def redis_outage_handler(request: Request, exc: RedisOutageError) -> JSONResponse:
+        """Translate ``RedisOutageError`` (subclasses) to a sanitized 503 + ``Retry-After``.
+
+        Body is ``{"detail": "service temporarily unavailable"}`` — never the
+        underlying exception class name, message, or stack frame. PR5 lock-controller
+        work MUST NOT catch ``TemporaryUnavailableError`` here (it is a coordination
+        signal, not a transport failure).
+        """
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "service temporarily unavailable"},
+            headers={"Retry-After": str(settings.REDIS_OUTAGE_RETRY_AFTER_SECONDS)},
+        )
+
+    app.add_exception_handler(RedisOutageError, redis_outage_handler)  # type: ignore[arg-type]  # narrow subclass matches Starlette's wider Exception signature
+
     #Routers
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(tenants_router, prefix="/api/v1")
     app.include_router(users_router, prefix="/api/v1")
-    
+
+    # PR4 #260 — inline ``/metrics`` route (matches /health pattern).
+    # Auth runs BEFORE any Prometheus rendering so unauthenticated scrapers cannot
+    # trigger multiproc collection work.
+
+    @app.get(
+        "/metrics",
+        include_in_schema=False,
+        tags=["system"],
+        summary="Prometheus scrape endpoint (token-authenticated).",
+    )
+    async def metrics_endpoint(request: Request) -> Response:
+        presented = _extract_header(request)
+        if not presented or not verify_metrics_token(presented):
+            return _unauthorized_response()
+
+        # Per-request registry + collector avoids cross-request state bleed.
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        payload = prometheus_client.generate_latest(registry)
+        return Response(content=payload, media_type="text/plain; version=0.0.4")
+
+    # Eagerly prime the cached byte stores so encoding failure (or empty prod token)
+    # surfaces at app boot rather than on the first scrape. Done here rather than in
+    # ``Settings.model_post_init`` to avoid the ``config`` ↔ ``metrics_auth`` cycle.
+    from app.core.metrics_auth import _current_bytes, _previous_bytes
+
+    _current_bytes.cache_clear()
+    _previous_bytes.cache_clear()
+    _current_bytes()
+    _previous_bytes()
+
     #Endpoint para verificar que el servidor está vivo
     @app.get("/health", tags=["system"])
     async def health():
@@ -245,6 +305,9 @@ def create_app() -> FastAPI:
         return {"status": "ok", "invalid": []}
 
     return app
+
+
+app = create_app()
 
 
 app = create_app()

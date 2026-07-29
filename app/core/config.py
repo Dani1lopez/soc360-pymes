@@ -102,6 +102,14 @@ class Settings(BaseSettings):
     REDIS_STARTUP_MAX_ATTEMPTS: int = 3
     REDIS_STARTUP_BACKOFF_BASE_SECONDS: float = 1.0
 
+    # Metrics endpoint auth + outage translation (PR4 #260)
+    # Lifecycle: METRICS_TOKEN is mandatory in production; METRICS_TOKEN_PREVIOUS
+    # is optional and exists only to enable zero-downtime rotation overlap.
+    METRICS_TOKEN: SecretStr | None = None
+    METRICS_TOKEN_PREVIOUS: SecretStr | None = None
+    # Retry-After (seconds) used by the RedisOutageError handler. Range 1..300.
+    REDIS_OUTAGE_RETRY_AFTER_SECONDS: int = 30
+
     def __init__(self, **values):
         if any(str(key).upper() == "REDIS_URL" for key in values):
             raise ValueError(
@@ -230,6 +238,51 @@ class Settings(BaseSettings):
                 raise ValueError("GROQ_API_KEY es requerido cuando LLM_PROVIDER='groq'")
             if not self.GROQ_API_KEY.startswith("gsk_"):
                 raise ValueError("GROQ_API_KEY debe empezar con 'gsk_'")
+        return self
+
+    # ─── PR4 #260 — Metrics credential lifecycle + Redis-outage retry translation
+
+    @field_validator("REDIS_OUTAGE_RETRY_AFTER_SECONDS")
+    @classmethod
+    def retry_after_in_range(cls, v: int) -> int:
+        """Retry-After MUST be between 1 and 300 seconds inclusive."""
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise ValueError("REDIS_OUTAGE_RETRY_AFTER_SECONDS must be an integer")
+        if not (1 <= v <= 300):
+            raise ValueError(
+                "REDIS_OUTAGE_RETRY_AFTER_SECONDS must be between 1 and 300 seconds"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def metrics_token_required_in_production(self) -> Settings:
+        """Production MUST fail fast at startup if METRICS_TOKEN is empty.
+
+        ``METRICS_TOKEN_PREVIOUS`` alone MUST NOT satisfy production (it only
+        supports rotation overlap, not initial deploy).
+        """
+        if self.ENVIRONMENT == "production":
+            current = self.METRICS_TOKEN.get_secret_value() if self.METRICS_TOKEN else ""
+            if not current:
+                raise ValueError(
+                    "METRICS_TOKEN is required in production (METRICS_TOKEN_PREVIOUS alone does not satisfy)"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def metrics_tokens_must_differ(self) -> Settings:
+        """``METRICS_TOKEN`` and ``METRICS_TOKEN_PREVIOUS`` MUST differ.
+
+        A "rotation" to the same value would leave the previous token in
+        service forever; reject at boot so the misconfiguration is loud.
+        """
+        if self.METRICS_TOKEN and self.METRICS_TOKEN_PREVIOUS:
+            current = self.METRICS_TOKEN.get_secret_value()
+            previous = self.METRICS_TOKEN_PREVIOUS.get_secret_value()
+            if current and previous and current == previous:
+                raise ValueError(
+                    "METRICS_TOKEN_PREVIOUS must differ from METRICS_TOKEN"
+                )
         return self
 
 

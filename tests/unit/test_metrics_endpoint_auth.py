@@ -2,16 +2,36 @@
 
 Phase 2 covers the primitive auth module directly; Phase 4 covers end-to-end.
 Tests follow the documented ``monkeypatch.setattr(settings, "METRICS_TOKEN", ...)``
-+ ``_current_bytes.cache_clear()`` contract from design rev 15.
++ ``_current_bytes.cache_clear()`` contract from design rev 16.
 """
 from __future__ import annotations
 
 import pytest
 from pydantic import SecretStr
+from pydantic import ValidationError
 from starlette.datastructures import Headers
 
 from app.core import metrics_auth
 from app.core.config import settings
+
+
+def _make_settings(**overrides):
+    """Construct a ``Settings`` instance; ``_env_file=None`` isolates from operator ``.env``."""
+    from app.core.config import Settings
+
+    base = dict(
+        _env_file=None,
+        DATABASE_URL="postgresql+asyncpg://test:test@localhost/test",
+        DATABASE_URL_MIGRATION="postgresql+asyncpg://test:test@localhost/test",
+        POSTGRES_USER="test",
+        POSTGRES_PASSWORD="test",
+        POSTGRES_DB="test",
+        SECRET_KEY="".join(chr(ord("a") + (i % 26)) for i in range(128)),
+        LLM_PROVIDER="ollama",
+        ENVIRONMENT="development",
+    )
+    base.update(overrides)
+    return Settings(**base)
 
 
 def _install_tokens(
@@ -159,6 +179,66 @@ class TestVerifyMetricsToken:
         _install_tokens(monkeypatch)
         assert metrics_auth.verify_metrics_token("") is False
         assert metrics_auth.verify_metrics_token("anything") is False
+
+    def test_previous_token_revoked_after_drop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Spec #3: After ``METRICS_TOKEN_PREVIOUS`` is removed, the old token MUST NOT authenticate.
+
+        During rotation overlap, both ``current`` and ``previous`` authenticate. After
+        ``METRICS_TOKEN_PREVIOUS`` is dropped (e.g., set to ``None``), the old token must
+        no longer be accepted — proves the rotation retirement semantics.
+        """
+        # During overlap: both authenticate.
+        _install_tokens(monkeypatch, current="new-abc", previous="old-xyz")
+        assert metrics_auth.verify_metrics_token("new-abc") is True
+        assert metrics_auth.verify_metrics_token("old-xyz") is True
+
+        # After dropoff: only current authenticates.
+        _install_tokens(monkeypatch, current="new-abc", previous=None)
+        assert metrics_auth.verify_metrics_token("new-abc") is True
+        assert metrics_auth.verify_metrics_token("old-xyz") is False
+
+
+class TestProductionStartupValidator:
+    """Spec #1: Production startup MUST fail fast when ``METRICS_TOKEN`` is empty.
+
+    Pins the ``metrics_token_required_in_production`` validator in
+    ``app/core/config.py`` so a regression would abort the build.
+    """
+
+    def test_prod_without_metrics_token_aborts_startup(self) -> None:
+        """Spec #1: ``ENVIRONMENT=production`` + empty ``METRICS_TOKEN`` MUST raise."""
+        with pytest.raises(ValidationError) as exc_info:
+            _make_settings(ENVIRONMENT="production", METRICS_TOKEN=None)
+        assert "METRICS_TOKEN" in str(exc_info.value), (
+            f"ValidationError should mention METRICS_TOKEN, got: {exc_info.value!r}"
+        )
+
+    def test_prod_with_only_previous_token_aborts_startup(self) -> None:
+        """Spec #1: ``METRICS_TOKEN_PREVIOUS`` alone MUST NOT satisfy production."""
+        with pytest.raises(ValidationError) as exc_info:
+            _make_settings(
+                ENVIRONMENT="production",
+                METRICS_TOKEN=None,
+                METRICS_TOKEN_PREVIOUS=SecretStr("previous-only"),
+            )
+        assert "METRICS_TOKEN" in str(exc_info.value), (
+            f"ValidationError should mention METRICS_TOKEN, got: {exc_info.value!r}"
+        )
+
+    def test_prod_with_current_token_succeeds(self) -> None:
+        """Spec #1 (positive): production with a valid current token MUST NOT raise."""
+        s = _make_settings(
+            ENVIRONMENT="production",
+            METRICS_TOKEN=SecretStr("a-real-prod-token"),
+        )
+        assert s.ENVIRONMENT == "production"
+        assert s.METRICS_TOKEN is not None
+
+    def test_nonprod_without_token_succeeds(self) -> None:
+        """Spec #1 (non-prod): empty tokens in dev MUST NOT abort startup."""
+        s = _make_settings(ENVIRONMENT="development", METRICS_TOKEN=None)
+        assert s.ENVIRONMENT == "development"
+        assert s.METRICS_TOKEN is None
 
 
 class TestUnauthorizedResponseByteIdentity:

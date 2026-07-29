@@ -58,7 +58,7 @@ from app.main import create_app
 
 
 @pytest.fixture(autouse=True)
-def _install_token(monkeypatch: pytest.MonkeyPatch) -> None:
+def _install_token(monkeypatch: pytest.MonkeyPatch):
     """Install a known token and clear the encoded-bytes cache.
 
     Restores the singleton ``settings.METRICS_TOKEN`` on teardown via

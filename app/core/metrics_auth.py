@@ -3,17 +3,26 @@
 Lives outside ``app/main.py`` so the route stays a thin caller and the 4-step
 extraction pipeline + bitwise ``|`` compare are independently unit-testable.
 
-Contract (design rev 15):
+Contract (design rev 16):
 - ``METRICS_TOKEN_HEADER`` is the only accepted header (``x-metrics-token``).
-- ``METRICS_TOKEN_MAX_BYTES`` caps the header at 256 bytes BEFORE any
-  whitespace scan (perf protection vs. oversized whitespace payload).
-- ``_extract_header`` runs 4 steps (duplicates → byte-cap → whitespace
-  rejection → ASCII-only).
+- ``METRICS_TOKEN_MAX_BYTES`` caps the header at 256 **wire-level** bytes
+  (latin-1 round-trip — see Implementation Refinements §2 in design rev 16)
+  BEFORE any whitespace scan (perf protection vs. oversized whitespace payload).
+- ``_extract_header`` runs 4 steps in this order
+  (cheap-before-expensive — see Implementation Refinements §4 in design rev 16):
+    1. duplicate-header rejection (RFC 7230 §3.2.2)
+    2. latin-1 wire-level byte cap
+    3. ``isascii()`` rejection (covers surrogates + Latin-1 supplement in one
+       O(n) no-alloc pass — strictly stronger than ``strict UTF-8 encode``,
+       see Implementation Refinements §3)
+    4. whitespace rejection (NOT ``.strip()`` normalization)
 - ``verify_metrics_token`` uses bitwise ``|`` on ``hmac.compare_digest`` to
   force both compares to always execute (no short-circuit), satisfying the
   spec's "either authenticates during overlap" semantics.
 - ``_current_bytes`` / ``_previous_bytes`` are ``@lru_cache(maxsize=1)``
-  primed eagerly by ``app.main.create_app`` (see app/main.py).
+  primed eagerly by ``app.main.create_app`` (see app/main.py; the original
+  ``Settings.model_post_init`` location was abandoned to break the
+  ``config ↔ metrics_auth`` import cycle — see Implementation Refinements §1).
 - ``_unauthorized_response`` returns a 401 JSON body with no diagnostic detail.
 """
 from __future__ import annotations

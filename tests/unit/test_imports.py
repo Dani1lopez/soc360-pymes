@@ -43,11 +43,21 @@ PR1_INDENT_IMPORT_ALLOWLIST: set[tuple[str, int, str]] = {
     # `app.modules.auth.service` and `app.dependencies`. PR-1 does not refactor
     # this pattern.
     ("app/modules/auth/service.py", 42, "get_event_bus"),
-    # `from app.core.llm import get_llm_provider` and
-    # `from app.core.llm.providers import _BaseHTTPProvider` are deferred imports
-    # inside `shutdown()` to avoid circular imports at module level (issue #194).
-    ("app/main.py", 157, "get_llm_provider"),
-    ("app/main.py", 158, "_BaseHTTPProvider"),
+    # `from app.core.llm.providers import _BaseHTTPProvider` is a deferred
+    # import inside `shutdown()` so the heavy LLM HTTP provider module is not
+    # loaded at boot when `get_llm_provider()` returns a non-HTTP provider
+    # (issue #194). `get_llm_provider` itself was hoisted to module level
+    # (line 13) and is no longer in this allowlist.
+    ("app/main.py", 168, "_BaseHTTPProvider"),
+    # `from app.core.metrics_auth import _current_bytes, _previous_bytes` is a
+    # deferred import inside `create_app()` to break the
+    # `app.core.config` ↔ `app.core.metrics_auth` import cycle. If hoisted to
+    # module level, `app.core.config` instantiation triggers
+    # `ImportError: cannot import name 'settings' from partially initialized
+    # module`. PR4 design rev 17 (section "Candidate encoding timing") documents
+    # this as the explicit trade-off; the eager priming surfaces encoding
+    # failures at app boot rather than on the first scrape.
+    ("app/main.py", 250, "_current_bytes"),
 }
 
 

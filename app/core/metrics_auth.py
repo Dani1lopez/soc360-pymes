@@ -58,10 +58,11 @@ def _extract_header(request: Any) -> str:
     1. RFC 7230 §3.2.2 — duplicate-header rejection (``getlist() != 1``).
     2. Byte cap BEFORE whitespace scan; ``latin-1`` round-trip recovers the
        wire-level byte length after Starlette's latin-1 header decode.
-    3. Whitespace rejection (NOT ``.strip()`` normalization — silent
+    3. ``isascii()`` rejects non-ASCII chars (Latin-1 supplement U+0080-U+00FF),
+       surrogate code points (U+D800-U+DFFF), and any char > 0x7F in a single
+       O(n) no-alloc pass.
+    4. Whitespace rejection (NOT ``.strip()`` normalization — silent
        normalization was the prior flaw).
-    4. ``isascii()`` rejects non-ASCII chars (raw bytes that were never valid
-       UTF-8) and surrogate code points.
     """
     raw_values = request.headers.getlist(METRICS_TOKEN_HEADER)
     if len(raw_values) != 1:
@@ -77,11 +78,11 @@ def _extract_header(request: Any) -> str:
     if len(wire_bytes) > METRICS_TOKEN_MAX_BYTES:
         return ""
 
-    # Step 4 — non-ASCII + surrogate rejection.
+    # Step 3 — non-ASCII + surrogate rejection via isascii().
     if not value.isascii():
         return ""
 
-    # Step 3 — whitespace rejection (NOT normalization).
+    # Step 4 — whitespace rejection (NOT normalization).
     if value != value.strip() or any(c.isspace() for c in value):
         return ""
 

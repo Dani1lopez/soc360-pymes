@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from collections import Counter
 from math import log2
+from typing import ClassVar
 
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +18,7 @@ MIN_SECRET_KEY_LENGTH = 128
 MIN_SECRET_KEY_ENTROPY_BITS_PER_CHAR = 3.0
 MAX_SECRET_KEY_CHAR_FREQUENCY_RATIO = 0.5
 
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -24,15 +26,15 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
-    
-    #Aplicacion
+
+    # Aplicacion
     ENVIRONMENT: str
     APP_NAME: str = "SOC 360 PYMEs"
     SECRET_KEY: str
-    
-    #Base de datos
+
+    # Base de datos
     DATABASE_URL: str
-    DATABASE_URL_MIGRATION: str 
+    DATABASE_URL_MIGRATION: str
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str
     POSTGRES_DB: str
@@ -40,12 +42,12 @@ class Settings(BaseSettings):
     # indefinite lock waits from starving the pool.
     DB_STATEMENT_TIMEOUT_MS: int = 30_000
     DB_LOCK_TIMEOUT_MS: int = 5_000
-    
+
     # JWT
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
-    
+
     # AI
     GROQ_API_KEY: str | None = None
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
@@ -92,7 +94,7 @@ class Settings(BaseSettings):
     # crashed processes are reclaimed automatically after this many seconds.
     EVENT_RETRY_TTL_SECONDS: int = 86400
 
-    #Redis — structured settings; REDIS_URL is rejected (PR1 #260)
+    # Redis — structured settings; REDIS_URL is rejected (PR1 #260)
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
@@ -110,6 +112,14 @@ class Settings(BaseSettings):
     # Retry-After (seconds) used by the RedisOutageError handler. Range 1..300.
     REDIS_OUTAGE_RETRY_AFTER_SECONDS: int = 30
 
+    # Distributed lock lease settings (PR5a #260)
+    LOCK_KEY_SECRET: SecretStr | None = None
+    LOCK_DEFAULT_TTL_SECONDS: int = 30
+    LOCK_DEFAULT_RETRY_AFTER_SECONDS: int = 15
+    LOCK_RETRY_AFTER_SECONDS: int | None = None
+    # Security policy: deliberately not an environment-overridable field.
+    LOCK_MIN_TTL_SECONDS: ClassVar[int] = 1
+
     def __init__(self, **values):
         if any(str(key).upper() == "REDIS_URL" for key in values):
             raise ValueError(
@@ -117,19 +127,19 @@ class Settings(BaseSettings):
                 "Use REDIS_HOST, REDIS_PORT, REDIS_DB, and REDIS_PASSWORD instead."
             )
         super().__init__(**values)
-    
+
     # Rate Limiting (progressive lockout)
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_WINDOW_SECONDS: int = 86400  # 24h — auto-cleanup TTL for rate limit keys
 
-    #CORS
+    # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]
 
-    #Proxy
+    # Proxy
     TRUSTED_PROXIES: list[str] = []
-    
-    #Validators
-    
+
+    # Validators
+
     @field_validator("SECRET_KEY")
     @classmethod
     def secret_key_strength(cls, v: str) -> str:
@@ -148,10 +158,7 @@ class Settings(BaseSettings):
             )
 
         # Shannon entropy check (reject below 3.0 bits/char)
-        entropy = -sum(
-            (c / len(v)) * log2(c / len(v))
-            for c in counts.values()
-        )
+        entropy = -sum((c / len(v)) * log2(c / len(v)) for c in counts.values())
         if entropy < MIN_SECRET_KEY_ENTROPY_BITS_PER_CHAR:
             raise ValueError(
                 f"SECRET_KEY tiene muy poca entropía: "
@@ -160,7 +167,7 @@ class Settings(BaseSettings):
             )
 
         return v
-    
+
     @field_validator("ENVIRONMENT")
     @classmethod
     def environment_valid(cls, v: str) -> str:
@@ -168,7 +175,7 @@ class Settings(BaseSettings):
         if v not in allowed:
             raise ValueError(f"ENVIRONMENT debe ser uno de: {allowed}")
         return v
-    
+
     @field_validator("JWT_ALGORITHM")
     @classmethod
     def algorithm_valid(cls, v: str) -> str:
@@ -176,21 +183,21 @@ class Settings(BaseSettings):
         if v not in allowed:
             raise ValueError(f"JWT_ALGORITHM debe ser uno de: {allowed}")
         return v
-    
+
     @field_validator("ACCESS_TOKEN_EXPIRE_MINUTES")
     @classmethod
     def token_expiry_sane(cls, v: int) -> int:
         if not (1 <= v <= 60):
             raise ValueError("ACCESS_TOKEN_EXPIRE_MINUTES debe estar entre 1 y 60")
         return v
-    
+
     @field_validator("CORS_ORIGINS")
     @classmethod
     def cors_not_wildcard(cls, v: list[str]) -> list[str]:
         if "*" in v:
             raise ValueError("CORS_ORIGINS no puede contener wildcard '*'")
         return v
-    
+
     @model_validator(mode="before")
     @classmethod
     def reject_redis_url(cls, data):
@@ -212,7 +219,6 @@ class Settings(BaseSettings):
             if not self.REDIS_PASSWORD.get_secret_value():
                 raise ValueError("REDIS_PASSWORD is required in production")
         return self
-
 
     @field_validator("LLM_PROVIDER")
     @classmethod
@@ -254,6 +260,17 @@ class Settings(BaseSettings):
             )
         return v
 
+    @field_validator("LOCK_RETRY_AFTER_SECONDS")
+    @classmethod
+    def lock_retry_after_in_range(cls, v: int | None) -> int | None:
+        if v is not None and (
+            not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 300
+        ):
+            raise ValueError(
+                "LOCK_RETRY_AFTER_SECONDS must be between 1 and 300 seconds"
+            )
+        return v
+
     @model_validator(mode="after")
     def metrics_token_required_in_production(self) -> Settings:
         """Production MUST fail fast at startup if METRICS_TOKEN is empty.
@@ -262,7 +279,9 @@ class Settings(BaseSettings):
         supports rotation overlap, not initial deploy).
         """
         if self.ENVIRONMENT == "production":
-            current = self.METRICS_TOKEN.get_secret_value() if self.METRICS_TOKEN else ""
+            current = (
+                self.METRICS_TOKEN.get_secret_value() if self.METRICS_TOKEN else ""
+            )
             if not current:
                 raise ValueError(
                     "METRICS_TOKEN is required in production (METRICS_TOKEN_PREVIOUS alone does not satisfy)"
@@ -283,6 +302,17 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "METRICS_TOKEN_PREVIOUS must differ from METRICS_TOKEN"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def lock_key_secret_required_in_production(self) -> Settings:
+        secret = self.LOCK_KEY_SECRET.get_secret_value() if self.LOCK_KEY_SECRET else ""
+        if (
+            self.ENVIRONMENT == "production"
+            and self.LOCK_KEY_SECRET is not None
+            and len(secret.encode()) < 32
+        ):
+            raise ValueError("LOCK_KEY_SECRET must be at least 32 bytes in production")
         return self
 
 

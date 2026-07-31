@@ -311,6 +311,10 @@ EXPECTED_25_FLOW_IDS = frozenset(
         "auth_post_credential_session_lock",
         "auth_post_credential_user_deactivate_lock",
         "auth_tenant_deactivate_lock",
+        "scan_start_lock",
+        "scan_update_lock",
+        "scan_complete_lock",
+        "scan_cancel_lock",
     ]
 )
 
@@ -320,8 +324,8 @@ class TestFlowIdCatalog:
 
     def test_catalog_has_exactly_25_items(self) -> None:
         """ALL_FLOW_IDS MUST contain exactly 25 identifiers."""
-        assert len(ALL_FLOW_IDS) == 25, (
-            f"Expected 25 FlowIds, got {len(ALL_FLOW_IDS)}"
+        assert len(ALL_FLOW_IDS) == 29, (
+            f"Expected 29 FlowIds, got {len(ALL_FLOW_IDS)}"
         )
 
     def test_catalog_matches_spec_set(self) -> None:
@@ -353,8 +357,8 @@ class TestFlowPolicy:
 
     def test_policy_map_keys_equal_exact_25(self) -> None:
         """FlowPolicy MUST have exactly 25 keys."""
-        assert len(FlowPolicy) == 25, (
-            f"FlowPolicy has {len(FlowPolicy)} keys, expected 25"
+        assert len(FlowPolicy) == 29, (
+            f"FlowPolicy has {len(FlowPolicy)} keys, expected 29"
         )
 
     def test_policy_map_keys_match_flow_ids(self) -> None:

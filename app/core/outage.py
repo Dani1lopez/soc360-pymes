@@ -37,6 +37,13 @@ class AsyncWaiter(Protocol):
     async def wait(self, awaitable: Awaitable[T], *, timeout: float) -> T: ...
 
 
+class RedisLockWaiter:
+    """Production deadline implementation for one lock retry."""
+
+    async def wait(self, awaitable: Awaitable[T], *, timeout: float) -> T:
+        return await asyncio.wait_for(awaitable, timeout=timeout)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 25-FlowId catalog (exact set — spec rev 9 §25-FlowId)
 # ─────────────────────────────────────────────────────────────────────────────

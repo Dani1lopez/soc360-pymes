@@ -1,4 +1,4 @@
-"""Typed outage foundation — 25-FlowId catalog, policy, retry classification.
+"""Typed outage foundation — 29-FlowId catalog, policy, retry classification.
 
 PR2 #260: pure primitives with no Redis import, no I/O, and no router coupling.
 All identifiers match spec rev 9 and design rev 9 exactly.
@@ -82,6 +82,10 @@ _FLOW_ID_AUTH_POST_CREDENTIAL_USER_DEACTIVATE_LOCK = (
     "auth_post_credential_user_deactivate_lock"
 )
 _FLOW_ID_AUTH_TENANT_DEACTIVATE_LOCK = "auth_tenant_deactivate_lock"
+_FLOW_ID_SCAN_START_LOCK = "scan_start_lock"
+_FLOW_ID_SCAN_UPDATE_LOCK = "scan_update_lock"
+_FLOW_ID_SCAN_COMPLETE_LOCK = "scan_complete_lock"
+_FLOW_ID_SCAN_CANCEL_LOCK = "scan_cancel_lock"
 
 ALL_FLOW_IDS: list[str] = sorted(
     [
@@ -110,6 +114,10 @@ ALL_FLOW_IDS: list[str] = sorted(
         _FLOW_ID_AUTH_POST_CREDENTIAL_SESSION_LOCK,
         _FLOW_ID_AUTH_POST_CREDENTIAL_USER_DEACTIVATE_LOCK,
         _FLOW_ID_AUTH_TENANT_DEACTIVATE_LOCK,
+        _FLOW_ID_SCAN_START_LOCK,
+        _FLOW_ID_SCAN_UPDATE_LOCK,
+        _FLOW_ID_SCAN_COMPLETE_LOCK,
+        _FLOW_ID_SCAN_CANCEL_LOCK,
     ]
 )
 
@@ -150,6 +158,10 @@ FlowPolicy: dict[str, str] = {
     _FLOW_ID_AUTH_POST_CREDENTIAL_SESSION_LOCK: "fail_closed",
     _FLOW_ID_AUTH_POST_CREDENTIAL_USER_DEACTIVATE_LOCK: "fail_closed",
     _FLOW_ID_AUTH_TENANT_DEACTIVATE_LOCK: "fail_closed",
+    _FLOW_ID_SCAN_START_LOCK: "fail_closed",
+    _FLOW_ID_SCAN_UPDATE_LOCK: "fail_closed",
+    _FLOW_ID_SCAN_COMPLETE_LOCK: "fail_closed",
+    _FLOW_ID_SCAN_CANCEL_LOCK: "fail_closed",
 }
 
 

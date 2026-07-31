@@ -63,9 +63,7 @@ METRIC_OPERATION_LATENCY = prometheus_client.Histogram(
     "soc360_redis_operation_latency_seconds",
     "Redis operation latency in seconds, tagged by flow.",
     ["flow"],
-    buckets=(
-        0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0
-    ),
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
 )
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -63,9 +63,7 @@ METRIC_OPERATION_LATENCY = prometheus_client.Histogram(
     "soc360_redis_operation_latency_seconds",
     "Redis operation latency in seconds, tagged by flow.",
     ["flow"],
-    buckets=(
-        0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0
-    ),
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -81,3 +79,34 @@ SEVEN_METRICS: list[prometheus_client.Collector] = [
     METRIC_CANCELLATION,
     METRIC_OPERATION_LATENCY,
 ]
+
+METRIC_LOCK_ACQUIRE_TOTAL = prometheus_client.Counter(
+    "soc360_redis_lock_acquire_total",
+    "Total distributed-lock acquisition attempts by flow and outcome.",
+    ["flow", "outcome"],
+)
+
+METRIC_LOCK_RENEW_TOTAL = prometheus_client.Counter(
+    "soc360_redis_lock_renew_total",
+    "Total distributed-lock renewals by flow and outcome.",
+    ["flow", "outcome"],
+)
+
+METRIC_LOCK_RELEASE_TOTAL = prometheus_client.Counter(
+    "soc360_redis_lock_release_total",
+    "Total distributed-lock releases by flow and outcome.",
+    ["flow", "outcome"],
+)
+
+METRIC_LOCK_CONTENTION_TOTAL = prometheus_client.Counter(
+    "soc360_redis_lock_contention_total",
+    "Total distributed-lock contention events by flow, operation, and outcome.",
+    ["flow", "operation", "outcome"],
+)
+
+METRIC_LOCK_WAIT_SECONDS = prometheus_client.Histogram(
+    "soc360_redis_lock_wait_seconds",
+    "Distributed-lock wait duration by flow and operation.",
+    ["flow", "operation"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+)

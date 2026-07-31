@@ -12,7 +12,9 @@ from pathlib import Path
 
 
 DEFAULT_SKILL_HOME = "~/.config/opencode/skills/parallel-agents-coordination"
-SKILL_HOME = Path(os.environ.get("PARALLEL_SKILL_HOME", DEFAULT_SKILL_HOME)).expanduser()
+SKILL_HOME = Path(
+    os.environ.get("PARALLEL_SKILL_HOME", DEFAULT_SKILL_HOME)
+).expanduser()
 ACK_SCRIPT = SKILL_HOME / "scripts" / "ack-manifest.py"
 
 
@@ -66,7 +68,9 @@ def write_manifest(tmp_path: Path, content: str) -> Path:
     return path
 
 
-def run_ack(path: Path, *, use_environment: bool = False) -> subprocess.CompletedProcess[str]:
+def run_ack(
+    path: Path, *, use_environment: bool = False
+) -> subprocess.CompletedProcess[str]:
     args = [sys.executable, str(ACK_SCRIPT)]
     environment = os.environ.copy()
     environment.pop("PARALLEL_MANIFEST_PATH", None)

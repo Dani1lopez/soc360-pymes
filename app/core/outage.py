@@ -26,6 +26,7 @@ T = TypeVar("T")
 # AsyncWaiter — injectable deadline seam (spec rev 9 §Async Wait/Timeout)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class AsyncWaiter(Protocol):
     """Injectable async deadline seam.
 
@@ -77,7 +78,9 @@ _FLOW_ID_TENANTS_UPDATE_TENANT_REVOKE = "tenants_update_tenant_revoke"
 _FLOW_ID_TENANTS_DEACTIVATE_TENANT_REVOKE = "tenants_deactivate_tenant_revoke"
 
 _FLOW_ID_AUTH_POST_CREDENTIAL_SESSION_LOCK = "auth_post_credential_session_lock"
-_FLOW_ID_AUTH_POST_CREDENTIAL_USER_DEACTIVATE_LOCK = "auth_post_credential_user_deactivate_lock"
+_FLOW_ID_AUTH_POST_CREDENTIAL_USER_DEACTIVATE_LOCK = (
+    "auth_post_credential_user_deactivate_lock"
+)
 _FLOW_ID_AUTH_TENANT_DEACTIVATE_LOCK = "auth_tenant_deactivate_lock"
 
 ALL_FLOW_IDS: list[str] = sorted(
@@ -154,6 +157,7 @@ FlowPolicy: dict[str, str] = {
 # RetryableOp — idempotent operations safe to retry (design rev 9)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class RetryableOp(str, Enum):
     """Operations proven safe to retry — exactly six members.
 
@@ -171,6 +175,7 @@ class RetryableOp(str, Enum):
 # ─────────────────────────────────────────────────────────────────────────────
 # classify_redis_error — pure transport exception classifier
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def classify_redis_error(exc: BaseException) -> RedisOutageError:
     """Map a transport exception to a typed RedisOutageError subclass.

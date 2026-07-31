@@ -23,59 +23,100 @@ from app.core.redis import get_redis_client
 _LOCK_RESOURCE_SUPERADMIN_SESSION = "__SUPERADMIN_SESSION__"
 _LOCK_RESOURCE_TENANT_DEACTIVATION = "__TENANT_DEACTIVATION__"
 LOCK_MIN_TTL_SECONDS: int = 1
-RENEW_LUA = ('if redis.call("GET", KEYS[1]) == ARGV[1] then '
-             'return redis.call("PEXPIRE", KEYS[1], ARGV[2]) else return 0 end')
-RELEASE_LUA = ('if redis.call("GET", KEYS[1]) == ARGV[1] then '
-               'return redis.call("DEL", KEYS[1]) else return 0 end')
+RENEW_LUA = (
+    'if redis.call("GET", KEYS[1]) == ARGV[1] then '
+    'return redis.call("PEXPIRE", KEYS[1], ARGV[2]) else return 0 end'
+)
+RELEASE_LUA = (
+    'if redis.call("GET", KEYS[1]) == ARGV[1] then '
+    'return redis.call("DEL", KEYS[1]) else return 0 end'
+)
 _SAFE_COMPONENT = re.compile(r"[A-Za-z0-9_-]+")
 _ACTIVE_TOKENS: dict[str, str] = {}
 logger = get_logger(__name__)
 
+
 def _safe_component(value: str) -> str:
-    return value if value and _SAFE_COMPONENT.fullmatch(value) else hashlib.sha256(
-        value.encode()
-    ).hexdigest()
+    return (
+        value
+        if value and _SAFE_COMPONENT.fullmatch(value)
+        else hashlib.sha256(value.encode()).hexdigest()
+    )
+
+
 def _lock_key_secret() -> bytes:
     configured = getattr(settings, "LOCK_KEY_SECRET", None)
     if configured is None:
         raise ValueError("LOCK_KEY_SECRET is required for distributed locks")
-    secret = configured.get_secret_value() if hasattr(configured, "get_secret_value") else str(configured)
+    secret = (
+        configured.get_secret_value()
+        if hasattr(configured, "get_secret_value")
+        else str(configured)
+    )
     if not secret:
         raise ValueError("LOCK_KEY_SECRET is required for distributed locks")
     return secret.encode()
+
+
 def _flow_short(flow_id: str) -> str:
     return _safe_component(flow_id.split("_", 1)[0])
+
+
 def build_lock_key(flow_id: str, tenant_id: str, asset_id: str) -> str:
     """Build ``lock:{flow}:{hmac}:{tenant}:{resource}`` without unsafe segments."""
     tenant, asset = str(tenant_id), str(asset_id)
-    namespace = hmac.new(_lock_key_secret(), tenant.encode(), hashlib.sha256).digest()[:8].hex()
-    return ":".join(("lock", _flow_short(str(flow_id)), namespace,
-                     _safe_component(tenant), _safe_component(asset)))
+    namespace = (
+        hmac.new(_lock_key_secret(), tenant.encode(), hashlib.sha256).digest()[:8].hex()
+    )
+    return ":".join(
+        (
+            "lock",
+            _flow_short(str(flow_id)),
+            namespace,
+            _safe_component(tenant),
+            _safe_component(asset),
+        )
+    )
+
+
 def _validate_ttl(ttl_seconds: int) -> None:
     if ttl_seconds < LOCK_MIN_TTL_SECONDS:
         raise ValueError("ttl_seconds must be >= LOCK_MIN_TTL_SECONDS")
+
+
 def _log_not_owner(event: str, handle: "LockHandle") -> None:
-    logger.warning(event, key_hash=hashlib.sha256(handle.key.encode()).hexdigest()[:8],
-                   tenant_id=handle._tenant_id)
+    logger.warning(
+        event,
+        key_hash=hashlib.sha256(handle.key.encode()).hexdigest()[:8],
+        tenant_id=handle._tenant_id,
+    )
+
+
 def _record(kind: str, flow_id: str, outcome: str, operation: str = "") -> None:
     """Emit optional PR5b metrics without making PR5a depend on their symbols."""
     try:
         if kind == "acquire":
             from app.core.metrics import METRIC_LOCK_ACQUIRE_TOTAL  # type: ignore[attr-defined]
+
             METRIC_LOCK_ACQUIRE_TOTAL.labels(flow=flow_id, outcome=outcome).inc()
         elif kind == "renew":
             from app.core.metrics import METRIC_LOCK_RENEW_TOTAL  # type: ignore[attr-defined]
+
             METRIC_LOCK_RENEW_TOTAL.labels(flow=flow_id, outcome=outcome).inc()
         elif kind == "release":
             from app.core.metrics import METRIC_LOCK_RELEASE_TOTAL  # type: ignore[attr-defined]
+
             METRIC_LOCK_RELEASE_TOTAL.labels(flow=flow_id, outcome=outcome).inc()
         else:
             from app.core.metrics import METRIC_LOCK_CONTENTION_TOTAL  # type: ignore[attr-defined]
+
             METRIC_LOCK_CONTENTION_TOTAL.labels(
                 flow=flow_id, operation=operation, outcome=outcome
             ).inc()
     except (ImportError, AttributeError):
         pass
+
+
 async def _set_lock(redis: Any, key: str, token: str, ttl_seconds: int) -> bool:
     try:
         return bool(await redis.set(key, token, nx=True, px=ttl_seconds * 1000))
@@ -83,7 +124,11 @@ async def _set_lock(redis: Any, key: str, token: str, ttl_seconds: int) -> bool:
         raise
     except Exception as exc:
         raise classify_redis_error(exc) from exc
-async def _eval_script(redis: Any, script: str, key: str, token: str, argument: int) -> Any:
+
+
+async def _eval_script(
+    redis: Any, script: str, key: str, token: str, argument: int
+) -> Any:
     try:
         return await redis.eval(script, 1, key, token, argument)
     except ResponseError as exc:
@@ -91,18 +136,26 @@ async def _eval_script(redis: Any, script: str, key: str, token: str, argument: 
             raise
         await redis.script_load(script)
         return await redis.eval(script, 1, key, token, argument)
-async def _eval_owner_script(redis: Any, script: str, key: str, token: str, argument: int) -> Any:
+
+
+async def _eval_owner_script(
+    redis: Any, script: str, key: str, token: str, argument: int
+) -> Any:
     try:
         return await _eval_script(redis, script, key, token, argument)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         raise classify_redis_error(exc) from exc
+
+
 async def _cancel_retry(task: asyncio.Task[Any]) -> None:
     if not task.done():
         task.cancel()
     with suppress(asyncio.CancelledError):
         await task
+
+
 @dataclass
 class LockHandle:
     key: str
@@ -186,8 +239,14 @@ class LockHandle:
 
 @asynccontextmanager
 async def acquire_dist_lock(
-    *, flow_id: str, tenant_id: str, asset_id: str, ttl_seconds: int,
-    operation: str, wait_timeout_seconds: float, redis: Redis | None = None,
+    *,
+    flow_id: str,
+    tenant_id: str,
+    asset_id: str,
+    ttl_seconds: int,
+    operation: str,
+    wait_timeout_seconds: float,
+    redis: Redis | None = None,
     waiter: AsyncWaiter | None = None,
 ) -> AsyncIterator[LockHandle]:
     """Acquire one namespaced Redis lease and release it on every exit path."""
@@ -222,8 +281,15 @@ async def acquire_dist_lock(
             _record("contention", flow_id, "contended", operation)
             raise TemporaryUnavailableError("lock_timeout")
 
-    handle = LockHandle(key, token, time.monotonic(), ttl_seconds, flow_id,
-                        _redis=redis_client, _tenant_id=str(tenant_id))
+    handle = LockHandle(
+        key,
+        token,
+        time.monotonic(),
+        ttl_seconds,
+        flow_id,
+        _redis=redis_client,
+        _tenant_id=str(tenant_id),
+    )
     _ACTIVE_TOKENS[key] = token
     _record("acquire", flow_id, "acquired")
     try:

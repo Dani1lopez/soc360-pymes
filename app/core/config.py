@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from collections import Counter
 from math import log2
+from typing import ClassVar
 
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -109,6 +110,14 @@ class Settings(BaseSettings):
     METRICS_TOKEN_PREVIOUS: SecretStr | None = None
     # Retry-After (seconds) used by the RedisOutageError handler. Range 1..300.
     REDIS_OUTAGE_RETRY_AFTER_SECONDS: int = 30
+
+    # Distributed lock lease settings (PR5a #260)
+    LOCK_KEY_SECRET: SecretStr | None = None
+    LOCK_DEFAULT_TTL_SECONDS: int = 30
+    LOCK_DEFAULT_RETRY_AFTER_SECONDS: int = 15
+    LOCK_RETRY_AFTER_SECONDS: int | None = None
+    # Security policy: deliberately not an environment-overridable field.
+    LOCK_MIN_TTL_SECONDS: ClassVar[int] = 1
 
     def __init__(self, **values):
         if any(str(key).upper() == "REDIS_URL" for key in values):
@@ -254,6 +263,17 @@ class Settings(BaseSettings):
             )
         return v
 
+    @field_validator("LOCK_RETRY_AFTER_SECONDS")
+    @classmethod
+    def lock_retry_after_in_range(cls, v: int | None) -> int | None:
+        if v is not None and (
+            not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 300
+        ):
+            raise ValueError(
+                "LOCK_RETRY_AFTER_SECONDS must be between 1 and 300 seconds"
+            )
+        return v
+
     @model_validator(mode="after")
     def metrics_token_required_in_production(self) -> Settings:
         """Production MUST fail fast at startup if METRICS_TOKEN is empty.
@@ -283,6 +303,13 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "METRICS_TOKEN_PREVIOUS must differ from METRICS_TOKEN"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def lock_key_secret_required_in_production(self) -> Settings:
+        secret = self.LOCK_KEY_SECRET.get_secret_value() if self.LOCK_KEY_SECRET else ""
+        if self.ENVIRONMENT == "production" and self.LOCK_KEY_SECRET is not None and len(secret.encode()) < 32:
+            raise ValueError("LOCK_KEY_SECRET must be at least 32 bytes in production")
         return self
 
 

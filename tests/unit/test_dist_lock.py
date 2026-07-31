@@ -75,9 +75,7 @@ def test_build_lock_key_hmac_format_and_rotation(
 ) -> None:
     dist_lock = _set_secret(monkeypatch, "first lock secret")
     key = dist_lock.build_lock_key("scan", "t1", "a1")
-    expected = hmac.new(
-        b"first lock secret", b"t1", hashlib.sha256
-    ).digest()[:8].hex()
+    expected = hmac.new(b"first lock secret", b"t1", hashlib.sha256).digest()[:8].hex()
     assert key == f"lock:scan:{expected}:t1:a1"
     assert re.fullmatch(r"[0-9a-f]{16}", key.split(":")[2])
 
@@ -86,7 +84,9 @@ def test_build_lock_key_hmac_format_and_rotation(
     assert rotated.split(":")[2] != key.split(":")[2]
 
 
-@pytest.mark.parametrize("resource", ["__SUPERADMIN_SESSION__", "__TENANT_DEACTIVATION__"])
+@pytest.mark.parametrize(
+    "resource", ["__SUPERADMIN_SESSION__", "__TENANT_DEACTIVATION__"]
+)
 def test_build_lock_key_preserves_reserved_sentinels(
     monkeypatch: pytest.MonkeyPatch, resource: str
 ) -> None:
@@ -96,7 +96,9 @@ def test_build_lock_key_preserves_reserved_sentinels(
     assert ":" not in resource and not any(c.isspace() for c in resource)
 
 
-def test_build_lock_key_hashes_unsafe_components(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_lock_key_hashes_unsafe_components(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     dist_lock = _set_secret(monkeypatch, "component secret")
     key = dist_lock.build_lock_key("scan", "tenant:42", "asset-1")
     assert key.split(":")[3] == hashlib.sha256(b"tenant:42").hexdigest()
@@ -110,7 +112,10 @@ async def test_acquire_returns_random_handle_and_releases(
     async with dist_lock.acquire_dist_lock(**_lock_args(redis)) as handle:
         assert handle.key == dist_lock.build_lock_key("scan", "tenant-1", "asset-1")
         assert re.fullmatch(r"[0-9a-f]{32}", handle.owner_token)
-        assert await redis.get(handle.key) in {handle.owner_token, handle.owner_token.encode()}
+        assert await redis.get(handle.key) in {
+            handle.owner_token,
+            handle.owner_token.encode(),
+        }
     assert await redis.get(handle.key) is None
 
 
@@ -180,7 +185,9 @@ async def test_injected_waiter_controls_exactly_one_retry(
 ) -> None:
     dist_lock = _set_secret(monkeypatch, "waiter secret")
     monkeypatch.setattr(dist_lock.random, "uniform", lambda _low, _high: 0.25)
-    await redis.set(dist_lock.build_lock_key("scan", "tenant-1", "asset-1"), "owner", px=30_000)
+    await redis.set(
+        dist_lock.build_lock_key("scan", "tenant-1", "asset-1"), "owner", px=30_000
+    )
     waiter = RecordingWaiter()
     with pytest.raises(Exception, match="lock_timeout"):
         async with dist_lock.acquire_dist_lock(

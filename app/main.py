@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.database import engine
-from app.core.exceptions import RedisOutageError
+from app.core.exceptions import RedisOutageError, TemporaryUnavailableError
 from app.core.logging import setup_logging, get_logger
 from app.core.metrics_auth import (
     _extract_header,
@@ -78,7 +78,11 @@ async def _consumer_loop(
 
                 for msg in messages:
                     raw_msg_id = msg["message_id"]
-                    msg_id = raw_msg_id.decode() if isinstance(raw_msg_id, bytes) else raw_msg_id
+                    msg_id = (
+                        raw_msg_id.decode()
+                        if isinstance(raw_msg_id, bytes)
+                        else raw_msg_id
+                    )
                     await EventBus._dispatch_event(
                         "auth.login",
                         msg.get("data", {}),
@@ -100,7 +104,7 @@ async def _consumer_loop(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    #Inicialización de servicios al arrancar
+    # Inicialización de servicios al arrancar
     logger.info("soc360.startup", environment=settings.ENVIRONMENT)
 
     # Guard: MockLLMProvider must never run in production (issue #139).
@@ -121,7 +125,7 @@ async def lifespan(app: FastAPI):
         provider_name=settings.LLM_PROVIDER,
     )
 
-    #Verificar Redis — retry on transient blips (issue #128)
+    # Verificar Redis — retry on transient blips (issue #128)
     if not await ping_redis_with_retry(
         max_attempts=settings.REDIS_STARTUP_MAX_ATTEMPTS,
         backoff_base_seconds=settings.REDIS_STARTUP_BACKOFF_BASE_SECONDS,
@@ -152,7 +156,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    #Liberación de recursos al apagar
+    # Liberación de recursos al apagar
     stop_event.set()
     try:
         await asyncio.wait_for(task, timeout=5.0)
@@ -166,10 +170,12 @@ async def lifespan(app: FastAPI):
     # Close the LLM provider's HTTP connection pool (issue #194).
     # get_llm_provider is already imported at module level (line 13).
     from app.core.llm.providers import _BaseHTTPProvider
+
     provider = get_llm_provider()
     if isinstance(provider, _BaseHTTPProvider):
         await provider.close()
     logger.info("soc360.shutdown")
+
 
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -178,17 +184,19 @@ def create_app() -> FastAPI:
         version=APP_VERSION,
         docs_url="/api/docs" if settings.ENVIRONMENT != "production" else None,
         redoc_url="/api/redoc" if settings.ENVIRONMENT != "production" else None,
-        openapi_url="/api/openapi.json" if settings.ENVIRONMENT != "production" else None,
+        openapi_url="/api/openapi.json"
+        if settings.ENVIRONMENT != "production"
+        else None,
         lifespan=lifespan,
     )
 
-    #Guardia: credentials + wildcard es inseguro
+    # Guardia: credentials + wildcard es inseguro
     if "*" in settings.CORS_ORIGINS:
         raise ValueError(
             "CORS_ORIGINS no puede contener '*' cuando allow_credentials=True"
         )
 
-    #Filtrado de dominios permitidos
+    # Filtrado de dominios permitidos
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
@@ -202,7 +210,9 @@ def create_app() -> FastAPI:
     # PR4 #260 — RedisOutageError global handler (registered before any AppError handler
     # so a future catch-all cannot shadow the 503 translation).
 
-    async def redis_outage_handler(request: Request, exc: RedisOutageError) -> JSONResponse:
+    async def redis_outage_handler(
+        request: Request, exc: RedisOutageError
+    ) -> JSONResponse:
         """Translate ``RedisOutageError`` (subclasses) to a sanitized 503 + ``Retry-After``.
 
         Body is ``{"detail": "service temporarily unavailable"}`` — never the
@@ -218,7 +228,19 @@ def create_app() -> FastAPI:
 
     app.add_exception_handler(RedisOutageError, redis_outage_handler)  # type: ignore[arg-type]  # narrow subclass matches Starlette's wider Exception signature
 
-    #Routers
+    async def lock_handler(
+        request: Request, exc: TemporaryUnavailableError
+    ) -> JSONResponse:
+        """Translate lock coordination failures to a sanitized 503 response."""
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "service temporarily unavailable"},
+            headers={"Retry-After": str(settings.LOCK_DEFAULT_RETRY_AFTER_SECONDS)},
+        )
+
+    app.add_exception_handler(TemporaryUnavailableError, lock_handler)  # type: ignore[arg-type]
+
+    # Routers
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(tenants_router, prefix="/api/v1")
     app.include_router(users_router, prefix="/api/v1")
@@ -254,7 +276,7 @@ def create_app() -> FastAPI:
     _current_bytes()
     _previous_bytes()
 
-    #Endpoint para verificar que el servidor está vivo
+    # Endpoint para verificar que el servidor está vivo
     @app.get("/health", tags=["system"])
     async def health():
         return {"status": "ok", "version": APP_VERSION}
@@ -279,15 +301,11 @@ def create_app() -> FastAPI:
             "WHERE n.nspname = 'public' AND NOT i.indisvalid"
         )
         try:
-            autocommit_engine = engine.execution_options(
-                isolation_level="AUTOCOMMIT"
-            )
+            autocommit_engine = engine.execution_options(isolation_level="AUTOCOMMIT")
             async with autocommit_engine.connect() as conn:
                 rows = (await conn.execute(sql)).fetchall()
         except Exception as exc:
-            logger.warning(
-                "db_index_health.connection_failed", error=str(exc)
-            )
+            logger.warning("db_index_health.connection_failed", error=str(exc))
             return JSONResponse(
                 status_code=503,
                 content={

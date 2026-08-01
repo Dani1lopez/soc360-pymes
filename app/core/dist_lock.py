@@ -58,10 +58,6 @@ def _lock_key_secret() -> bytes:
     return secret.encode()
 
 
-def _flow_short(flow_id: str) -> str:
-    return _safe_component(flow_id.split("_", 1)[0])
-
-
 def build_lock_key(flow_id: str, tenant_id: str, asset_id: str) -> str:
     """Build ``lock:{flow}:{hmac}:{tenant}:{resource}`` without unsafe segments."""
     tenant, asset = str(tenant_id), str(asset_id)
@@ -71,7 +67,7 @@ def build_lock_key(flow_id: str, tenant_id: str, asset_id: str) -> str:
     return ":".join(
         (
             "lock",
-            _flow_short(str(flow_id)),
+            _safe_component(str(flow_id)),
             namespace,
             _safe_component(tenant),
             _safe_component(asset),
@@ -127,7 +123,14 @@ async def _set_lock(redis: Any, key: str, token: str, ttl_seconds: int) -> bool:
 
 
 async def _eval_script(
-    redis: Any, script: str, key: str, token: str, argument: int
+    redis: Any,
+    script: str,
+    key: str,
+    token: str,
+    argument: int,
+    *,
+    flow_id: str | None = None,
+    metric_kind: str | None = None,
 ) -> Any:
     try:
         return await redis.eval(script, 1, key, token, argument)
@@ -135,14 +138,31 @@ async def _eval_script(
         if "NOSCRIPT" not in str(exc).upper():
             raise
         await redis.script_load(script)
+        if flow_id is not None and metric_kind is not None:
+            _record(metric_kind, flow_id, "noscript_recovered")
         return await redis.eval(script, 1, key, token, argument)
 
 
 async def _eval_owner_script(
-    redis: Any, script: str, key: str, token: str, argument: int
+    redis: Any,
+    script: str,
+    key: str,
+    token: str,
+    argument: int,
+    *,
+    flow_id: str | None = None,
+    metric_kind: str | None = None,
 ) -> Any:
     try:
-        return await _eval_script(redis, script, key, token, argument)
+        return await _eval_script(
+            redis,
+            script,
+            key,
+            token,
+            argument,
+            flow_id=flow_id,
+            metric_kind=metric_kind,
+        )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -184,14 +204,19 @@ class LockHandle:
         _validate_ttl(new_ttl)
         try:
             result = await _eval_owner_script(
-                self._redis, RENEW_LUA, self.key, self.owner_token, new_ttl * 1000
+                self._redis,
+                RENEW_LUA,
+                self.key,
+                self.owner_token,
+                new_ttl * 1000,
+                flow_id=self.flow_id,
+                metric_kind="renew",
             )
         except RedisOutageError:
-            _record("renew", self.flow_id, "outage")
             raise
         if result:
             self.ttl_seconds = new_ttl
-            _record("renew", self.flow_id, "renewed")
+            _record("renew", self.flow_id, "acquired")
             return True
         self._mark_lost()
         _log_not_owner("distributed_lock_renew_not_owner", self)
@@ -207,15 +232,20 @@ class LockHandle:
             return False
         try:
             result = await _eval_owner_script(
-                self._redis, RELEASE_LUA, self.key, self.owner_token, 0
+                self._redis,
+                RELEASE_LUA,
+                self.key,
+                self.owner_token,
+                0,
+                flow_id=self.flow_id,
+                metric_kind="release",
             )
         except RedisOutageError:
-            _record("release", self.flow_id, "outage")
             raise
         self._released = True
         if result:
             _ACTIVE_TOKENS.pop(self.key, None)
-            _record("release", self.flow_id, "released")
+            _record("release", self.flow_id, "acquired")
             return True
         self._mark_lost()
         _log_not_owner("distributed_lock_release_not_owner", self)
@@ -232,6 +262,7 @@ class LockHandle:
             except BaseException:
                 _log_not_owner("distributed_lock_release_failed_on_cancel", self)
             finally:
+                _record("release", self.flow_id, "cancelled")
                 raise asyncio.CancelledError
         await self.release()
         return False

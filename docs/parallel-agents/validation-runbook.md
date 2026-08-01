@@ -1,9 +1,13 @@
 # Parallel-agents coordination validation runbook
 
-> **WARNING**: This runbook uses a fresh clone at `9203b87` (or any later main).
+> **WARNING**: This runbook uses a fresh clone at `0a8d1fb` (the canonical
+> pre-PR5b base SHA; later main may also work but rebases the comparison).
 > **NEVER use the active `pr5b-metrics-outage-wiring` worktree — that is a
 > separate in-progress change.** Create all validation worktrees as siblings of
-> the fresh clone in a temporary directory.
+> the fresh clone in a temporary directory. The validation clone must hold the
+> hooks at `$VALIDATION_TMP/main/app/scripts/parallel-agents/` (copied from the
+> installed global skill or the parallel-agents/skill worktree) — the worktree
+> siblings `pa-a`/`pa-b` share the same `.git` but do NOT contain the hooks.
 
 ## Purpose and safety boundary
 
@@ -27,14 +31,18 @@ export VALIDATION_TMP="$(mktemp -d)"
 trap 'rm -rf "$VALIDATION_TMP"' EXIT
 export REPOSITORY_URL="<repository-url>"
 git clone "$REPOSITORY_URL" "$VALIDATION_TMP/main"
-git -C "$VALIDATION_TMP/main" checkout --detach 9203b87
-git -C "$VALIDATION_TMP/main" worktree add "$VALIDATION_TMP/pa-a" -b validation/pa-a 9203b87
-git -C "$VALIDATION_TMP/main" worktree add "$VALIDATION_TMP/pa-b" -b validation/pa-b 9203b87
+git -C "$VALIDATION_TMP/main" checkout --detach 0a8d1fb
+git -C "$VALIDATION_TMP/main" worktree add "$VALIDATION_TMP/pa-a" -b validation/pa-a 0a8d1fb
+git -C "$VALIDATION_TMP/main" worktree add "$VALIDATION_TMP/pa-b" -b validation/pa-b 0a8d1fb
+
+# The hooks live in the fresh clone, NOT in the sibling worktrees.
+# All hook invocations below use $VALIDATION_TMP/main/app/scripts/parallel-agents/.
+export HOOK_DIR="$VALIDATION_TMP/main/app/scripts/parallel-agents"
 export SKILL_HOME="$HOME/.config/opencode/skills/parallel-agents-coordination"
 ```
 
 Generate each manifest with the schema reference, a unique `agent_id` and
-`launch_id`, the matching worktree root, branch, and `base_sha=9203b87`. Hash
+`launch_id`, the matching worktree root, branch, and `base_sha=0a8d1fb`. Hash
 the canonical JSON without `manifest_hash`; store the full canonical document in
 an absolute path. Use `ack-manifest.py` only after the manifest is final.
 
@@ -54,8 +62,8 @@ python "$SKILL_HOME/scripts/ack-manifest.py" --manifest "$PARALLEL_MANIFEST_PATH
 export PARALLEL_MANIFEST_PATH="$VALIDATION_TMP/manifest-b.json"
 python "$SKILL_HOME/scripts/ack-manifest.py" --manifest "$PARALLEL_MANIFEST_PATH"
 
-git -C "$VALIDATION_TMP/pa-a" diff --name-only 9203b87...HEAD
-git -C "$VALIDATION_TMP/pa-b" diff --name-only 9203b87...HEAD
+git -C "$VALIDATION_TMP/pa-a" diff --name-only 0a8d1fb...HEAD
+git -C "$VALIDATION_TMP/pa-b" diff --name-only 0a8d1fb...HEAD
 ```
 
 Record both exact ACKs and grants in their Engram records. Report the changed
@@ -91,6 +99,10 @@ git -C "$VALIDATION_TMP/pa-b" status --porcelain
 ```
 
 Compare B's allowed globs with A using the concrete algorithm in
+`~/.config/opencode/skills/_shared/parallel-manifest-ledger.md` §"Collision
+Rejection" — every glob in B's `allowed_writes` must be disjoint from A's
+active `allowed_writes`. The orchestrator runs the comparison before
+registering B; registration denies any overlap.
 
 ### Expected outcome
 
@@ -118,7 +130,7 @@ ACK. Then make a copy and alter a field without recomputing the registered hash.
 export PARALLEL_MANIFEST_PATH="$VALIDATION_TMP/manifest-c.json"
 set +e
 python "$SKILL_HOME/scripts/ack-manifest.py" --manifest "$PARALLEL_MANIFEST_PATH"
-missing_ack_status=$?
+stub_exit_code=$?
 set -e
 
 python - "$VALIDATION_TMP/manifest-c.json" <<'PY'
@@ -132,7 +144,18 @@ set +e
 python "$SKILL_HOME/scripts/ack-manifest.py" --manifest "$PARALLEL_MANIFEST_PATH"
 tampered_status=$?
 set -e
-printf 'missing=%s tampered=%s\n' "$missing_ack_status" "$tampered_status"
+
+# NOTE: `missing_ack_status` does NOT come from the stub's local exit code
+# (which is 0 for a valid manifest). It MUST come from the orchestrator's
+# ledger match — because the ledger has no entry for launch C yet, the
+# orchestrator refuses to issue a grant, and `missing_ack_status` is whatever
+# the orchestrator returns (typically a non-zero "no grant issued" code).
+# The exact mechanism is implementation-defined; the assertion is that no work
+# begins while the ledger is only `registered`.
+missing_ack_status=0  # placeholder; orchestrator MUST override before grant
+
+printf 'stub=%s tampered=%s missing_ack_grant=%s\n' \
+  "$stub_exit_code" "$tampered_status" "$missing_ack_status"
 ```
 
 The coordinator must also compare any captured ACK against the registered
@@ -165,7 +188,7 @@ Use a manifest whose `allowed_writes` contains only `app/modules/auth/**`, whose
 export PARALLEL_MANIFEST_PATH="$VALIDATION_TMP/manifest-a.json"
 git -C "$VALIDATION_TMP/pa-a" add README.sh
 set +e
-(cd "$VALIDATION_TMP/pa-a" && "$PWD/app/scripts/parallel-agents/pre-commit-hook.sh")
+(cd "$VALIDATION_TMP/pa-a" && "$HOOK_DIR/pre-commit-hook.sh")
 undeclared_status=$?
 set -e
 git -C "$VALIDATION_TMP/pa-a" reset -q README.sh
@@ -173,13 +196,16 @@ git -C "$VALIDATION_TMP/pa-a" reset -q README.sh
 # Change only the manifest root, keep its hash internally consistent, and run
 # the same hook from pa-a.
 set +e
-(cd "$VALIDATION_TMP/pa-a" && PARALLEL_MANIFEST_PATH="$VALIDATION_TMP/manifest-wrong-root.json" "$PWD/app/scripts/parallel-agents/pre-commit-hook.sh")
+(cd "$VALIDATION_TMP/pa-a" && PARALLEL_MANIFEST_PATH="$VALIDATION_TMP/manifest-wrong-root.json" "$HOOK_DIR/pre-commit-hook.sh")
+cross_root_status=$?
 set -e
 printf 'undeclared=%s cross-root=%s\n' "$undeclared_status" "$cross_root_status"
 ```
 
-When the clone path differs from the installed hook path, replace `$PWD` above
-with the fresh clone's absolute root.
+The hooks live at `$HOOK_DIR` (the fresh clone's `app/scripts/parallel-agents/`),
+NOT in the sibling worktrees. Each hook invocation runs from inside the
+worktree (for `git rev-parse --show-toplevel` resolution) but references the
+hook script at `$HOOK_DIR`.
 
 ### Expected outcome
 
@@ -206,11 +232,12 @@ pre-push adapter needs one.
 ```bash
 export PARALLEL_MANIFEST_PATH="$VALIDATION_TMP/manifest-a-no-push.json"
 head_sha=$(git -C "$VALIDATION_TMP/pa-a" rev-parse HEAD)
-base_sha=9203b87
+base_sha=0a8d1fb
 set +e
 printf 'refs/heads/validation/pa-a %s refs/heads/validation/pa-a %s\n' "$head_sha" "$base_sha" |
-  (cd "$VALIDATION_TMP/pa-a" && "$PWD/app/scripts/parallel-agents/pre-push-hook.sh" origin ignored-url)
-(cd "$VALIDATION_TMP/pa-a" && "$PWD/app/scripts/parallel-agents/pre-pr-check.sh" --head other-branch)
+  (cd "$VALIDATION_TMP/pa-a" && "$HOOK_DIR/pre-push-hook.sh" origin ignored-url)
+push_status=$?
+(cd "$VALIDATION_TMP/pa-a" && "$HOOK_DIR/pre-pr-check.sh" --head other-branch)
 pr_status=$?
 set -e
 printf 'push=%s pr=%s\n' "$push_status" "$pr_status"

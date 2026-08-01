@@ -113,6 +113,18 @@ def _record(kind: str, flow_id: str, outcome: str, operation: str = "") -> None:
         pass
 
 
+def _record_wait(flow_id: str, operation: str, wait_seconds: float) -> None:
+    """Emit optional lock-wait telemetry without changing lock semantics."""
+    try:
+        from app.core.metrics import METRIC_LOCK_WAIT_SECONDS  # type: ignore[attr-defined]
+
+        METRIC_LOCK_WAIT_SECONDS.labels(flow=flow_id, operation=operation).observe(
+            wait_seconds
+        )
+    except (ImportError, AttributeError):
+        pass
+
+
 async def _set_lock(redis: Any, key: str, token: str, ttl_seconds: int) -> bool:
     try:
         return bool(await redis.set(key, token, nx=True, px=ttl_seconds * 1000))
@@ -285,8 +297,10 @@ async def acquire_dist_lock(
     key = build_lock_key(flow_id, tenant_id, asset_id)
     redis_client = redis if redis is not None else await get_redis_client()
     token = secrets.token_hex(16)
+    wait_started_at = time.monotonic()
     if not await _set_lock(redis_client, key, token, ttl_seconds):
         if key in _ACTIVE_TOKENS:
+            _record_wait(flow_id, operation, time.monotonic() - wait_started_at)
             _record("acquire", flow_id, "reentry")
             _record("contention", flow_id, "reentry", operation)
             raise TemporaryUnavailableError("lock_reentry")
@@ -308,6 +322,7 @@ async def acquire_dist_lock(
             await _cancel_retry(task)
             raise
         if not acquired:
+            _record_wait(flow_id, operation, time.monotonic() - wait_started_at)
             _record("acquire", flow_id, "contended")
             _record("contention", flow_id, "contended", operation)
             raise TemporaryUnavailableError("lock_timeout")

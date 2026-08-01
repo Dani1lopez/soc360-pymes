@@ -12,6 +12,7 @@ from app.dependencies import (
     DBWithTenantDep,
     CurrentUserDep,
     RedisDep,
+    UserDeactivationDBDep,
     UserForAdminGetDep,
     UserForAdminPatchDep,
     UserForAdminDeleteDep,
@@ -64,7 +65,9 @@ async def create_user(
 async def list_users(
     db: DBWithTenantDep,
     current_user: AdminDep,
-    tenant_id: uuid.UUID | None = Query(None, description="Filtrar por tenant (solo superadmin)"),
+    tenant_id: uuid.UUID | None = Query(
+        None, description="Filtrar por tenant (solo superadmin)"
+    ),
     include_inactive: bool = Query(False),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -186,11 +189,13 @@ async def update_user(
     return user
 
 
-@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+@router.delete(
+    "/{user_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None
+)
 async def deactivate_user(
     current_user: AdminDep,
     target: UserForAdminDeleteDep,
-    db: DBWithTenantDep,
+    db: UserDeactivationDBDep,
     redis: RedisDep,
 ) -> None:
     """Desactiva un usuario y revoca todas sus sesiones.
@@ -228,4 +233,6 @@ async def deactivate_user(
     except UserError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
-    logger.info("user_deactivated", user_id=str(target.id), deactivated_by=str(current_user.id))
+    logger.info(
+        "user_deactivated", user_id=str(target.id), deactivated_by=str(current_user.id)
+    )

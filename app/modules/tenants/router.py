@@ -9,6 +9,7 @@ from app.dependencies import (
     DBDep,
     SuperadminDep,
     RedisDep,
+    TenantDeactivationDBDep,
     TenantForAdminGetDep,
 )
 from app.modules.tenants import schemas, service
@@ -52,7 +53,9 @@ async def list_tenants(
     include_inactive: bool = False,
 ) -> list[schemas.TenantResponse]:
     """Lista paginada de tenants"""
-    tenants = await service.list_tenants(db, offset=offset, include_inactive=include_inactive, limit=limit)
+    tenants = await service.list_tenants(
+        db, offset=offset, include_inactive=include_inactive, limit=limit
+    )
     return [schemas.TenantResponse.model_validate(t) for t in tenants]
 
 
@@ -105,7 +108,7 @@ async def update_tenant(
 )
 async def deactivate_tenant(
     tenant_id: UUID,
-    db: DBDep,
+    db: TenantDeactivationDBDep,
     redis: RedisDep,
     current_user: SuperadminDep,
 ) -> None:

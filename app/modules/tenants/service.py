@@ -11,9 +11,7 @@ from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.dist_lock import acquire_dist_lock
 from app.core.exceptions import TenantError
-from app.core.outage import _FLOW_ID_AUTH_TENANT_DEACTIVATE_LOCK
 from app.core.security import revoke_all_user_access_tokens
 from app.modules.auth.service import _revoke_all_user_tokens_for_tenant
 from app.modules.tenants.models import Tenant
@@ -219,40 +217,32 @@ async def deactivate_tenant(
         raise TenantError("Tenant no encontrado", status_code=404)
     if not tenant.is_active:
         raise TenantError("El tenant ya esta desactivado", status_code=409)
-    async with acquire_dist_lock(
-        flow_id=_FLOW_ID_AUTH_TENANT_DEACTIVATE_LOCK,
-        tenant_id=str(tenant_id),
-        asset_id=f"tenant:{tenant_id}",
-        operation="deactivate",
-        ttl_seconds=settings.LOCK_DEFAULT_TTL_SECONDS,
-        wait_timeout_seconds=2.0,
-        redis=redis,
-    ):
-        tenant.is_active = False
 
-        # Desactivar todos los usuarios del tenant
-        await db.execute(
-            update(User).where(User.tenant_id == tenant_id).values(is_active=False)
-        )
+    tenant.is_active = False
 
-        # Revocar todos los refresh tokens de los usuarios del tenant (DB)
-        await _revoke_all_user_tokens_for_tenant(tenant_id, db)
+    # Desactivar todos los usuarios del tenant
+    await db.execute(
+        update(User).where(User.tenant_id == tenant_id).values(is_active=False)
+    )
 
-        # Revocar todos los access tokens de los usuarios del tenant (Redis denylist)
-        user_ids = (
-            await db.scalars(select(User.id).where(User.tenant_id == tenant_id))
-        ).all()
-        await asyncio.gather(
-            *[
-                revoke_all_user_access_tokens(
-                    user_id=str(uid),
-                    redis=redis,
-                    ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-                )
-                for uid in user_ids
-            ]
-        )
+    # Revocar todos los refresh tokens de los usuarios del tenant (DB)
+    await _revoke_all_user_tokens_for_tenant(tenant_id, db)
 
-        await db.flush()
-        await db.refresh(tenant)
+    # Revocar todos los access tokens de los usuarios del tenant (Redis denylist)
+    user_ids = (
+        await db.scalars(select(User.id).where(User.tenant_id == tenant_id))
+    ).all()
+    await asyncio.gather(
+        *[
+            revoke_all_user_access_tokens(
+                user_id=str(uid),
+                redis=redis,
+                ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            )
+            for uid in user_ids
+        ]
+    )
+
+    await db.flush()
+    await db.refresh(tenant)
     return tenant

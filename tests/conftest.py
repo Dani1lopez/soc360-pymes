@@ -42,6 +42,12 @@ os.environ.setdefault("REDIS_HOST", "localhost")
 os.environ.setdefault("REDIS_PORT", "6379")
 os.environ.setdefault("REDIS_DB", "15")
 os.environ.setdefault("REDIS_PASSWORD", "test_redis_password")
+# PR5b' distributed lock secret (must be at least 32 bytes to satisfy production
+# validation in app/core/config.py; this default is test-only).
+os.environ.setdefault(
+    "LOCK_KEY_SECRET",
+    "ci-test-lock-secret-key-32bytes-min-do-not-use-in-prod",
+)
 
 from app.main import create_app
 from app.core.redis import get_redis

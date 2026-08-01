@@ -85,6 +85,44 @@ def test_build_lock_key_hmac_format_and_rotation(
 
 
 @pytest.mark.parametrize(
+    "flow_id",
+    [
+        "scan_start_lock",
+        "scan_update_lock",
+        "scan_complete_lock",
+        "scan_cancel_lock",
+    ],
+)
+def test_build_lock_key_preserves_full_flow_id(
+    monkeypatch: pytest.MonkeyPatch,
+    flow_id: str,
+) -> None:
+    dist_lock = _set_secret(monkeypatch, "flow identity secret")
+
+    key = dist_lock.build_lock_key(flow_id, "tenant-1", "asset-1")
+
+    assert key.split(":")[1] == flow_id
+
+
+def test_build_lock_key_keeps_scan_flows_isolated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dist_lock = _set_secret(monkeypatch, "flow isolation secret")
+    flow_ids = (
+        "scan_start_lock",
+        "scan_update_lock",
+        "scan_complete_lock",
+        "scan_cancel_lock",
+    )
+
+    keys = {
+        dist_lock.build_lock_key(flow_id, "tenant-1", "asset-1") for flow_id in flow_ids
+    }
+
+    assert len(keys) == len(flow_ids)
+
+
+@pytest.mark.parametrize(
     "resource", ["__SUPERADMIN_SESSION__", "__TENANT_DEACTIVATION__"]
 )
 def test_build_lock_key_preserves_reserved_sentinels(

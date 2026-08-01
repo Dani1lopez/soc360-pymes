@@ -1,4 +1,4 @@
-"""Typed outage foundation — 25-FlowId catalog, policy, retry classification.
+"""Typed outage foundation — 29-FlowId catalog, policy, retry classification.
 
 PR2 #260: pure primitives with no Redis import, no I/O, and no router coupling.
 All identifiers match spec rev 9 and design rev 9 exactly.
@@ -26,6 +26,7 @@ T = TypeVar("T")
 # AsyncWaiter — injectable deadline seam (spec rev 9 §Async Wait/Timeout)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class AsyncWaiter(Protocol):
     """Injectable async deadline seam.
 
@@ -35,6 +36,13 @@ class AsyncWaiter(Protocol):
     """
 
     async def wait(self, awaitable: Awaitable[T], *, timeout: float) -> T: ...
+
+
+class RedisLockWaiter:
+    """Production deadline implementation for one lock retry."""
+
+    async def wait(self, awaitable: Awaitable[T], *, timeout: float) -> T:
+        return await asyncio.wait_for(awaitable, timeout=timeout)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -70,8 +78,14 @@ _FLOW_ID_TENANTS_UPDATE_TENANT_REVOKE = "tenants_update_tenant_revoke"
 _FLOW_ID_TENANTS_DEACTIVATE_TENANT_REVOKE = "tenants_deactivate_tenant_revoke"
 
 _FLOW_ID_AUTH_POST_CREDENTIAL_SESSION_LOCK = "auth_post_credential_session_lock"
-_FLOW_ID_AUTH_POST_CREDENTIAL_USER_DEACTIVATE_LOCK = "auth_post_credential_user_deactivate_lock"
+_FLOW_ID_AUTH_POST_CREDENTIAL_USER_DEACTIVATE_LOCK = (
+    "auth_post_credential_user_deactivate_lock"
+)
 _FLOW_ID_AUTH_TENANT_DEACTIVATE_LOCK = "auth_tenant_deactivate_lock"
+_FLOW_ID_SCAN_START_LOCK = "scan_start_lock"
+_FLOW_ID_SCAN_UPDATE_LOCK = "scan_update_lock"
+_FLOW_ID_SCAN_COMPLETE_LOCK = "scan_complete_lock"
+_FLOW_ID_SCAN_CANCEL_LOCK = "scan_cancel_lock"
 
 ALL_FLOW_IDS: list[str] = sorted(
     [
@@ -100,6 +114,10 @@ ALL_FLOW_IDS: list[str] = sorted(
         _FLOW_ID_AUTH_POST_CREDENTIAL_SESSION_LOCK,
         _FLOW_ID_AUTH_POST_CREDENTIAL_USER_DEACTIVATE_LOCK,
         _FLOW_ID_AUTH_TENANT_DEACTIVATE_LOCK,
+        _FLOW_ID_SCAN_START_LOCK,
+        _FLOW_ID_SCAN_UPDATE_LOCK,
+        _FLOW_ID_SCAN_COMPLETE_LOCK,
+        _FLOW_ID_SCAN_CANCEL_LOCK,
     ]
 )
 
@@ -140,12 +158,17 @@ FlowPolicy: dict[str, str] = {
     _FLOW_ID_AUTH_POST_CREDENTIAL_SESSION_LOCK: "fail_closed",
     _FLOW_ID_AUTH_POST_CREDENTIAL_USER_DEACTIVATE_LOCK: "fail_closed",
     _FLOW_ID_AUTH_TENANT_DEACTIVATE_LOCK: "fail_closed",
+    _FLOW_ID_SCAN_START_LOCK: "fail_closed",
+    _FLOW_ID_SCAN_UPDATE_LOCK: "fail_closed",
+    _FLOW_ID_SCAN_COMPLETE_LOCK: "fail_closed",
+    _FLOW_ID_SCAN_CANCEL_LOCK: "fail_closed",
 }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RetryableOp — idempotent operations safe to retry (design rev 9)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class RetryableOp(str, Enum):
     """Operations proven safe to retry — exactly six members.
@@ -164,6 +187,7 @@ class RetryableOp(str, Enum):
 # ─────────────────────────────────────────────────────────────────────────────
 # classify_redis_error — pure transport exception classifier
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def classify_redis_error(exc: BaseException) -> RedisOutageError:
     """Map a transport exception to a typed RedisOutageError subclass.

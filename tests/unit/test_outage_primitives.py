@@ -34,6 +34,7 @@ from app.core.outage import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 class _DeterministicWaiter:
     """Injected AsyncWaiter that completes or times out without sleeping."""
 
@@ -59,6 +60,7 @@ class _CancellationAwaitable:
 # ---------------------------------------------------------------------------
 # RedisOutageError hierarchy
 # ---------------------------------------------------------------------------
+
 
 class TestRedisOutageErrorHierarchy:
     """Verify the RedisOutageError base class and its four subclasses."""
@@ -93,9 +95,9 @@ class TestRedisOutageErrorHierarchy:
     )
     def test_subclass_is_redis_outage_error(self, exc_class: type) -> None:
         """Each RedisOutageError subclass MUST inherit from RedisOutageError."""
-        assert issubclass(exc_class, RedisOutageError), (
-            f"{exc_class.__name__} does not subclass RedisOutageError"
-        )
+        assert issubclass(
+            exc_class, RedisOutageError
+        ), f"{exc_class.__name__} does not subclass RedisOutageError"
 
     @pytest.mark.parametrize(
         "exc_class",
@@ -141,9 +143,9 @@ class TestRedisOutageErrorHierarchy:
     def test_subclass_default_status_503(self, exc_class: type) -> None:
         """Every RedisOutageError subclass MUST default to status_code=503."""
         instance = exc_class()
-        assert instance.status_code == 503, (
-            f"{exc_class.__name__}.status_code expected 503, got {instance.status_code}"
-        )
+        assert (
+            instance.status_code == 503
+        ), f"{exc_class.__name__}.status_code expected 503, got {instance.status_code}"
 
     # ── subclasses — custom detail ──────────────────────────────────────
 
@@ -156,9 +158,7 @@ class TestRedisOutageErrorHierarchy:
             (PartialFailureError, "Only 14 of 16 JTIs were denied"),
         ],
     )
-    def test_subclass_stores_custom_detail(
-        self, exc_class: type, detail: str
-    ) -> None:
+    def test_subclass_stores_custom_detail(self, exc_class: type, detail: str) -> None:
         """Each subclass MUST accept and store a custom detail string."""
         exc = exc_class(detail)
         assert exc.detail == detail
@@ -174,9 +174,7 @@ class TestRedisOutageErrorHierarchy:
             (PartialFailureError, "partial batch"),
         ],
     )
-    def test_subclass_str_contains_detail(
-        self, exc_class: type, detail: str
-    ) -> None:
+    def test_subclass_str_contains_detail(self, exc_class: type, detail: str) -> None:
         """str(exc) MUST include the detail for each subclass."""
         exc = exc_class(detail)
         assert detail in str(exc)
@@ -203,6 +201,7 @@ class TestRedisOutageErrorHierarchy:
 # ---------------------------------------------------------------------------
 # TemporaryUnavailableError
 # ---------------------------------------------------------------------------
+
 
 class TestTemporaryUnavailableError:
     """TemporaryUnavailableError is NOT a RedisOutageError — design rev 9."""
@@ -239,6 +238,7 @@ class TestTemporaryUnavailableError:
 # ---------------------------------------------------------------------------
 # AsyncWaiter Protocol
 # ---------------------------------------------------------------------------
+
 
 class TestAsyncWaiterProtocol:
     """AsyncWaiter is a structural Protocol — injectable seam for deadlines."""
@@ -311,6 +311,10 @@ EXPECTED_25_FLOW_IDS = frozenset(
         "auth_post_credential_session_lock",
         "auth_post_credential_user_deactivate_lock",
         "auth_tenant_deactivate_lock",
+        "scan_start_lock",
+        "scan_update_lock",
+        "scan_complete_lock",
+        "scan_cancel_lock",
     ]
 )
 
@@ -320,9 +324,7 @@ class TestFlowIdCatalog:
 
     def test_catalog_has_exactly_25_items(self) -> None:
         """ALL_FLOW_IDS MUST contain exactly 25 identifiers."""
-        assert len(ALL_FLOW_IDS) == 25, (
-            f"Expected 25 FlowIds, got {len(ALL_FLOW_IDS)}"
-        )
+        assert len(ALL_FLOW_IDS) == 29, f"Expected 29 FlowIds, got {len(ALL_FLOW_IDS)}"
 
     def test_catalog_matches_spec_set(self) -> None:
         """ALL_FLOW_IDS MUST contain exactly the 25 spec mandated identifiers."""
@@ -335,9 +337,9 @@ class TestFlowIdCatalog:
     def test_every_flow_id_is_a_string(self) -> None:
         """Every FlowId constant MUST be a str."""
         for fid in ALL_FLOW_IDS:
-            assert isinstance(fid, str), (
-                f"FlowId {fid!r} is {type(fid).__name__}, expected str"
-            )
+            assert isinstance(
+                fid, str
+            ), f"FlowId {fid!r} is {type(fid).__name__}, expected str"
 
     def test_no_duplicate_flow_ids(self) -> None:
         """ALL_FLOW_IDS MUST NOT contain duplicates."""
@@ -348,14 +350,15 @@ class TestFlowIdCatalog:
 # FlowPolicy
 # ---------------------------------------------------------------------------
 
+
 class TestFlowPolicy:
     """FlowPolicy maps each FlowId to a policy behaviour."""
 
     def test_policy_map_keys_equal_exact_25(self) -> None:
         """FlowPolicy MUST have exactly 25 keys."""
-        assert len(FlowPolicy) == 25, (
-            f"FlowPolicy has {len(FlowPolicy)} keys, expected 25"
-        )
+        assert (
+            len(FlowPolicy) == 29
+        ), f"FlowPolicy has {len(FlowPolicy)} keys, expected 29"
 
     def test_policy_map_keys_match_flow_ids(self) -> None:
         """FlowPolicy keys MUST be exactly the 25 FlowId constants."""
@@ -369,12 +372,10 @@ class TestFlowPolicy:
     def test_every_policy_value_is_a_string(self) -> None:
         """Every policy value MUST be a non-empty string identifier."""
         for key, value in FlowPolicy.items():
-            assert isinstance(value, str), (
-                f"FlowPolicy[{key!r}] = {value!r} is not a string"
-            )
-            assert value.strip(), (
-                f"FlowPolicy[{key!r}] is an empty string"
-            )
+            assert isinstance(
+                value, str
+            ), f"FlowPolicy[{key!r}] = {value!r} is not a string"
+            assert value.strip(), f"FlowPolicy[{key!r}] is an empty string"
 
 
 # ---------------------------------------------------------------------------
@@ -399,9 +400,7 @@ class TestRetryableOp:
     def test_has_exactly_six_members(self) -> None:
         """RetryableOp MUST have exactly 6 members."""
         members = list(RetryableOp)
-        assert len(members) == 6, (
-            f"RetryableOp has {len(members)} members, expected 6"
-        )
+        assert len(members) == 6, f"RetryableOp has {len(members)} members, expected 6"
 
     def test_member_names_match_spec(self) -> None:
         """RetryableOp member names MUST match the authorised set."""
@@ -421,9 +420,9 @@ class TestRetryableOp:
         """INCR, XADD, pipeline, and loop MUST NOT be retryable."""
         forbidden = {"INCR", "XADD", "PIPELINE", "LOOP"}
         actual_names = {m.name for m in RetryableOp}
-        assert actual_names.isdisjoint(forbidden), (
-            f"Forbidden RetryableOp members found: {actual_names & forbidden}"
-        )
+        assert actual_names.isdisjoint(
+            forbidden
+        ), f"Forbidden RetryableOp members found: {actual_names & forbidden}"
 
     @pytest.mark.parametrize(
         "member_name",
@@ -438,6 +437,7 @@ class TestRetryableOp:
 # ---------------------------------------------------------------------------
 # classify_redis_error — pure function
 # ---------------------------------------------------------------------------
+
 
 class TestClassifyRedisError:
     """Pure classify_redis_error maps transport exceptions to typed outcomes."""

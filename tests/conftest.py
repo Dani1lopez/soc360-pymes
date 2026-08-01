@@ -42,6 +42,12 @@ os.environ.setdefault("REDIS_HOST", "localhost")
 os.environ.setdefault("REDIS_PORT", "6379")
 os.environ.setdefault("REDIS_DB", "15")
 os.environ.setdefault("REDIS_PASSWORD", "test_redis_password")
+# PR5b' distributed lock secret (must be at least 32 bytes to satisfy production
+# validation in app/core/config.py; this default is test-only).
+os.environ.setdefault(
+    "LOCK_KEY_SECRET",
+    "ci-test-lock-secret-key-32bytes-min-do-not-use-in-prod",
+)
 
 from app.main import create_app
 from app.core.redis import get_redis
@@ -70,9 +76,7 @@ def _assert_safe_test_database() -> None:
     """
     env = os.environ.get("ENVIRONMENT", "").lower()
     if env in {"production", "prod", "staging"}:
-        raise RuntimeError(
-            f"Refusing destructive DB reset in ENVIRONMENT={env!r}"
-        )
+        raise RuntimeError(f"Refusing destructive DB reset in ENVIRONMENT={env!r}")
     db_name = (make_url(MIGRATION_DATABASE_URL).database or "").lower()
     if "test" not in db_name:
         raise RuntimeError(
@@ -175,15 +179,24 @@ def prepare_database():
 @pytest_asyncio.fixture
 async def db_session():
     engine = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
-    session_factory = async_sessionmaker(
-        bind=engine, class_=AsyncSession, expire_on_commit=False
-    )
-    async with session_factory() as session:
-        await session.begin()
+    async with engine.connect() as connection:
+        # Outer transaction — rolled back on fixture teardown so app-level
+        # commits (e.g. lock_deps.db.commit()) cannot leak state between tests.
+        transaction = await connection.begin()
+        # Session bound to the connection with savepoint join mode: every
+        # application commit releases the current savepoint instead of
+        # committing the outer transaction, so the fixture's outer rollback
+        # below reverts every change the test made.
+        session = AsyncSession(
+            bind=connection,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        )
         try:
             yield session
         finally:
-            await session.rollback()
+            await session.close()
+            await transaction.rollback()
     await engine.dispose()
 
 
@@ -313,10 +326,42 @@ async def seed_data(db_session: AsyncSession):
     }
 
 
+class _LuaCapableFakeRedis(FakeRedis):
+    """FakeRedis subclass that implements ``EVAL`` for the lock release/renew scripts.
+
+    Plain ``fakeredis==2.34.1`` (without the ``lupa`` extra) rejects ``EVAL`` with
+    ``ResponseError: unknown command 'eval'``. The distributed-lock module uses
+    two owner-checked Lua scripts (``RENEW_LUA``, ``RELEASE_LUA``) for safe release
+    and renew under contention; tests that drive the deactivation routes through
+    the public ``client`` fixture would otherwise return 503 because the lock
+    release fails. This adapter implements the same semantics directly against
+    the in-memory store so the full lock lifecycle is exercised.
+
+    Only the two scripts emitted by ``app.core.dist_lock`` are supported — adding
+    a third would require re-evaluating this adapter.
+    """
+
+    async def eval(self, script, numkeys, *args):  # type: ignore[override]
+        if numkeys != 1:
+            raise NotImplementedError(
+                f"_LuaCapableFakeRedis only supports 1-key scripts, got {numkeys}"
+            )
+        key, token, argument = args
+        current = await self.get(key)
+        if isinstance(current, bytes):
+            current = current.decode()
+        if current != token:
+            return 0
+        if "PEXPIRE" in script:
+            return int(await self.pexpire(key, int(argument)))
+        # DEL (release)
+        return int(await self.delete(key))
+
+
 @pytest_asyncio.fixture
 async def client(db_session: AsyncSession):
     app = create_app()
-    fake_redis = FakeRedis()  # ✅ mismo loop que el test (function scope)
+    fake_redis = _LuaCapableFakeRedis()  # ✅ mismo loop que el test (function scope)
 
     async def override_get_db():
         yield db_session

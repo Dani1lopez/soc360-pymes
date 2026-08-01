@@ -2,6 +2,7 @@
 
 Re-exports all dependency functions and type aliases for the application.
 """
+
 from __future__ import annotations
 
 from typing import Annotated, TypeAlias
@@ -35,6 +36,10 @@ from app.dependencies.event_deps import (  # noqa: F401
     get_event_bus,
 )
 from app.dependencies.llm_deps import get_llm  # noqa: F401
+from app.dependencies.lock_deps import (  # noqa: F401
+    get_tenant_deactivation_db,
+    get_user_deactivation_db,
+)
 from app.modules.tenants.models import Tenant
 from app.modules.users.models import User
 
@@ -47,6 +52,12 @@ CurrentUserDep: TypeAlias = Annotated[User, Depends(get_current_user)]
 SuperadminDep: TypeAlias = Annotated[User, Depends(require_superadmin)]
 AdminDep: TypeAlias = Annotated[User, Depends(require_role("admin"))]
 DBWithTenantDep: TypeAlias = Annotated[AsyncSession, Depends(get_db_with_tenant)]
+UserDeactivationDBDep: TypeAlias = Annotated[
+    AsyncSession, Depends(get_user_deactivation_db)
+]
+TenantDeactivationDBDep: TypeAlias = Annotated[
+    AsyncSession, Depends(get_tenant_deactivation_db)
+]
 UserForAdminGetDep: TypeAlias = Annotated[User, Depends(get_user_for_admin_get)]
 UserForAdminPatchDep: TypeAlias = Annotated[User, Depends(get_user_for_admin_patch)]
 UserForAdminDeleteDep: TypeAlias = Annotated[User, Depends(get_user_for_admin_delete)]

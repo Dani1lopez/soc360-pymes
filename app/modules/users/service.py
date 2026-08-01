@@ -84,9 +84,7 @@ async def create_user(data: UserCreate | UserInternalCreate, db: AsyncSession) -
             # No manual rollback — session.begin() context manager handles it.
             # Calling db.rollback() here leaves the session inactive (SQLA 2.0+)
             # causing InvalidRequestError on subsequent operations.
-            raise UserError(
-                "El email ya está registrado", status_code=409
-            ) from exc
+            raise UserError("El email ya está registrado", status_code=409) from exc
         raise
     await db.refresh(user)
     return user
@@ -116,7 +114,7 @@ async def list_users(
     if tenant_id is not None:
         stmt = stmt.where(User.tenant_id == tenant_id)
     if not include_inactive:
-        stmt = stmt.where(User.is_active == True) # noqa: E712
+        stmt = stmt.where(User.is_active == True)  # noqa: E712
     stmt = stmt.order_by(User.created_at.desc()).offset(offset).limit(limit)
     result = await db.execute(stmt)
     return list(result.scalars().all())
@@ -208,10 +206,8 @@ async def deactivate_user(
     target.is_active = False
     await db.flush()
 
-    # Revocar todos los refresh tokens del usuario (DB)
     await _revoke_all_user_tokens(user_id, db)
 
-    # Revocar todos los access tokens del usuario (Redis denylist)
     await revoke_all_user_access_tokens(
         user_id=str(user_id),
         redis=redis,

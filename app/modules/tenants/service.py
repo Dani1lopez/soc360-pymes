@@ -18,7 +18,6 @@ from app.modules.tenants.models import Tenant
 from app.modules.tenants.schemas import TenantCreate, TenantUpdate, TenantSettings
 from app.modules.users.models import User
 
-
 _PLAN_MAX_ASSETS: dict[str, int] = {
     "free": 10,
     "starter": 25,
@@ -31,13 +30,13 @@ def _generate_slug(name: str) -> str:
     slug = unicodedata.normalize("NFKD", name)
     slug = slug.encode("ascii", "ignore").decode("ascii")
     slug = slug.lower().strip()
-    slug = re.sub(r"[^\w\s-]", "", slug)   # elimina puntuación
-    slug = re.sub(r"[\s_]+", "-", slug)     # espacios → guiones
-    slug = re.sub(r"-+", "-", slug)         # guiones múltiples → uno
+    slug = re.sub(r"[^\w\s-]", "", slug)  # elimina puntuación
+    slug = re.sub(r"[\s_]+", "-", slug)  # espacios → guiones
+    slug = re.sub(r"-+", "-", slug)  # guiones múltiples → uno
     slug = slug.strip("-")
     if not slug:
         raise TenantError("El nombre no produce un slug válido", status_code=400)
-    return slug[:100]    
+    return slug[:100]
 
 
 def _plan_to_max_assets(plan: str) -> int:
@@ -73,13 +72,18 @@ async def create_tenant(data: TenantCreate, db: AsyncSession) -> Tenant:
         MAX_SLUG_ATTEMPTS = 100
         while await _is_slug_taken(db, slug):
             if suffix > MAX_SLUG_ATTEMPTS:
-                raise TenantError("No se pudo generar un slug único para este nombre.", status_code=409)
+                raise TenantError(
+                    "No se pudo generar un slug único para este nombre.",
+                    status_code=409,
+                )
             slug = f"{base_slug}-{suffix}"
             suffix += 1
-    
-    raw_settings: dict[str, Any] = data.settings.model_dump() if data.settings is not None else {}
+
+    raw_settings: dict[str, Any] = (
+        data.settings.model_dump() if data.settings is not None else {}
+    )
     validated_settings = TenantSettings.model_validate(raw_settings).model_dump()
-    
+
     tenant = Tenant(
         name=data.name.strip(),
         slug=slug,
@@ -110,7 +114,7 @@ async def list_tenants(
     limit = min(limit, 200)
     stmt = select(Tenant)
     if not include_inactive:
-        stmt = stmt.where(Tenant.is_active == True)# noqa: E712
+        stmt = stmt.where(Tenant.is_active == True)  # noqa: E712
     stmt = stmt.order_by(Tenant.created_at.desc()).offset(offset).limit(limit)
     result = await db.execute(stmt)
     return list(result.scalars().all())
@@ -123,7 +127,7 @@ async def update_tenant(
     redis: Redis,
 ) -> Tenant:
     """Actualiza el tenant.
-    
+
     Note: When reactivating a tenant (is_active False → True), individual user
     states are NOT affected. Users that were manually deactivated before the
     tenant suspension remain deactivated. This preserves the security principle
@@ -177,26 +181,26 @@ async def update_tenant(
     if is_deactivating:
         # Desactivar todos los usuarios del tenant
         await db.execute(
-            update(User)
-            .where(User.tenant_id == tenant_id)
-            .values(is_active=False)
+            update(User).where(User.tenant_id == tenant_id).values(is_active=False)
         )
 
         # Revocar todos los refresh tokens de los usuarios del tenant (DB)
         await _revoke_all_user_tokens_for_tenant(tenant_id, db)
 
         # Revocar todos los access tokens de los usuarios del tenant (Redis denylist)
-        user_ids = (await db.scalars(
-            select(User.id).where(User.tenant_id == tenant_id)
-        )).all()
-        await asyncio.gather(*[
-            revoke_all_user_access_tokens(
-                user_id=str(uid),
-                redis=redis,
-                ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            )
-            for uid in user_ids
-        ])
+        user_ids = (
+            await db.scalars(select(User.id).where(User.tenant_id == tenant_id))
+        ).all()
+        await asyncio.gather(
+            *[
+                revoke_all_user_access_tokens(
+                    user_id=str(uid),
+                    redis=redis,
+                    ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+                )
+                for uid in user_ids
+            ]
+        )
 
     await db.refresh(tenant)
     return tenant
@@ -213,30 +217,31 @@ async def deactivate_tenant(
         raise TenantError("Tenant no encontrado", status_code=404)
     if not tenant.is_active:
         raise TenantError("El tenant ya esta desactivado", status_code=409)
+
     tenant.is_active = False
 
     # Desactivar todos los usuarios del tenant
     await db.execute(
-        update(User)
-        .where(User.tenant_id == tenant_id)
-        .values(is_active=False)
+        update(User).where(User.tenant_id == tenant_id).values(is_active=False)
     )
 
     # Revocar todos los refresh tokens de los usuarios del tenant (DB)
     await _revoke_all_user_tokens_for_tenant(tenant_id, db)
 
     # Revocar todos los access tokens de los usuarios del tenant (Redis denylist)
-    user_ids = (await db.scalars(
-        select(User.id).where(User.tenant_id == tenant_id)
-    )).all()
-    await asyncio.gather(*[
-        revoke_all_user_access_tokens(
-            user_id=str(uid),
-            redis=redis,
-            ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        )
-        for uid in user_ids
-    ])
+    user_ids = (
+        await db.scalars(select(User.id).where(User.tenant_id == tenant_id))
+    ).all()
+    await asyncio.gather(
+        *[
+            revoke_all_user_access_tokens(
+                user_id=str(uid),
+                redis=redis,
+                ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            )
+            for uid in user_ids
+        ]
+    )
 
     await db.flush()
     await db.refresh(tenant)

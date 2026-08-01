@@ -179,15 +179,24 @@ def prepare_database():
 @pytest_asyncio.fixture
 async def db_session():
     engine = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
-    session_factory = async_sessionmaker(
-        bind=engine, class_=AsyncSession, expire_on_commit=False
-    )
-    async with session_factory() as session:
-        await session.begin()
+    async with engine.connect() as connection:
+        # Outer transaction — rolled back on fixture teardown so app-level
+        # commits (e.g. lock_deps.db.commit()) cannot leak state between tests.
+        transaction = await connection.begin()
+        # Session bound to the connection with savepoint join mode: every
+        # application commit releases the current savepoint instead of
+        # committing the outer transaction, so the fixture's outer rollback
+        # below reverts every change the test made.
+        session = AsyncSession(
+            bind=connection,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        )
         try:
             yield session
         finally:
-            await session.rollback()
+            await session.close()
+            await transaction.rollback()
     await engine.dispose()
 
 

@@ -8,9 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.dist_lock import acquire_dist_lock
 from app.core.exceptions import UserError
-from app.core.outage import _FLOW_ID_AUTH_POST_CREDENTIAL_USER_DEACTIVATE_LOCK
 from app.core.security import (
     hash_password_async,
     revoke_all_user_access_tokens,
@@ -205,23 +203,13 @@ async def deactivate_user(
 
     if not target.is_active:
         raise UserError("El usuario ya está desactivado", status_code=409)
-    tenant_scope = str(target.tenant_id or current_user.tenant_id or "global")
-    async with acquire_dist_lock(
-        flow_id=_FLOW_ID_AUTH_POST_CREDENTIAL_USER_DEACTIVATE_LOCK,
-        tenant_id=tenant_scope,
-        asset_id=f"user:{user_id}",
-        operation="deactivate",
-        ttl_seconds=settings.LOCK_DEFAULT_TTL_SECONDS,
-        wait_timeout_seconds=2.0,
+    target.is_active = False
+    await db.flush()
+
+    await _revoke_all_user_tokens(user_id, db)
+
+    await revoke_all_user_access_tokens(
+        user_id=str(user_id),
         redis=redis,
-    ):
-        target.is_active = False
-        await db.flush()
-
-        await _revoke_all_user_tokens(user_id, db)
-
-        await revoke_all_user_access_tokens(
-            user_id=str(user_id),
-            redis=redis,
-            ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        )
+        ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )

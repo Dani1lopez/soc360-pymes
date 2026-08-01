@@ -1,19 +1,8 @@
-from contextlib import asynccontextmanager
-from functools import partial
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-
-
-@asynccontextmanager
-async def _lock(*, captured=None, error=None, **kwargs):
-    if captured is not None:
-        captured.update(kwargs)
-    if error:
-        raise error
-    yield None
 
 
 def _db(tenant):
@@ -28,50 +17,44 @@ def _db(tenant):
 
 
 @pytest.mark.asyncio
-async def test_deactivate_tenant_runs_inside_scoped_lock() -> None:
+async def test_deactivate_tenant_mutates_without_service_owned_lock() -> None:
     from app.modules.tenants import service
 
     tenant_id = uuid4()
     tenant = SimpleNamespace(id=tenant_id, is_active=True)
-    db, redis, captured = _db(tenant), AsyncMock(), {}
+    db, redis = _db(tenant), object()
+    revoke_tokens = AsyncMock()
+    revoke_access_tokens = AsyncMock()
+
     with patch.multiple(
         service,
-        acquire_dist_lock=MagicMock(side_effect=partial(_lock, captured=captured)),
-        _revoke_all_user_tokens_for_tenant=AsyncMock(),
-        revoke_all_user_access_tokens=AsyncMock(),
+        _revoke_all_user_tokens_for_tenant=revoke_tokens,
+        revoke_all_user_access_tokens=revoke_access_tokens,
     ):
         result = await service.deactivate_tenant(tenant_id, db, redis)
 
     assert result is tenant and tenant.is_active is False
-    assert captured == {
-        "flow_id": "auth_tenant_deactivate_lock",
-        "tenant_id": str(tenant_id),
-        "asset_id": f"tenant:{tenant_id}",
-        "operation": "deactivate",
-        "ttl_seconds": service.settings.LOCK_DEFAULT_TTL_SECONDS,
-        "wait_timeout_seconds": 2.0,
-        "redis": redis,
-    }
+    db.flush.assert_awaited_once()
+    db.refresh.assert_awaited_once_with(tenant)
+    revoke_tokens.assert_awaited_once_with(tenant_id, db)
+    assert revoke_access_tokens.await_count == 2
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", ["contention", "outage"])
-async def test_deactivate_tenant_propagates_lock_failures(error: str) -> None:
-    from app.core.exceptions import RedisUnreachableError, TemporaryUnavailableError
+async def test_deactivate_tenant_preserves_injected_mutation_error() -> None:
+    from app.core.exceptions import TemporaryUnavailableError
     from app.modules.tenants import service
 
     tenant_id = uuid4()
     tenant = SimpleNamespace(id=tenant_id, is_active=True)
-    lock_error = (
-        TemporaryUnavailableError("lock_timeout")
-        if error == "contention"
-        else RedisUnreachableError("redis unavailable")
-    )
+    mutation_error = TemporaryUnavailableError("lock_timeout")
+
     with patch.object(
         service,
-        "acquire_dist_lock",
-        side_effect=partial(_lock, error=lock_error),
+        "_revoke_all_user_tokens_for_tenant",
+        AsyncMock(side_effect=mutation_error),
     ):
-        with pytest.raises(type(lock_error)) as exc_info:
-            await service.deactivate_tenant(tenant_id, _db(tenant), AsyncMock())
-    assert exc_info.value is lock_error
+        with pytest.raises(TemporaryUnavailableError) as exc_info:
+            await service.deactivate_tenant(tenant_id, _db(tenant), object())
+
+    assert exc_info.value is mutation_error

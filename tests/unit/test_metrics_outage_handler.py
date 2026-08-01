@@ -2,6 +2,7 @@
 
 End-to-end via TestClient. Covers spec scenarios #4, #5, #8, #9.
 """
+
 from __future__ import annotations
 
 from json import loads
@@ -12,7 +13,11 @@ from pydantic import SecretStr
 
 from app.core import metrics_auth
 from app.core.config import settings
-from app.core.exceptions import RedisOutageError, RedisUnreachableError, TemporaryUnavailableError
+from app.core.exceptions import (
+    RedisOutageError,
+    RedisUnreachableError,
+    TemporaryUnavailableError,
+)
 from app.main import create_app
 
 
@@ -55,11 +60,17 @@ class TestMetricsAuthEndToEnd:
         metrics_auth._current_bytes.cache_clear()
 
         app = create_app()
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
             response = await client.get("/metrics", headers=headers)
 
-        assert response.status_code == 401, f"[{label}] got {response.status_code}: {response.text}"
-        assert loads(response.content) == {"detail": "unauthorized"}, f"[{label}] body mismatch"
+        assert (
+            response.status_code == 401
+        ), f"[{label}] got {response.status_code}: {response.text}"
+        assert loads(response.content) == {
+            "detail": "unauthorized"
+        }, f"[{label}] body mismatch"
 
     @pytest.mark.asyncio
     async def test_authorized_returns_200_text_plain(
@@ -71,7 +82,9 @@ class TestMetricsAuthEndToEnd:
         metrics_auth._current_bytes.cache_clear()
 
         app = create_app()
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
             response = await client.get(
                 "/metrics", headers={"x-metrics-token": "correct-token"}
             )
@@ -81,7 +94,7 @@ class TestMetricsAuthEndToEnd:
 
 
 class TestRedisOutageHandler:
-    """``RedisOutageError`` subclasses → sanitized 503 + Retry-After; lock-controller exception passes through."""
+    """Outage and lock-controller exceptions use separate sanitized 503 handlers."""
 
     @pytest.mark.asyncio
     async def test_redis_outage_subclass_translates_to_sanitized_503(
@@ -94,7 +107,9 @@ class TestRedisOutageHandler:
         async def _raise_outage():
             raise RedisUnreachableError("connection refused")
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
             response = await client.get("/_test/raise-outage")
 
         assert response.status_code == 503
@@ -105,20 +120,27 @@ class TestRedisOutageHandler:
         assert "connection refused" not in response.text
 
     @pytest.mark.asyncio
-    async def test_temporary_unavailable_error_not_translated_by_pr4_handler(
+    async def test_temporary_unavailable_error_uses_lock_handler(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``TemporaryUnavailableError`` (PR5 lock controller) MUST NOT be caught by the PR4 handler."""
+        """Lock coordination uses its own retry interval, not the outage interval."""
         monkeypatch.setattr(settings, "REDIS_OUTAGE_RETRY_AFTER_SECONDS", 30)
+        monkeypatch.setattr(settings, "LOCK_DEFAULT_RETRY_AFTER_SECONDS", 15)
         app = create_app()
 
         @app.get("/_test/raise-lock-timeout", include_in_schema=False)
         async def _raise_lock_timeout():
             raise TemporaryUnavailableError("lock_timeout")
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            with pytest.raises(TemporaryUnavailableError):
-                await client.get("/_test/raise-lock-timeout")
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/_test/raise-lock-timeout")
+
+        assert response.status_code == 503
+        assert response.headers["Retry-After"] == "15"
+        assert response.json() == {"detail": "service temporarily unavailable"}
+        assert "lock_timeout" not in response.text
 
     def test_handler_order_pr4_before_app_error(self) -> None:
         """The ``RedisOutageError`` handler MUST be registered."""
@@ -126,7 +148,7 @@ class TestRedisOutageHandler:
 
         app = create_app()
         assert isinstance(app, FastAPI)
-        assert RedisOutageError in app.exception_handlers, (
-            "RedisOutageError handler MUST be registered"
-        )
+        assert (
+            RedisOutageError in app.exception_handlers
+        ), "RedisOutageError handler MUST be registered"
         assert callable(app.exception_handlers[RedisOutageError])

@@ -16,8 +16,12 @@ async def test_set_tenant_context_superadmin_single_roundtrip(
     db_session: AsyncSession,
 ) -> None:
     """Superadmin RLS context must be set in one database roundtrip."""
-    engine = db_session.bind
-    assert isinstance(engine, AsyncEngine)
+    # db_session.bind may be the AsyncEngine (when the session is bound to
+    # the engine) or the AsyncConnection (when the fixture binds the session
+    # directly to a connection under savepoint-join). Resolve to the engine
+    # so the cursor event listener captures SQL emitted by the session.
+    bind = db_session.bind
+    engine = bind if isinstance(bind, AsyncEngine) else bind.engine
 
     statements: list[str] = []
 
@@ -38,9 +42,9 @@ async def test_set_tenant_context_superadmin_single_roundtrip(
         event.remove(engine.sync_engine, "before_cursor_execute", capture_statement)
 
     set_config_queries = [query for query in statements if "set_config" in query]
-    assert len(set_config_queries) == 1, (
-        f"Expected 1 roundtrip, got {len(set_config_queries)}: {set_config_queries}"
-    )
+    assert (
+        len(set_config_queries) == 1
+    ), f"Expected 1 roundtrip, got {len(set_config_queries)}: {set_config_queries}"
     assert "is_superadmin" in set_config_queries[0]
     assert "current_tenant" in set_config_queries[0]
 
@@ -56,6 +60,8 @@ async def test_superadmin_context_does_not_leak_to_next_tenant_request(
     await set_tenant_context(db_session, tenant_id=None, is_superadmin=True)
     await set_tenant_context(db_session, tenant_id=tenant_id, is_superadmin=False)
 
-    result = await db_session.execute(text("SELECT current_setting('app.is_superadmin')"))
+    result = await db_session.execute(
+        text("SELECT current_setting('app.is_superadmin')")
+    )
 
     assert result.scalar_one() == "false"

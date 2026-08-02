@@ -16,6 +16,13 @@ import subprocess
 import sys
 
 import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+
+from app.core.config import settings
+from app.core.redis import close_pool
+from app.dependencies import get_db, get_db_with_tenant
+from app.main import create_app
 
 # Global marker for all tests in this directory
 pytestmark = pytest.mark.integration
@@ -205,6 +212,44 @@ def _run_alembic_upgrade(dry_run: bool = False, db_url: str = "") -> None:
         print(f"[prepare_database] Alembic dry-run OK for {safe_db_url}")
         if stdout:
             print(f"[prepare_database] stdout: {stdout}")
+
+
+@pytest.fixture(scope="function")
+async def proxy_redis(toxiproxy_client):
+    """Compatibility name for the clean function-scoped proxy controller."""
+    return toxiproxy_client
+
+
+@pytest_asyncio.fixture(scope="function")
+async def app_via_proxy(proxy_redis, db_session, monkeypatch):
+    """Yield a healthy-lifespan app whose Redis traffic uses Toxiproxy."""
+    previous_host = settings.REDIS_HOST
+    previous_port = settings.REDIS_PORT
+    monkeypatch.setattr(settings, "REDIS_HOST", "localhost")
+    monkeypatch.setattr(settings, "REDIS_PORT", 26379)
+    try:
+        await close_pool()
+        app = create_app()
+
+        async def override_get_db():
+            yield db_session
+
+        async def override_get_db_with_tenant():
+            yield db_session
+
+        app.dependency_overrides.update(
+            {get_db: override_get_db, get_db_with_tenant: override_get_db_with_tenant}
+        )
+
+        async with app.router.lifespan_context(app):
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                yield client
+    finally:
+        await close_pool()
+        monkeypatch.setattr(settings, "REDIS_HOST", previous_host)
+        monkeypatch.setattr(settings, "REDIS_PORT", previous_port)
 
 
 # ---------------------------------------------------------------------------

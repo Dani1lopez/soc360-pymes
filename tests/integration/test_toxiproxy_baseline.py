@@ -3,6 +3,7 @@
 This is the mandatory CI gate that every PR (PR1–PR9) must run.
 Named transport scenario: proxy-disabled connection refusal.
 """
+
 from __future__ import annotations
 
 import os
@@ -14,7 +15,7 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from tests.helpers.toxiproxy import ToxiproxyTransportController
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.toxiproxy]
 
 PROXY_NAME = "redis"
 

@@ -6,8 +6,8 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115.6-009688.svg)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D.svg)
-![Tests](https://img.shields.io/badge/tests-673-brightgreen.svg)
-![License](https://img.shields.io/badge/licencia-All%20Rights%20Reserved-red.svg)
+![Tests](https://img.shields.io/badge/tests-1091-brightgreen.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 ![Ruff](https://img.shields.io/badge/linter-ruff-261C15.svg)
 ![Mypy](https://img.shields.io/badge/types-mypy-2E6DB4.svg)
@@ -28,7 +28,7 @@ Las pequeñas y medianas empresas (PyMEs) enfrentan las mismas amenazas ciberné
 | Fase | Estado | Descripción |
 |------|--------|-------------|
 | **F0** | ✅ Completado | Arquitectura y Modelo de Datos — 23 ADRs, 13 tablas DB, modelo de seguridad |
-| **F1** | ✅ Completado | Base del Backend — Auth, tenants, usuarios, RLS, eventos, LLM — 673 tests pasando |
+| **F1** | ✅ Completado | Base del Backend — Auth, tenants, usuarios, RLS, eventos, LLM — 1091 tests pasando |
 | **F2** | 🔄 En Progreso | Agente de Vulnerabilidades — Executor Nmap, agente LangGraph, CRUD asset/vuln, dashboard, reportes PDF |
 | **F3** | 📋 Planificado | Tiempo Real — WebSockets, ingestión de logs, detección de anomalías |
 | **F4** | 📋 Planificado | Frontend — React 18 + TypeScript + Vite (MVP Junio 2026) |
@@ -76,12 +76,14 @@ La plataforma sigue un patrón de monolito modular. FastAPI gestiona el tráfico
 | SQLAlchemy | 2.0.36 |
 | asyncpg | 0.30.0 |
 | PostgreSQL | 16 (Alpine) |
-| Redis | 7 (Alpine) |
+| Redis | 7 (Alpine, cliente 5.2.1) |
 | Alembic | 1.14.0 |
 | Celery | 5.4.0 |
 | Pydantic | 2.10.4 |
-| python-jose | 3.3.0 |
-| passlib[bcrypt] | 1.7.4 |
+| pydantic-settings | 2.7.0 |
+| PyJWT[crypto] | >=2.8,<3 |
+| bcrypt | >=4.0 |
+| prometheus-client | >=0.26.0 |
 | structlog | 24.4.0 |
 | pytest | 8.3.4 |
 | pytest-asyncio | 0.24.0 |
@@ -116,13 +118,14 @@ soc360-pymes/
 │   │   ├── pii.py              # Sanitización PII
 │   │   └── types.py            # Tipos custom
 │   └── modules/                # Módulos de dominio
-│       ├── auth/               # ✅ F1 — 672 loc
-│       ├── tenants/            # ✅ F1 — 510 loc
-│       ├── users/              # ✅ F1 — 556 loc
-│       ├── assets/             # ✅ F2 — models
-│       ├── scans/              # ✅ F2 — models
-│       └── vulnerabilities/    # ✅ F2 — models
-├── tests/                      # 10,900+ líneas
+│       ├── auth/               # ✅ F1 — 984 loc
+│       ├── tenants/            # ✅ F1 — 532 loc
+│       ├── users/              # ✅ F1 — 620 loc
+│       ├── assets/             # ✅ F2 — models (57 loc)
+│       ├── scans/              # ✅ F2 — models (82 loc)
+│       ├── vulnerabilities/    # ✅ F2 — models (80 loc)
+│       └── reports/            # ✅ F2 — models (80 loc)
+├── tests/                      # 22.738 líneas / 1.091 tests
 │   ├── conftest.py             # Fixtures compartidos
 │   ├── unit/                   # Fakeredis + mocks
 │   ├── integration/            # DB real + Alembic
@@ -171,7 +174,7 @@ uv run alembic upgrade head
 # 6. Seed de base de datos con datos demo
 uv run python scripts/seed_db.py
 
-# 7. Ejecutar tests (673 tests en 3 capas)
+# 7. Ejecutar tests (1.091 tests en 3 capas)
 uv run pytest -v
 
 # 8. Iniciar servidor de desarrollo
@@ -315,8 +318,23 @@ Las contribuciones son bienvenidas. Por favor abre un issue para discutir cambio
 
 ## Licencia
 
-**All Rights Reserved.**
+Este proyecto es **open source** bajo la [Licencia MIT](LICENSE).
 
-Copyright © 2026 Daniel Alcaraz López.
+```
+MIT License — Copyright (c) 2026 Daniel Alcaraz López
+Se concede permiso, de forma gratuita, a cualquier persona que obtenga una copia
+de este software y de los archivos de documentación asociados (el "Software"),
+a utilizar el Software sin restricción, incluyendo sin limitación los derechos
+de uso, copia, modificación, fusión, publicación, distribución, sublicencia
+y/o venta de copias del Software, y a permitir a las personas a las que se les
+proporcione el Software a hacer lo mismo, sujeto a las siguientes condiciones:
 
-Este software se proporciona únicamente con fines de visualización y aprendizaje. Puedes ver, forkear y estudiar el código, pero cualquier uso comercial, reproducción, distribución, modificación o venta de este software o sus derivados está estrictamente prohibido sin autorización explícita por escrito del autor.
+El aviso de copyright anterior y este aviso de permiso se incluirán en todas
+las copias o partes sustanciales del Software.
+
+EL SOFTWARE SE PROPORCIONA "TAL CUAL", SIN GARANTÍA DE NINGÚN TIPO, EXPRESA O
+IMPLÍCITA, INCLUYENDO PERO NO LIMITADO A GARANTÍAS DE COMERCIABILIDAD,
+IDONEIDAD PARA UN PROPÓSITO PARTICULAR Y NO INFRACCIÓN.
+```
+
+Consulta el texto completo de la licencia en [`LICENSE`](LICENSE).

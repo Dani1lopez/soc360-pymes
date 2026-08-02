@@ -62,3 +62,9 @@ infrastructure/monitoring/prometheus/data/
 .ollama/
 agents/cache/
 .atl/
+
+# Tooling local — solo en local, nunca subir al remoto
+.codegraph/
+.pi/
+.claude/
+graphify-out/

@@ -2,6 +2,7 @@
 name = "soc360-pymes"
 version = "0.1.0"
 description = "SOC as a Service backend for small and medium businesses."
+license = { text = "MIT" }
 requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.115.6",

@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 from fakeredis.aioredis import FakeRedis
+from redis.asyncio import Redis
 
 os.environ.setdefault("ENVIRONMENT", "development")
 os.environ.setdefault(
@@ -50,7 +51,7 @@ os.environ.setdefault(
 )
 
 from app.main import create_app
-from app.core.redis import get_redis
+from app.core.redis import close_pool, get_redis
 from app.dependencies import get_db, get_db_with_tenant
 from app.modules.users.models import User
 from app.modules.tenants.models import Tenant
@@ -534,3 +535,31 @@ async def toxiproxy_session():
 
     # Teardown: ensure proxy is re-enabled for the next session
     await controller.enable_proxy("redis")
+
+
+async def _flush_toxiproxy_database() -> None:
+    """Flush only the disposable Redis database used by integration tests."""
+    async with Redis(
+        host=os.environ.get("REDIS_HOST", "localhost"),
+        port=int(os.environ.get("REDIS_PORT", "6379")),
+        db=15,
+        password=os.environ.get("REDIS_PASSWORD") or None,
+        decode_responses=True,
+    ) as client:
+        await client.flushdb()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def toxiproxy_client(toxiproxy_session):
+    """Yield a clean function-scoped controller for the Redis proxy."""
+
+    async def reset_state() -> None:
+        await toxiproxy_session.reset_toxics()
+        await close_pool()
+        await _flush_toxiproxy_database()
+
+    await reset_state()
+    try:
+        yield toxiproxy_session
+    finally:
+        await reset_state()

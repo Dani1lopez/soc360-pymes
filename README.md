@@ -6,8 +6,8 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115.6-009688.svg)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D.svg)
-![Tests](https://img.shields.io/badge/tests-673-brightgreen.svg)
-![License](https://img.shields.io/badge/license-All%20Rights%20Reserved-red.svg)
+![Tests](https://img.shields.io/badge/tests-1091-brightgreen.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 ![Ruff](https://img.shields.io/badge/linter-ruff-261C15.svg)
 ![Mypy](https://img.shields.io/badge/types-mypy-2E6DB4.svg)
@@ -28,7 +28,7 @@ Small and medium-sized businesses (PyMEs) face the same cyber threats as enterpr
 | Phase | Status | Description |
 |-------|--------|-------------|
 | **F0** | ✅ Complete | Architecture & Data Model — 23 ADRs, 13 DB tables, security model |
-| **F1** | ✅ Complete | Backend Base — Auth, tenants, users, RLS, events, LLM — 673 tests passing |
+| **F1** | ✅ Complete | Backend Base — Auth, tenants, users, RLS, events, LLM — 1091 tests passing |
 | **F2** | 🔄 In Progress | Vulnerability Agent — Nmap executor, LangGraph agent, asset/vuln CRUD, dashboard, PDF reports |
 | **F3** | 📋 Planned | Real-time — WebSockets, log ingestion, anomaly detection |
 | **F4** | 📋 Planned | Frontend — React 18 + TypeScript + Vite (MVP June 2026) |
@@ -76,12 +76,14 @@ The platform follows a modular monolith pattern. FastAPI handles HTTP traffic, P
 | SQLAlchemy | 2.0.36 |
 | asyncpg | 0.30.0 |
 | PostgreSQL | 16 (Alpine) |
-| Redis | 7 (Alpine) |
+| Redis | 7 (Alpine, client 5.2.1) |
 | Alembic | 1.14.0 |
 | Celery | 5.4.0 |
 | Pydantic | 2.10.4 |
-| python-jose | 3.3.0 |
-| passlib[bcrypt] | 1.7.4 |
+| pydantic-settings | 2.7.0 |
+| PyJWT[crypto] | >=2.8,<3 |
+| bcrypt | >=4.0 |
+| prometheus-client | >=0.26.0 |
 | structlog | 24.4.0 |
 | pytest | 8.3.4 |
 | pytest-asyncio | 0.24.0 |
@@ -116,13 +118,14 @@ soc360-pymes/
 │   │   ├── pii.py              # PII sanitization
 │   │   └── types.py            # Custom types
 │   └── modules/                # Domain modules
-│       ├── auth/               # ✅ F1 — 672 loc
-│       ├── tenants/            # ✅ F1 — 510 loc
-│       ├── users/              # ✅ F1 — 556 loc
-│       ├── assets/             # ✅ F2 — models
-│       ├── scans/              # ✅ F2 — models
-│       └── vulnerabilities/    # ✅ F2 — models
-├── tests/                      # 10,900+ lines
+│       ├── auth/               # ✅ F1 — 984 loc
+│       ├── tenants/            # ✅ F1 — 532 loc
+│       ├── users/              # ✅ F1 — 620 loc
+│       ├── assets/             # ✅ F2 — models (57 loc)
+│       ├── scans/              # ✅ F2 — models (82 loc)
+│       ├── vulnerabilities/    # ✅ F2 — models (80 loc)
+│       └── reports/            # ✅ F2 — models (80 loc)
+├── tests/                      # 22,738 lines / 1,091 tests
 │   ├── conftest.py             # Shared fixtures
 │   ├── unit/                   # Fakeredis + mocks
 │   ├── integration/            # Real DB + Alembic
@@ -171,7 +174,7 @@ uv run alembic upgrade head
 # 6. Seed database with demo data
 uv run python scripts/seed_db.py
 
-# 7. Run tests (673 tests across 3 layers)
+# 7. Run tests (1,091 tests across 3 layers)
 uv run pytest -v
 
 # 8. Start dev server
@@ -315,8 +318,23 @@ Contributions are welcome. Please open an issue to discuss significant changes b
 
 ## License
 
-**All Rights Reserved.**
+This project is **open source** under the [MIT License](LICENSE).
 
-Copyright © 2026 Daniel Alcaraz López.
+```
+MIT License — Copyright (c) 2026 Daniel Alcaraz López
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-This software is provided for viewing and learning purposes only. You may view, fork, and study the code, but any commercial use, reproduction, distribution, modification, or sale of this software or its derivatives is strictly prohibited without explicit written permission from the author.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+```
+
+See the full license text in [`LICENSE`](LICENSE).

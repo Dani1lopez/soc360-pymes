@@ -66,6 +66,14 @@ services:
     ports:
       - "8474:8474"
       - "26379:26379"
+    # The Toxiproxy image is shell-less; probing its executable is the
+    # fail-closed readiness check for the admin process bound on :8474.
+    healthcheck:
+      test: ["CMD", "/toxiproxy", "-version"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
     depends_on:
       redis:
         condition: service_healthy

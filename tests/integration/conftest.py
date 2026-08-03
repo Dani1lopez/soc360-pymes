@@ -14,6 +14,8 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable, Generator
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -21,8 +23,9 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.config import settings
 from app.core.redis import close_pool
-from app.dependencies import get_db, get_db_with_tenant
+from app.dependencies import get_current_user, get_db, get_db_with_tenant
 from app.main import create_app
+from app.modules.users.models import User
 
 # Global marker for all tests in this directory
 pytestmark = pytest.mark.integration
@@ -250,6 +253,31 @@ async def app_via_proxy(proxy_redis, db_session, monkeypatch):
         await close_pool()
         monkeypatch.setattr(settings, "REDIS_HOST", previous_host)
         monkeypatch.setattr(settings, "REDIS_PORT", previous_port)
+
+
+@pytest.fixture(scope="function")
+def lock_test_overrides() -> Generator[
+    Callable[[AsyncClient, User], None], None, None
+]:
+    """Override only current-user resolution for real deactivation lock tests."""
+    installed_apps: list[Any] = []
+
+    def install(client: AsyncClient, current_user: User) -> None:
+        transport = getattr(client, "_transport", None)
+        app = getattr(transport, "app", None)
+        if app is None:
+            raise RuntimeError("app_via_proxy does not expose an ASGI app")
+
+        async def override_get_current_user() -> User:
+            return current_user
+
+        app.dependency_overrides[get_current_user] = override_get_current_user
+        installed_apps.append(app)
+
+    yield install
+
+    for app in reversed(installed_apps):
+        app.dependency_overrides.pop(get_current_user, None)
 
 
 # ---------------------------------------------------------------------------

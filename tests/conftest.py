@@ -513,6 +513,8 @@ async def isolated_db_session(pooled_engine):
 # Toxiproxy session fixture — PR1 #260 baseline fault-injection harness
 # ---------------------------------------------------------------------------
 
+TOXIPROXY_CLEANUP_TIMEOUT_SECONDS = 5.0
+
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def toxiproxy_session():
@@ -554,12 +556,18 @@ async def toxiproxy_client(toxiproxy_session):
     """Yield a clean function-scoped controller for the Redis proxy."""
 
     async def reset_state() -> None:
-        await toxiproxy_session.reset_toxics()
-        await close_pool()
-        await _flush_toxiproxy_database()
+        results = await asyncio.gather(
+            toxiproxy_session.reset_toxics(),
+            close_pool(),
+            _flush_toxiproxy_database(),
+            return_exceptions=True,
+        )
+        failures = [result for result in results if isinstance(result, BaseException)]
+        if failures:
+            raise RuntimeError("Toxiproxy fixture cleanup failed") from failures[0]
 
-    await reset_state()
+    await asyncio.wait_for(reset_state(), timeout=TOXIPROXY_CLEANUP_TIMEOUT_SECONDS)
     try:
         yield toxiproxy_session
     finally:
-        await reset_state()
+        await asyncio.wait_for(reset_state(), timeout=TOXIPROXY_CLEANUP_TIMEOUT_SECONDS)

@@ -112,7 +112,33 @@ jobs:
             echo "context=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run tests
+      - name: Run direct tests
         env:
           SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
-        run: uv run pytest
+        run: uv run pytest -m "not toxiproxy"
+
+      - name: Wait for Toxiproxy readiness
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --max-time 2 \
+                http://localhost:8474/version; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Toxiproxy admin API did not become ready within 30 seconds" >&2
+          exit 1
+
+      - name: Validate Toxiproxy Redis routing
+        env:
+          SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
+        run: >
+          uv run pytest
+          tests/integration/test_toxiproxy_baseline.py::test_pr1_redis_connection_refused_smoke
+          -q
+
+      - name: Run proxy tests (serial)
+        env:
+          SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
+        run: uv run pytest -m "integration and toxiproxy" -x

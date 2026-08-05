@@ -1,7 +1,7 @@
 """Unit tests for PR2 outage primitives — DB-free, Redis-free.
 
 Covers the typed foundation: RedisOutageError hierarchy, TemporaryUnavailableError,
-AsyncWaiter Protocol, 25-FlowId catalog, FlowPolicy, RetryableOp enum,
+AsyncWaiter Protocol, 29-FlowId catalog, FlowPolicy, RetryableOp enum,
 and the pure classify_redis_error helper.
 """
 
@@ -281,10 +281,10 @@ class TestAsyncWaiterProtocol:
 
 
 # ---------------------------------------------------------------------------
-# 25-FlowId catalog
+# 29-FlowId catalog
 # ---------------------------------------------------------------------------
 
-EXPECTED_25_FLOW_IDS = frozenset(
+EXPECTED_FLOW_IDS = frozenset(
     [
         "auth_login_rate_precheck",
         "auth_refresh_rate_precheck",
@@ -318,21 +318,298 @@ EXPECTED_25_FLOW_IDS = frozenset(
     ]
 )
 
+FlowIdEvidence = tuple[str, str, str, str, str, str]
+
+_CATALOG_ONLY_EVIDENCE = "AST audit: no production FlowId reference outside outage.py"
+_RUNTIME_LOCK_EVIDENCE = (
+    "AST audit: imported and passed to acquire_dist_lock in lock_deps"
+)
+_SCAN_PRIMITIVE_EVIDENCE = "AST audit: no app scan path; direct primitive matrix only"
+
+FLOW_ID_EVIDENCE: tuple[FlowIdEvidence, ...] = (
+    (
+        "auth_account_lockout_check",
+        "app.modules.auth.service._check_account_lockout",
+        "account_lockout_check",
+        "fail_open",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_change_password_rate_precheck",
+        "app.modules.auth.router.change_password",
+        "rate_precheck",
+        "masked",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_change_password_rate_record",
+        "app.modules.auth.router.change_password",
+        "rate_record",
+        "fail_closed",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_change_password_revoke",
+        "app.modules.auth.service.change_password",
+        "revoke",
+        "fail_closed",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_change_password_service",
+        "app.modules.auth.service.change_password",
+        "service",
+        "fail_closed",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_current_user_dep",
+        "app.dependencies.auth.get_current_user",
+        "current_user",
+        "fail_closed",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_failed_attempt_record",
+        "app.modules.auth.service._record_failed_attempt",
+        "failed_attempt_record",
+        "best_effort",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_login_attempts_clear",
+        "app.modules.auth.service._clear_login_attempts",
+        "attempts_clear",
+        "best_effort",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_login_event_publish",
+        "app.modules.auth.service.login",
+        "event_publish",
+        "best_effort",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_login_rate_precheck",
+        "app.modules.auth.router.login",
+        "rate_precheck",
+        "masked",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_login_rate_record",
+        "app.modules.auth.router.login",
+        "rate_record",
+        "fail_closed",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_login_service",
+        "app.modules.auth.service.login",
+        "service",
+        "fail_closed",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_logout_rate_precheck",
+        "app.modules.auth.router.logout",
+        "rate_precheck",
+        "masked",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_logout_rate_record",
+        "app.modules.auth.router.logout",
+        "rate_record",
+        "fail_closed",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_logout_service",
+        "app.modules.auth.service.logout",
+        "service",
+        "best_effort",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_post_credential_session_lock",
+        "app.modules.auth.service._acquire_session_cap_lock",
+        "session_cap_lock",
+        "fail_closed",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_post_credential_user_deactivate_lock",
+        "app.dependencies.lock_deps.get_user_deactivation_db",
+        "deactivate",
+        "fail_closed",
+        "runtime-reachable",
+        _RUNTIME_LOCK_EVIDENCE,
+    ),
+    (
+        "auth_refresh_rate_precheck",
+        "app.modules.auth.router.refresh",
+        "rate_precheck",
+        "masked",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_refresh_rate_record",
+        "app.modules.auth.router.refresh",
+        "rate_record",
+        "fail_closed",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_refresh_service",
+        "app.modules.auth.service.refresh_tokens",
+        "service",
+        "fail_closed",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "auth_tenant_deactivate_lock",
+        "app.dependencies.lock_deps.get_tenant_deactivation_db",
+        "deactivate",
+        "fail_closed",
+        "runtime-reachable",
+        _RUNTIME_LOCK_EVIDENCE,
+    ),
+    (
+        "scan_cancel_lock",
+        "app.core.dist_lock.acquire_dist_lock",
+        "scan_cancel",
+        "fail_closed",
+        "primitive-only",
+        _SCAN_PRIMITIVE_EVIDENCE,
+    ),
+    (
+        "scan_complete_lock",
+        "app.core.dist_lock.acquire_dist_lock",
+        "scan_complete",
+        "fail_closed",
+        "primitive-only",
+        _SCAN_PRIMITIVE_EVIDENCE,
+    ),
+    (
+        "scan_start_lock",
+        "app.core.dist_lock.acquire_dist_lock",
+        "scan_start",
+        "fail_closed",
+        "primitive-only",
+        _SCAN_PRIMITIVE_EVIDENCE,
+    ),
+    (
+        "scan_update_lock",
+        "app.core.dist_lock.acquire_dist_lock",
+        "scan_update",
+        "fail_closed",
+        "primitive-only",
+        _SCAN_PRIMITIVE_EVIDENCE,
+    ),
+    (
+        "tenants_deactivate_tenant_revoke",
+        "app.modules.tenants.router.deactivate_tenant",
+        "revoke",
+        "fail_closed",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "tenants_update_tenant_revoke",
+        "app.modules.tenants.router.update_tenant",
+        "revoke",
+        "fail_closed",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "users_deactivate_user_revoke",
+        "app.modules.users.router.deactivate_user",
+        "revoke",
+        "fail_closed",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+    (
+        "users_update_user_revoke",
+        "app.modules.users.router.update_user",
+        "revoke",
+        "fail_closed",
+        "catalog-only",
+        _CATALOG_ONLY_EVIDENCE,
+    ),
+)
+
 
 class TestFlowIdCatalog:
-    """Exactly 25 FlowId constants MUST exist and match spec rev 9."""
+    """Exactly 29 FlowId constants MUST exist and match spec rev 9."""
 
-    def test_catalog_has_exactly_25_items(self) -> None:
-        """ALL_FLOW_IDS MUST contain exactly 25 identifiers."""
+    def test_catalog_has_complete_evidence_matrix(self) -> None:
+        """Every catalog entry MUST have a six-field governance row."""
+        rows = FLOW_ID_EVIDENCE
+
+        assert len(rows) == len(set(rows)) == len(ALL_FLOW_IDS) == 29
+        assert {row[0] for row in rows} == set(ALL_FLOW_IDS)
+        assert all(len(row) == 6 for row in rows)
+        assert all(
+            all(isinstance(field, str) and field.strip() for field in row)
+            for row in rows
+        )
+
+    def test_catalog_has_exactly_29_items(self) -> None:
+        """ALL_FLOW_IDS MUST contain exactly 29 identifiers."""
         assert len(ALL_FLOW_IDS) == 29, f"Expected 29 FlowIds, got {len(ALL_FLOW_IDS)}"
 
     def test_catalog_matches_spec_set(self) -> None:
-        """ALL_FLOW_IDS MUST contain exactly the 25 spec mandated identifiers."""
+        """ALL_FLOW_IDS MUST contain exactly the 29 spec identifiers."""
         actual = frozenset(ALL_FLOW_IDS)
-        assert actual == EXPECTED_25_FLOW_IDS, (
-            f"Missing: {sorted(EXPECTED_25_FLOW_IDS - actual)}\n"
-            f"Extra:   {sorted(actual - EXPECTED_25_FLOW_IDS)}"
+        assert actual == EXPECTED_FLOW_IDS, (
+            f"Missing: {sorted(EXPECTED_FLOW_IDS - actual)}\n"
+            f"Extra:   {sorted(actual - EXPECTED_FLOW_IDS)}"
         )
+
+    def test_evidence_classification_matches_reference_audit(self) -> None:
+        """The audit MUST distinguish live, ghost, and primitive-only entries."""
+        by_flow_id = {row[0]: row for row in FLOW_ID_EVIDENCE}
+
+        assert {
+            flow_id
+            for flow_id, row in by_flow_id.items()
+            if row[4] == "runtime-reachable"
+        } == {
+            "auth_post_credential_user_deactivate_lock",
+            "auth_tenant_deactivate_lock",
+        }
+        assert {
+            flow_id for flow_id, row in by_flow_id.items() if row[4] == "primitive-only"
+        } == {
+            "scan_start_lock",
+            "scan_update_lock",
+            "scan_complete_lock",
+            "scan_cancel_lock",
+        }
+        assert sum(row[4] == "catalog-only" for row in FLOW_ID_EVIDENCE) == 23
 
     def test_every_flow_id_is_a_string(self) -> None:
         """Every FlowId constant MUST be a str."""
@@ -352,21 +629,21 @@ class TestFlowIdCatalog:
 
 
 class TestFlowPolicy:
-    """FlowPolicy maps each FlowId to a policy behaviour."""
+    """FlowPolicy maps each of the 29 FlowIds to a policy behaviour."""
 
-    def test_policy_map_keys_equal_exact_25(self) -> None:
-        """FlowPolicy MUST have exactly 25 keys."""
+    def test_policy_map_keys_equal_exact_29(self) -> None:
+        """FlowPolicy MUST have exactly 29 keys."""
         assert (
             len(FlowPolicy) == 29
         ), f"FlowPolicy has {len(FlowPolicy)} keys, expected 29"
 
     def test_policy_map_keys_match_flow_ids(self) -> None:
-        """FlowPolicy keys MUST be exactly the 25 FlowId constants."""
+        """FlowPolicy keys MUST be exactly the 29 FlowId constants."""
         policy_keys = frozenset(FlowPolicy.keys())
-        assert policy_keys == EXPECTED_25_FLOW_IDS, (
+        assert policy_keys == EXPECTED_FLOW_IDS, (
             f"Policy keys mismatch.\n"
-            f"Missing: {sorted(EXPECTED_25_FLOW_IDS - policy_keys)}\n"
-            f"Extra:   {sorted(policy_keys - EXPECTED_25_FLOW_IDS)}"
+            f"Missing: {sorted(EXPECTED_FLOW_IDS - policy_keys)}\n"
+            f"Extra:   {sorted(policy_keys - EXPECTED_FLOW_IDS)}"
         )
 
     def test_every_policy_value_is_a_string(self) -> None:

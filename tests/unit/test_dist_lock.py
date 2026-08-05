@@ -25,6 +25,21 @@ class RecordingWaiter:
         return await awaitable
 
 
+class AwaitingWaiter(RecordingWaiter):
+    """RedisLockWaiter-compatible waiter that records retry deadlines."""
+
+
+class TimeoutRecordingWaiter:
+    """Deterministic waiter that forces production retry cancellation."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, float]] = []
+
+    async def wait(self, awaitable: Any, *, timeout: float) -> Any:
+        self.calls.append((awaitable, timeout))
+        raise asyncio.TimeoutError()
+
+
 class ScriptedFakeRedis(FakeRedis):
     """fakeredis fixture with Lua semantics without the optional lupa package."""
 
@@ -197,6 +212,92 @@ async def test_contention_and_reentry_have_distinct_details(
                 pass
     finally:
         await first.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("flow_id", "operation"),
+    [("scan_start_lock", "scan_start"), ("scan_cancel_lock", "scan_cancel")],
+)
+async def test_contention_timeout_cancels_single_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    redis: ScriptedFakeRedis,
+    flow_id: str,
+    operation: str,
+) -> None:
+    from app.core.exceptions import TemporaryUnavailableError
+
+    dist_lock = _set_secret(monkeypatch, "deterministic timeout secret")
+    monkeypatch.setattr(dist_lock.random, "uniform", lambda _low, _high: 0.25)
+    key = dist_lock.build_lock_key(flow_id, "tenant-1", "asset-1")
+    await redis.set(key, "held-by-owner", nx=True, px=30_000)
+    waiter = TimeoutRecordingWaiter()
+
+    with pytest.raises(TemporaryUnavailableError, match="lock_timeout"):
+        async with dist_lock.acquire_dist_lock(
+            **_lock_args(
+                redis,
+                flow_id=flow_id,
+                operation=operation,
+                waiter=waiter,
+                wait_timeout_seconds=0.25,
+            )
+        ):
+            pass
+
+    assert len(waiter.calls) == 1
+    assert waiter.calls[0][0].done()
+    assert waiter.calls[0][0].cancelled()
+    assert await redis.get(key) == b"held-by-owner"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "transport_error",
+    [
+        ConnectionError("retry transport failed"),
+        asyncio.TimeoutError("retry timed out"),
+    ],
+    ids=["connection", "timeout"],
+)
+async def test_retry_outage_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    redis: ScriptedFakeRedis,
+    transport_error: BaseException,
+) -> None:
+    from app.core.exceptions import RedisOutageError, TemporaryUnavailableError
+
+    dist_lock = _set_secret(monkeypatch, "retry outage secret")
+    monkeypatch.setattr(dist_lock.random, "uniform", lambda _low, _high: 0.0)
+    key = dist_lock.build_lock_key("scan_update_lock", "tenant-1", "asset-1")
+    await redis.set(key, "held-by-owner", nx=True, px=30_000)
+    original_set = redis.set
+    set_calls = 0
+
+    async def scripted_set(*args: Any, **kwargs: Any) -> Any:
+        nonlocal set_calls
+        set_calls += 1
+        if set_calls == 2:
+            raise transport_error
+        return await original_set(*args, **kwargs)
+
+    monkeypatch.setattr(redis, "set", scripted_set)
+
+    with pytest.raises(RedisOutageError) as exc_info:
+        async with dist_lock.acquire_dist_lock(
+            **_lock_args(
+                redis,
+                flow_id="scan_update_lock",
+                operation="scan_update",
+                waiter=AwaitingWaiter(),
+                wait_timeout_seconds=0.25,
+            )
+        ):
+            pass
+
+    assert isinstance(exc_info.value, RedisOutageError)
+    assert not isinstance(exc_info.value, TemporaryUnavailableError)
+    assert set_calls == 2
 
 
 @pytest.mark.asyncio

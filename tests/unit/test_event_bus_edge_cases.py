@@ -6,17 +6,20 @@ Extends test_event_bus.py coverage with:
 - malformed event data handling via _dispatch_event
 - publish serializes UUIDs correctly to Redis
 """
+
+# fmt: off
 from __future__ import annotations
 
 import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
 from fakeredis.aioredis import FakeRedis
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 
 class TestEventBusDispatchRouting:
@@ -111,9 +114,8 @@ class TestEventBusDispatchRouting:
     async def test_dlq_write_lands_in_stream(self, caplog):
         """Regression #126: exhausted retries MUST actually write the event to the DLQ stream.
 
-        Before the fix, the XADD was wrapped in `asyncio.ensure_future` without
-        a strong reference, so the task could be GC'd before completing. This
-        test proves the event ends up in the DLQ stream and is not lost.
+        The dispatch contract now awaits XADD, so the event is durable before
+        the caller is allowed to acknowledge it.
         """
         from app.event_bus import EventBus, drain_dlq_tasks
         from app.core.config import settings
@@ -132,10 +134,10 @@ class TestEventBusDispatchRouting:
         try:
             with patch.object(EventBus, "_handle_auth_login", side_effect=RuntimeError("handler boom")):
                 result = await EventBus._dispatch_event("auth.login", bad_data, redis_client=client)
-            assert result is False
+            assert result is True
 
-            # The fix holds a strong reference to the task; drain it so we can
-            # inspect the stream deterministically.
+            # The dispatch call has already awaited the append; this remains a
+            # no-op compatibility check for the bounded shutdown drain.
             await drain_dlq_tasks(timeout=2.0)
 
             dlq_stream = f"{settings.EVENT_STREAM_PREFIX}:dlq:auth.login"
@@ -186,6 +188,93 @@ class TestEventBusDispatchRouting:
             "dlq_skipped_no_redis_client" in (r.message or "")
             for r in caplog.records
         ), f"Expected CRITICAL log 'dlq_skipped_no_redis_client', got: {[r.message for r in caplog.records]}"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_event_dlq_before_ack(self):
+        """A durable DLQ write must complete before the consumer can ACK."""
+        from app.core.config import settings
+        from app.event_bus import EventBus, EventConsumer
+        class RecordingRedis:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+            async def hget(self, *args, **kwargs):
+                return str(settings.EVENT_MAX_RETRIES).encode()
+            async def delete(self, *args, **kwargs):
+                self.calls.append("retry-delete")
+                return 1
+            async def xadd(self, *args, **kwargs):
+                self.calls.append("dlq-xadd")
+                return b"2-0"
+            async def xack(self, *args, **kwargs):
+                self.calls.append("xack")
+                return 1
+        redis = RecordingRedis()
+        consumer = EventConsumer(redis, "auth.login", "worker-1", "group-1")
+        with patch.object(EventBus, "_handle_auth_login", side_effect=RuntimeError("handler boom")):
+            result = await EventBus._dispatch_event("auth.login", {"user_id": "u1"}, redis_client=redis, message_id="1-0")
+        assert result is True
+        await consumer.ack("1-0")
+        assert redis.calls.index("dlq-xadd") < redis.calls.index("xack")
+
+    @pytest.mark.asyncio
+    async def test_xclaim_recovery_persists_then_acks_after_dlq_failure(self):
+        """A failed DLQ write leaves the PEL recoverable for XCLAIM retry."""
+        from app.core.config import settings
+        from app.core.exceptions import RedisOutageError
+        from app.event_bus import EventBus, EventConsumer
+        class ToggleDlqRedis(FakeRedis):
+            def __init__(self) -> None:
+                super().__init__()
+                self.fail_dlq = True
+            async def xadd(self, stream, fields, *args, **kwargs):  # type: ignore[override]
+                if ":dlq:" in stream and self.fail_dlq:
+                    raise RedisConnectionError("raw-redis-transport-detail")
+                return await super().xadd(stream, fields, *args, **kwargs)
+        redis = ToggleDlqRedis()
+        stream = "events:auth.login"
+        group = "pr8-recovery-group"
+        consumer = EventConsumer(redis, "auth.login", "worker-1", group)
+        try:
+            await redis.xgroup_create(stream, group, "0", mkstream=True)
+            await redis.xadd(stream, {"user_id": "u1"})
+            messages = await consumer.read_new(block=1)
+            assert len(messages) == 1
+            message = messages[0]
+            message_id_str = message["message_id"].decode()
+            retry_key = f"event_retry:auth.login:{message_id_str}"
+            await redis.hset(retry_key, mapping={"retry_count": settings.EVENT_MAX_RETRIES})
+            with patch.object(EventBus, "_handle_auth_login", side_effect=RuntimeError("handler boom")):
+                with pytest.raises(RedisOutageError):
+                    await EventBus._dispatch_event("auth.login", message["data"], redis_client=redis, message_id=message_id_str)
+            assert await redis.hget(retry_key, "retry_count") == b"3"
+            pending = await consumer.read_pending()
+            assert len(pending) == 1
+            redis.fail_dlq = False
+            with patch.object(EventBus, "_handle_auth_login", side_effect=RuntimeError("handler boom")):
+                result = await EventBus._dispatch_event("auth.login", pending[0]["data"], redis_client=redis, message_id=message_id_str)
+            assert result is True
+            await consumer.ack(pending[0]["message_id"])
+            assert await redis.xpending_range(stream, group, "0", "+", 100) == []
+            dlq_entries = await redis.xrange("events:dlq:auth.login")
+            assert len(dlq_entries) == 1
+            assert await redis.hget(retry_key, "retry_count") is None
+        finally:
+            await redis.aclose()
+
+    @pytest.mark.asyncio
+    async def test_consumer_loop_skips_ack_when_dispatch_is_not_eligible(self):
+        """The consumer must not ACK a message whose terminal write failed."""
+        from app.main import _consumer_loop
+        redis = AsyncMock()
+        message = {"message_id": b"1-0", "data": {"user_id": "u1"}}
+        consumer = AsyncMock()
+        consumer.read_pending.side_effect = [[message], asyncio.CancelledError()]
+        consumer.read_new.return_value = []
+        with patch("app.main.EventBus._dispatch_event", new=AsyncMock(return_value=False)):
+            with pytest.raises(asyncio.CancelledError):
+                await _consumer_loop(redis_client=redis, consumer=consumer, stop_event=asyncio.Event())
+        consumer.ack.assert_not_awaited()
+        redis.aclose.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_dlq_survives_gc_pressure(self):
@@ -423,7 +512,7 @@ class TestEventBusRetryCounterPersistence:
                     )
 
             # HINCRBY wrote the field, EXPIRE set a TTL.
-            key = f"event_retry:auth.login:100-0"
+            key = "event_retry:auth.login:100-0"
             assert (await client.hget(key, "retry_count")) == b"1"
             ttl = await client.ttl(key)
             assert 0 < ttl <= settings.EVENT_RETRY_TTL_SECONDS
@@ -515,7 +604,7 @@ class TestEventBusRetryCounterPersistence:
                     "auth.login", {"user_id": "u-final"},
                     redis_client=client, message_id=msg_id,
                 )
-            assert result is False
+            assert result is True
 
             await drain_dlq_tasks(timeout=2.0)
             dlq_key = f"{settings.EVENT_STREAM_PREFIX}:dlq:auth.login"
@@ -591,7 +680,7 @@ class TestEventBusRetryCounterPersistence:
                     "auth.login", {"user_id": "u"},
                     redis_client=client, message_id=msg_id,
                 )
-            assert result is False
+            assert result is True
             await drain_dlq_tasks(timeout=2.0)
             assert (await client.hget(key, "retry_count")) is None
         finally:
@@ -605,8 +694,6 @@ class TestEventBusRetryCounterPersistence:
         data dict. This MUST still work.
         """
         from app.event_bus import EventBus
-        from app.core.config import settings
-
         client = FakeRedis()
         try:
             data = {"user_id": "u", "_retry_count": 0}
@@ -628,8 +715,6 @@ class TestEventBusRetryCounterPersistence:
     async def test_retry_count_falls_back_to_in_memory_on_redis_error(self):
         """If Redis hget raises, dispatch must fall back to the data dict."""
         from app.event_bus import EventBus
-        from app.core.config import settings
-
         # FakeRedis whose hget always raises to simulate a Redis hiccup.
         class BrokenRedis(FakeRedis):
             def __init__(self) -> None:

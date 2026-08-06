@@ -83,13 +83,14 @@ async def _consumer_loop(
                         if isinstance(raw_msg_id, bytes)
                         else raw_msg_id
                     )
-                    await EventBus._dispatch_event(
+                    acknowledgement_eligible = await EventBus._dispatch_event(
                         "auth.login",
                         msg.get("data", {}),
                         redis_client,
                         message_id=msg_id,
                     )
-                    await consumer.ack(msg["message_id"])
+                    if acknowledgement_eligible:
+                        await consumer.ack(msg["message_id"])
             except asyncio.CancelledError:
                 logger.info("event_consumer_loop_cancelled")
                 raise

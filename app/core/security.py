@@ -1,3 +1,4 @@
+# fmt: off
 from __future__ import annotations
 
 import hmac
@@ -8,12 +9,13 @@ from typing import Any
 import anyio
 import bcrypt
 import jwt
-from jwt import ExpiredSignatureError, InvalidTokenError
+from jwt import InvalidTokenError
 from redis.asyncio import Redis
 
 from app.core.config import settings
 from app.core.exceptions import UserError
 from app.core.logging import get_logger
+from app.core.outage import classify_redis_error
 
 logger = get_logger(__name__)
 
@@ -143,13 +145,19 @@ _ACTIVE_JTIS_PREFIX = "active_jtis:"
 async def revoke_access_token(jti: str, ttl_seconds: int, redis: Redis) -> None:
     """Añade el JTI a la denylist con TTL igual al tiempo restante del token"""
     if ttl_seconds > 0:
-        await redis.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
+        try:
+            await redis.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
+        except Exception as exc:
+            raise classify_redis_error(exc) from exc
         logger.debug("Token revocado", extra={"jti": jti, "ttl": ttl_seconds})
 
 
 async def is_token_revoked(jti: str, redis: Redis) -> bool:
     """Devuelve True si el token esta en la denylist"""
-    result = await redis.exists(f"{_DENYLIST_PREFIX}{jti}")
+    try:
+        result = await redis.exists(f"{_DENYLIST_PREFIX}{jti}")
+    except Exception as exc:
+        raise classify_redis_error(exc) from exc
     return int(result) > 0
 
 
@@ -166,19 +174,28 @@ async def revoke_tokens_by_jtis(jtis: list[str], redis: Redis, ttl_seconds: int 
 
 async def track_jti(user_id: str, jti: str, redis: Redis) -> None:
     """Añade el JTI al conjunto de JTIs activos del usuario. Idempotente (SADD)."""
-    await redis.sadd(f"{_ACTIVE_JTIS_PREFIX}{user_id}", jti)
+    try:
+        await redis.sadd(f"{_ACTIVE_JTIS_PREFIX}{user_id}", jti)
+    except Exception as exc:
+        raise classify_redis_error(exc) from exc
     logger.debug("JTI trackeado", extra={"user_id": user_id, "jti": jti})
 
 
 async def untrack_jti(user_id: str, jti: str, redis: Redis) -> None:
     """Remueve el JTI del conjunto de JTIs activos. Seguro si no existe (SREM)."""
-    await redis.srem(f"{_ACTIVE_JTIS_PREFIX}{user_id}", jti)
+    try:
+        await redis.srem(f"{_ACTIVE_JTIS_PREFIX}{user_id}", jti)
+    except Exception as exc:
+        raise classify_redis_error(exc) from exc
     logger.debug("JTI untrackeado", extra={"user_id": user_id, "jti": jti})
 
 
 async def get_active_jtis(user_id: str, redis: Redis) -> list[str]:
     """Devuelve la lista de JTIs activos para el usuario. Lista vacía si no hay ninguno."""
-    members = await redis.smembers(f"{_ACTIVE_JTIS_PREFIX}{user_id}")
+    try:
+        members = await redis.smembers(f"{_ACTIVE_JTIS_PREFIX}{user_id}")
+    except Exception as exc:
+        raise classify_redis_error(exc) from exc
     return [m.decode() if isinstance(m, bytes) else m for m in members]
 
 
@@ -189,22 +206,30 @@ async def revoke_all_user_access_tokens(
 ) -> None:
     """Revoca todos los JTIs activos del usuario usando comandos ordenados (REQ-140-R05).
 
-    Estrategia defense-in-depth:
+    Estrategia fail-closed:
     1. Escribe cada entrada denylist con ``redis.set(...)`` ordenado (sin pipeline).
-    2. Si al menos una SET tuvo éxito, intenta eliminar el set ``active_jtis``
-       (best-effort) incluso si alguna SET posterior falló.
-    3. Si ninguna SET tuvo éxito, propaga el error para que el caller reintente.
+    2. Detiene la operación en el primer fallo y conserva ``active_jtis`` para
+       retry o recuperación.
+    3. Elimina ``active_jtis`` únicamente después de que todas las SET tengan éxito.
 
     Esto evita el estado parcial ambiguo de usar ``pipeline(transaction=True)``:
     si el pipeline falla en ``execute()``, no sabemos cuántas SET llegaron a Redis.
     """
     key = f"{_ACTIVE_JTIS_PREFIX}{user_id}"
-    jtis = await redis.smembers(key)
+    try:
+        jtis = await redis.smembers(key)
+    except Exception as exc:
+        logger.warning(
+            "redis_revoke_active_jtis_read_failed",
+            extra={"user_id": user_id},
+        )
+        raise classify_redis_error(exc) from exc
+
     if not jtis:
         logger.debug("No hay JTIs activos para revocar", extra={"user_id": user_id})
         return
 
-    jti_strs = [j.decode() if isinstance(j, bytes) else j for j in jtis]
+    jti_strs = sorted(j.decode() if isinstance(j, bytes) else j for j in jtis)
     denylisted_count = 0
 
     # Fase 1: denylist SETs ordenados (sin pipeline, REQ-140-R05)
@@ -212,33 +237,32 @@ async def revoke_all_user_access_tokens(
         try:
             await redis.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
             denylisted_count += 1
-        except Exception:
+        except Exception as exc:
             if denylisted_count == 0:
-                # Zero success — propagate for retry
                 logger.warning(
                     "redis_revoke_zero_success",
                     extra={"user_id": user_id, "jtis_count": len(jti_strs)},
                 )
-                raise
-            # Partial success — log and continue to best-effort cleanup
-            logger.warning(
-                "redis_revoke_all_partial_failure",
-                extra={
-                    "user_id": user_id,
-                    "jtis_count": len(jti_strs),
-                    "denylisted_count": denylisted_count,
-                },
-            )
-            break
+            else:
+                logger.warning(
+                    "redis_revoke_all_partial_failure",
+                    extra={
+                        "user_id": user_id,
+                        "jtis_count": len(jti_strs),
+                        "denylisted_count": denylisted_count,
+                    },
+                )
+            raise classify_redis_error(exc) from exc
 
-    # Fase 2: best-effort DELETE del set active_jtis
+    # Fase 2: DELETE del set active_jtis only after total success
     try:
         await redis.delete(key)
-    except Exception:
+    except Exception as exc:
         logger.warning(
             "redis_active_jtis_cleanup_failed",
             extra={"user_id": user_id},
         )
+        raise classify_redis_error(exc) from exc
 
     logger.info(
         "Todos los JTIs del usuario revocados",

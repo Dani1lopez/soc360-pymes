@@ -68,3 +68,14 @@ agents/cache/
 .pi/
 .claude/
 graphify-out/
+
+# Skills de agentes locales — no subir al remoto
+skills/
+
+# Proceso SDD local — no subir al remoto
+openspec/changes/archive/**/apply-progress.md
+openspec/changes/archive/**/verify-report.md
+openspec/changes/archive/**/exploration.md
+openspec/changes/archive/**/next-session.md
+openspec/changes/archive/**/branch-roadmap.md
+openspec/changes/archive/**/reconciliation-note.md

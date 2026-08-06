@@ -1,19 +1,27 @@
+# fmt: off
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+from httpx import ASGITransport, AsyncClient
 import pytest
 from fakeredis.aioredis import FakeRedis
 from pydantic import ValidationError
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.core.security import (
     can_assign_role,
     has_minimum_role,
     is_token_revoked,
+    get_active_jtis,
+    revoke_access_token,
+    revoke_all_user_access_tokens,
     revoke_tokens_by_jtis,
     secure_compare,
+    track_jti,
+    untrack_jti,
 )
 from app.modules.auth.schemas import ChangePasswordRequest
 from app.modules.users.schemas import RoleEnum, UserCreate
@@ -234,6 +242,138 @@ class TestBulkRevocation:
     """Unit coverage for bulk token revocation with fakeredis."""
 
     @pytest.mark.asyncio
+    async def test_revoke_all_zero_success_is_typed_and_retains_tracking_set(self):
+        """A first SET failure must classify the outage and preserve active JTIs."""
+        class FailingRedis(FakeRedis):
+            async def set(self, key: str, *args, **kwargs):  # type: ignore[override]
+                raise RedisConnectionError("raw-redis-transport-detail")
+        redis = FailingRedis()
+        try:
+            await redis.sadd("active_jtis:user-zero", "jti-zero")
+            with patch("app.core.security.logger.warning") as warning:
+                from app.core.exceptions import RedisUnreachableError
+
+                with pytest.raises(RedisUnreachableError):
+                    await revoke_all_user_access_tokens(
+                        "user-zero", redis, ttl_seconds=60
+                    )
+
+            assert await redis.smembers("active_jtis:user-zero") == {b"jti-zero"}
+            assert await redis.keys("revoked:*") == []
+            assert "raw-redis-transport-detail" not in repr(warning.call_args)
+        finally:
+            await redis.aclose()
+    @pytest.mark.asyncio
+    async def test_revoke_all_partial_failure_stops_and_retains_tracking_set(self):
+        """A later SET failure must not delete the tracking set or continue writes."""
+        class FailingRedis(FakeRedis):
+            def __init__(self) -> None:
+                super().__init__()
+                self.set_calls: list[str] = []
+                self.delete_calls: list[str] = []
+
+            async def smembers(self, key: str):  # type: ignore[override]
+                if key == "active_jtis:user-partial":
+                    return [b"jti-a", b"jti-b", b"jti-c"]
+                return await super().smembers(key)
+
+            async def set(self, key: str, *args, **kwargs):  # type: ignore[override]
+                self.set_calls.append(key)
+                if key == "revoked:jti-b":
+                    raise RedisConnectionError("partial transport failure")
+                return await super().set(key, *args, **kwargs)
+
+            async def delete(self, key: str, *args, **kwargs):  # type: ignore[override]
+                self.delete_calls.append(key)
+                return await super().delete(key, *args, **kwargs)
+        redis = FailingRedis()
+        try:
+            await redis.sadd("active_jtis:user-partial", "jti-a", "jti-b", "jti-c")
+            from app.core.exceptions import RedisUnreachableError
+            with pytest.raises(RedisUnreachableError):
+                await revoke_all_user_access_tokens(
+                    "user-partial", redis, ttl_seconds=60
+                )
+
+            assert redis.set_calls == ["revoked:jti-a", "revoked:jti-b"]
+            assert redis.delete_calls == []
+            assert set(await redis.smembers("active_jtis:user-partial")) == {
+                b"jti-a",
+                b"jti-b",
+                b"jti-c",
+            }
+            assert await redis.exists("revoked:jti-a") == 1
+            assert await redis.exists("revoked:jti-c") == 0
+        finally:
+            await redis.aclose()
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "operation",
+        [
+            "revoke_access_token",
+            "is_token_revoked",
+            "track_jti",
+            "untrack_jti",
+            "get_active_jtis",
+        ],
+    )
+    async def test_revocation_primitive_transport_errors_are_typed(
+        self, operation: str
+    ):
+        """Direct revocation Redis failures must expose RedisOutageError subclasses."""
+        redis = MagicMock()
+        failure = RedisConnectionError("transport unavailable")
+        for method_name in ("set", "exists", "sadd", "srem", "smembers"):
+            setattr(redis, method_name, AsyncMock(side_effect=failure))
+        from app.core.exceptions import RedisOutageError
+        operations = {
+            "revoke_access_token": lambda: revoke_access_token(
+                "jti-primitive", 60, redis
+            ),
+            "is_token_revoked": lambda: is_token_revoked("jti-primitive", redis),
+            "track_jti": lambda: track_jti("user-primitive", "jti-primitive", redis),
+            "untrack_jti": lambda: untrack_jti(
+                "user-primitive", "jti-primitive", redis
+            ),
+            "get_active_jtis": lambda: get_active_jtis("user-primitive", redis),
+        }
+        with pytest.raises(RedisOutageError):
+            await operations[operation]()
+
+    @pytest.mark.asyncio
+    async def test_revocation_outage_reaches_sanitized_http_boundary(self):
+        """A typed revocation outage must retain the global sanitized 503 contract."""
+        from app.core.config import settings
+        from app.core.security import revoke_access_token
+        from app.main import create_app
+
+        raw_detail = "raw-redis-transport-detail"
+
+        class BrokenRedis:
+            async def set(self, *args, **kwargs):
+                raise RedisConnectionError(raw_detail)
+
+        app = create_app()
+
+        @app.post("/_test/revoke-outage", include_in_schema=False)
+        async def _revoke_outage():
+            await revoke_access_token("jti-http", 60, BrokenRedis())
+            return {"ok": True}
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as client:
+            response = await client.post("/_test/revoke-outage")
+
+        assert response.status_code == 503
+        assert response.headers["Retry-After"] == str(
+            settings.REDIS_OUTAGE_RETRY_AFTER_SECONDS
+        )
+        assert response.json() == {"detail": "service temporarily unavailable"}
+        assert raw_detail not in response.text
+
+    @pytest.mark.asyncio
     async def test_empty_jti_list_is_noop(self):
         redis = FakeRedis()
         try:
@@ -397,12 +537,12 @@ class TestBcryptAsyncWrappers:
 
 
 class TestRevokeAllUserAccessTokensOrdered:
-    """REQ-140-R05: Ordered token revocation with best-effort cleanup."""
+    """REQ-140-R05: Ordered token revocation with fail-closed cleanup."""
 
     @pytest.mark.asyncio
     async def test_success_path(self):
         """All JTIs denylisted, active set deleted on success."""
-        from app.core.security import revoke_all_user_access_tokens, is_token_revoked
+        from app.core.security import revoke_all_user_access_tokens
 
         redis = FakeRedis()
         try:
@@ -442,14 +582,13 @@ class TestRevokeAllUserAccessTokensOrdered:
             await redis.aclose()
 
     @pytest.mark.asyncio
-    async def test_partial_failure_still_attempts_cleanup(self):
-        """After a partial denylist write, DELETE must still be attempted."""
+    async def test_partial_failure_retains_tracking_set(self):
+        """After a partial denylist write, DELETE must not be attempted."""
         from app.core.security import revoke_all_user_access_tokens
+        from app.core.exceptions import RedisUnreachableError
 
         redis = AsyncMock()
-        redis.smembers = AsyncMock(
-            return_value={b"jti-1", b"jti-2", b"jti-3"}
-        )
+        redis.smembers = AsyncMock(return_value=[b"jti-1", b"jti-2", b"jti-3"])
 
         call_count = 0
 
@@ -463,27 +602,27 @@ class TestRevokeAllUserAccessTokensOrdered:
         redis.set = mock_set
         redis.delete = AsyncMock()
 
-        await revoke_all_user_access_tokens(
-            user_id="user-pfail",
-            redis=redis,
-            ttl_seconds=3600,
-        )
+        with pytest.raises(RedisUnreachableError):
+            await revoke_all_user_access_tokens(
+                user_id="user-pfail",
+                redis=redis,
+                ttl_seconds=3600,
+            )
 
         # First JTI should have been denylisted
         assert call_count == 2  # Only 2 set calls made (third not attempted after fail)
 
-        # DELETE must have been attempted (best-effort cleanup)
-        redis.delete.assert_awaited_once_with("active_jtis:user-pfail")
+        # DELETE must not be attempted while tracking state is incomplete.
+        redis.delete.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_zero_success_raises_error(self):
-        """Zero denylist writes → error propagates for retry."""
+        """Zero denylist writes → classified error propagates for retry."""
         from app.core.security import revoke_all_user_access_tokens
+        from app.core.exceptions import RedisUnreachableError
 
         redis = AsyncMock()
-        redis.smembers = AsyncMock(
-            return_value={b"jti-1", b"jti-2"}
-        )
+        redis.smembers = AsyncMock(return_value={b"jti-1", b"jti-2"})
 
         async def mock_set(key, value, ex):
             raise ConnectionError("Redis down")
@@ -491,7 +630,7 @@ class TestRevokeAllUserAccessTokensOrdered:
         redis.set = mock_set
         redis.delete = AsyncMock()
 
-        with pytest.raises(ConnectionError):
+        with pytest.raises(RedisUnreachableError):
             await revoke_all_user_access_tokens(
                 user_id="user-zero",
                 redis=redis,
@@ -502,23 +641,23 @@ class TestRevokeAllUserAccessTokensOrdered:
         redis.delete.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_delete_failure_logs_but_does_not_raise(self):
-        """DELETE failure after successful denylist must log warning, not raise."""
-        from app.core.security import revoke_all_user_access_tokens, is_token_revoked
+    async def test_delete_failure_is_typed_and_logs(self):
+        """DELETE failure after successful denylist must remain recoverable."""
+        from app.core.security import revoke_all_user_access_tokens
+        from app.core.exceptions import RedisUnreachableError
 
         redis = AsyncMock()
-        redis.smembers = AsyncMock(
-            return_value={b"jti-1", b"jti-2"}
-        )
+        redis.smembers = AsyncMock(return_value={b"jti-1", b"jti-2"})
         redis.set = AsyncMock(return_value=True)
         redis.delete = AsyncMock(side_effect=ConnectionError("Delete failed"))
 
         with patch("app.core.security.logger") as mock_logger:
-            await revoke_all_user_access_tokens(
-                user_id="user-del-fail",
-                redis=redis,
-                ttl_seconds=3600,
-            )
+            with pytest.raises(RedisUnreachableError):
+                await revoke_all_user_access_tokens(
+                    user_id="user-del-fail",
+                    redis=redis,
+                    ttl_seconds=3600,
+                )
 
         # Denylist entries written
         assert redis.set.await_count == 2
@@ -538,9 +677,7 @@ class TestRevokeAllUserAccessTokensOrdered:
         from app.core.security import revoke_all_user_access_tokens
 
         redis = AsyncMock()
-        redis.smembers = AsyncMock(
-            return_value={b"jti-first", b"jti-second"}
-        )
+        redis.smembers = AsyncMock(return_value=[b"jti-second", b"jti-first"])
 
         command_log: list[str] = []
 
@@ -567,6 +704,8 @@ class TestRevokeAllUserAccessTokensOrdered:
 
         assert len(set_indices) == 2
         assert len(delete_indices) == 1
-        assert set_indices[-1] < delete_indices[0], (
-            f"SET indices {set_indices} must all be before DELETE at {delete_indices}"
-        )
+        assert set_indices[-1] < delete_indices[0], f"SET indices {set_indices} must all be before DELETE at {delete_indices}"
+        assert command_log[:2] == [
+            "SET revoked:jti-first",
+            "SET revoked:jti-second",
+        ]

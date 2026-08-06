@@ -1,10 +1,14 @@
 """EventConsumer — consumer group abstraction over Redis Streams."""
+
+# fmt: off
 from __future__ import annotations
 
 from redis.asyncio import Redis
+from redis.exceptions import ResponseError
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.outage import classify_redis_error
 
 logger = get_logger(__name__)
 
@@ -52,9 +56,13 @@ class EventConsumer:
                 "0",  # start reading from the beginning (or use "$" for new only)
                 mkstream=True,
             )
-        except Exception:
-            # Group already exists — safe to ignore
-            pass
+        except ResponseError as exc:
+            # Redis uses BUSYGROUP for the idempotent already-exists case.
+            if "BUSYGROUP" in str(exc).upper():
+                return
+            raise classify_redis_error(exc) from exc
+        except Exception as exc:
+            raise classify_redis_error(exc) from exc
 
     async def read_pending(self) -> list[dict]:
         """Read pending messages for this consumer in this group.
@@ -76,13 +84,16 @@ class EventConsumer:
         # Get detailed pending entries: XPENDING stream group [start end count consumer]
         # Use "0" + "+" to get all pending entries
         # Signature: xpending_range(stream, group, min_id, max_id, count)
-        pending_entries = await self.redis_client.xpending_range(
-            stream_key,
-            self.group_name,
-            "0",
-            "+",
-            100,
-        )
+        try:
+            pending_entries = await self.redis_client.xpending_range(
+                stream_key,
+                self.group_name,
+                "0",
+                "+",
+                100,
+            )
+        except Exception as exc:
+            raise classify_redis_error(exc) from exc
 
         # Consumer lag monitoring: warn if pending entries exceed threshold
         pending_count = len(pending_entries)
@@ -127,16 +138,15 @@ class EventConsumer:
                         "message_id": cid if isinstance(cid, bytes) else cid.encode(),
                         "data": str_fields,
                     })
-        except Exception:
+        except Exception as exc:
             # XCLAIM may fail if messages are already acked or deleted.
-            # Log for observability but don't crash — the consumer loop
-            # will retry on the next iteration.
             logger.warning(
                 "batch_xclaim_failed",
                 event_type=self.event_type,
                 consumer_name=self.consumer_name,
                 message_count=len(msg_ids),
             )
+            raise classify_redis_error(exc) from exc
         return result
 
     async def read_new(self, block: int = 5000) -> list[dict]:
@@ -160,13 +170,16 @@ class EventConsumer:
         await self._ensure_group_exists()
         stream_key = self._stream_key()
 
-        result = await self.redis_client.xreadgroup(
-            self.group_name,
-            self.consumer_name,
-            {stream_key: ">"},
-            count=10,
-            block=block,
-        )
+        try:
+            result = await self.redis_client.xreadgroup(
+                self.group_name,
+                self.consumer_name,
+                {stream_key: ">"},
+                count=10,
+                block=block,
+            )
+        except Exception as exc:
+            raise classify_redis_error(exc) from exc
 
         if not result:
             return []
@@ -221,7 +234,10 @@ class EventConsumer:
         stream_key = self._stream_key()
         if isinstance(message_id, str):
             message_id = message_id.encode()
-        await self.redis_client.xack(stream_key, self.group_name, message_id)
+        try:
+            await self.redis_client.xack(stream_key, self.group_name, message_id)
+        except Exception as exc:
+            raise classify_redis_error(exc) from exc
 
     async def delete(self, message_id: str | bytes) -> None:
         """Delete a message from the stream entirely.

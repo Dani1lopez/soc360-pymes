@@ -4,6 +4,8 @@ T4.1: After credentials are validated and tokens are created,
 the login function MUST publish an auth.login event without blocking
 the login response if event publishing fails.
 """
+
+# fmt: off
 from __future__ import annotations
 
 import pytest
@@ -215,6 +217,8 @@ class TestAuthLoginEventPublish:
         mock_warning.assert_called_once_with(
             "event_publish_failed", event_type="auth.login", reason="redis_error"
         )
+        mock_event_bus.publish.assert_awaited_once()
+        assert "Connection refused" not in repr(mock_warning.call_args)
 
     @pytest.mark.asyncio
     async def test_login_blocked_if_credentials_invalid(self):
@@ -699,7 +703,6 @@ class TestUserAgentSanitizationInEvents:
     async def test_missing_ua_sends_none(self):
         """When User-Agent header is absent, event receives None."""
         from app.modules.auth import service
-        from app.event_schemas import AuthLoginEvent
         from app.event_bus import EventBus
 
         mock_user = MagicMock()

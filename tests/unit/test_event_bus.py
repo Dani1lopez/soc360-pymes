@@ -1,11 +1,15 @@
 """Tests for event_bus.py (T2.2) — EventBus and EventConsumer classes."""
+
+# fmt: off
 from __future__ import annotations
 
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
 from fakeredis.aioredis import FakeRedis
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 
 class TestEventBusStreamName:
@@ -267,7 +271,7 @@ class TestEventConsumerReadPending:
         makes ONE XCLAIM call with all message_ids instead of N individual XCLAIM calls.
         This is a performance optimization that reduces Redis round-trips from O(n) to O(1).
         """
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock, patch
         from app.event_bus import EventConsumer
 
         # Create mock Redis client
@@ -464,3 +468,55 @@ class TestEventBusGetConsumer:
         assert consumer.consumer_name == "worker-1"
         assert consumer.group_name == settings.EVENT_CONSUMER_GROUP
         await client.aclose()
+
+
+class TestEventBusRedisOutageBoundaries:
+    """Redis Streams transport failures are exposed as typed outages."""
+    @pytest.mark.asyncio
+    async def test_publish_classifies_xadd_transport_failure(self):
+        from app.core.exceptions import RedisOutageError
+        from app.event_bus import EventBus
+        from app.event_schemas import AuthLoginEvent
+        class BrokenRedis(FakeRedis):
+            async def xadd(self, *args, **kwargs):  # type: ignore[override]
+                raise RedisConnectionError("raw-redis-transport-detail")
+        client = BrokenRedis()
+        try:
+            event = AuthLoginEvent(
+                event_id=uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                user_id="user-outage",
+                email_hash="a" * 32,
+            )
+            with pytest.raises(RedisOutageError):
+                await EventBus(client).publish(event)
+        finally:
+            await client.aclose()
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("operation", ["group", "pending", "new", "ack"])
+    async def test_consumer_boundaries_classify_transport_failure(self, operation: str):
+        from app.core.exceptions import RedisOutageError
+        from app.event_bus import EventConsumer
+        redis = AsyncMock()
+        if operation == "group":
+            redis.xgroup_create.side_effect = RedisConnectionError("connection refused")
+        else:
+            redis.xgroup_create.return_value = None
+            method_name = {
+                "pending": "xpending_range",
+                "new": "xreadgroup",
+                "ack": "xack",
+            }[operation]
+            getattr(redis, method_name).side_effect = RedisConnectionError(
+                "connection refused"
+            )
+        consumer = EventConsumer(redis, "auth.login", "worker-1", "group-1")
+        with pytest.raises(RedisOutageError):
+            if operation == "group":
+                await consumer._ensure_group_exists()
+            elif operation == "pending":
+                await consumer.read_pending()
+            elif operation == "new":
+                await consumer.read_new(block=1)
+            else:
+                await consumer.ack("1-0")

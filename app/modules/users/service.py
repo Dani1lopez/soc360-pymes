@@ -137,6 +137,9 @@ async def update_user(
     not via `get_user_internal` — the Depends guarantees the
     cross-tenant pre-check ran. A hand-constructed User row would
     bypass the check.
+
+    Contract: DB rolls back; Redis partial denylist retained; active_jtis kept;
+    retry is idempotent and safe.
     """
     if not current_user.is_superadmin and target.tenant_id != current_user.tenant_id:
         raise UserError("Permisos insuficientes", status_code=403)
@@ -196,6 +199,9 @@ async def deactivate_user(
 
     NOTE: The router MUST obtain `target` via the cross-tenant Depends,
     not via `get_user_internal`.
+
+    Contract: DB rolls back; Redis partial denylist retained; active_jtis kept;
+    retry is idempotent and safe.
     """
     if not current_user.is_superadmin and target.tenant_id != current_user.tenant_id:
         raise UserError("Permisos insuficientes", status_code=403)

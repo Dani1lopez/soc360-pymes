@@ -548,7 +548,11 @@ async def change_password(
     db: AsyncSession,
     redis: Redis,
 ) -> None:
-    """Cambia la contraseña y revoca todas las sesiones activas"""
+    """Change the password and revoke all active sessions.
+
+    Contract: DB rolls back; Redis partial denylist retained; active_jtis kept;
+    retry is idempotent and safe.
+    """
     if not await check_redis_healthy(redis):
         raise ServiceUnavailableError()
     user, _tenant = await _get_active_user_by_id(user_id, db)

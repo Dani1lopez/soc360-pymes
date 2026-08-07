@@ -31,7 +31,7 @@ from app.modules.auth.schemas import TokenResponse
 from sqlalchemy.exc import DBAPIError
 
 from app.core.database import set_tenant_context
-from app.core.exceptions import AuthError, ServiceUnavailableError
+from app.core.exceptions import AuthError, RedisOutageError, ServiceUnavailableError
 from app.core.pii import hash_email, mask_ip, sanitize_user_agent
 from app.core.redis import check_redis_healthy
 from app.event_schemas import AuthLoginEvent, AuthSuperadminLoginEvent
@@ -409,22 +409,28 @@ async def login(
     try:
         event_bus = await get_event_bus()
         if user.is_superadmin:
-            await event_bus.publish(AuthSuperadminLoginEvent(
+            event = AuthSuperadminLoginEvent(
                 event_id=uuid4(),
                 user_id=str(user.id),
                 email_hash=hash_email(user.email),
                 ip_prefix=mask_ip(request_ip),
                 user_agent=safe_user_agent,
-            ))
+            )
         else:
-            await event_bus.publish(AuthLoginEvent(
+            event = AuthLoginEvent(
                 event_id=uuid4(),
                 tenant_id=user.tenant_id,
                 user_id=str(user.id),
                 email_hash=hash_email(user.email),
                 ip_prefix=mask_ip(request_ip),
                 user_agent=safe_user_agent,
-            ))
+            )
+        try:
+            await event_bus.publish(event)
+        except RedisOutageError:
+            await event_bus.publish(event)
+    except RedisOutageError:
+        logger.warning("event_publish_failed", event_type="auth.login", reason="redis_error")
     except RedisError:
         logger.warning("event_publish_failed", event_type="auth.login", reason="redis_error")
     except Exception:
@@ -548,7 +554,11 @@ async def change_password(
     db: AsyncSession,
     redis: Redis,
 ) -> None:
-    """Cambia la contraseña y revoca todas las sesiones activas"""
+    """Change the password and revoke all active sessions.
+
+    Contract: DB rolls back; Redis partial denylist retained; active_jtis kept;
+    retry is idempotent and safe.
+    """
     if not await check_redis_healthy(redis):
         raise ServiceUnavailableError()
     user, _tenant = await _get_active_user_by_id(user_id, db)

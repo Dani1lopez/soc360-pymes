@@ -103,6 +103,8 @@ async def login(
             redis=redis,
         )
     except AppError as exc:
+        if exc.status_code >= 500:
+            raise
         # Record failure on auth error (wrong password, user not found, etc.)
         if settings.RATE_LIMIT_ENABLED:
             try:
@@ -172,6 +174,8 @@ async def refresh(
             request_ip=ip,
         )
     except AppError as exc:
+        if exc.status_code >= 500:
+            raise
         # Record failure on refresh error
         if settings.RATE_LIMIT_ENABLED:
             try:
@@ -228,6 +232,8 @@ async def logout(
             redis=redis,
         )
     except AppError as exc:
+        if exc.status_code >= 500:
+            raise
         if settings.RATE_LIMIT_ENABLED:
             try:
                 await rate_limiter.record_failure(ip, f"logout:{current_user.id}")
@@ -276,6 +282,8 @@ async def change_password(
             redis=redis,
         )
     except AppError as exc:
+        if exc.status_code >= 500:
+            raise
         if settings.RATE_LIMIT_ENABLED:
             try:
                 await rate_limiter.record_failure(ip, f"change-password:{current_user.id}")

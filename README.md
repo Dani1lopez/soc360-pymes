@@ -6,7 +6,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115.6-009688.svg)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D.svg)
-![Tests](https://img.shields.io/badge/tests-1091-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-1151-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 ![Ruff](https://img.shields.io/badge/linter-ruff-261C15.svg)
@@ -28,8 +28,8 @@ Small and medium-sized businesses (PyMEs) face the same cyber threats as enterpr
 | Phase | Status | Description |
 |-------|--------|-------------|
 | **F0** | ✅ Complete | Architecture & Data Model — 23 ADRs, 13 DB tables, security model |
-| **F1** | ✅ Complete | Backend Base — Auth, tenants, users, RLS, events, LLM — 1091 tests passing |
-| **F2** | 🔄 In Progress | Vulnerability Agent — Nmap executor, LangGraph agent, asset/vuln CRUD, dashboard, PDF reports |
+| **F1** | ✅ Complete | Backend Base — Auth, tenants, users, RLS, events, LLM, fail-closed Redis, metrics, outage handling — 1151 tests passing |
+| **F2** | 🔄 In Progress | Vulnerability stack — vertical CRUD slices (Assets → Scans → Vulnerabilities → Reports), then Nmap/Celery/Dashboard/LLM agents (PRD v2) |
 | **F3** | 📋 Planned | Real-time — WebSockets, log ingestion, anomaly detection |
 | **F4** | 📋 Planned | Frontend — React 18 + TypeScript + Vite (MVP June 2026) |
 | **F5** | 📋 Planned | Extra Agents — Compliance, Intelligence |
@@ -42,11 +42,13 @@ Small and medium-sized businesses (PyMEs) face the same cyber threats as enterpr
 
 | Feature | Description |
 |---------|-------------|
-| **Authentication & Security** | JWT access (15min) + refresh rotation (7d, HttpOnly cookie). JTI denylist via Redis. Login lockout (10 attempts / 15min). Rate limiting. CSRF protection. Security headers. PII sanitization. |
-| **Multi-Tenant (RLS)** | Row-Level Security via PostgreSQL `SET LOCAL`. Transaction-scoped tenant context. 4 plans: Free (10 assets), Starter (25), Pro (100), Enterprise (500). |
+| **Authentication & Security** | JWT access (15min) + refresh rotation (7d, HttpOnly cookie). JTI denylist via Redis. Login lockout (10 attempts / 15min). Rate limiting. CSRF protection. Security headers. PII sanitization. Fail-closed on Redis outages (auth, revocation, DLQ). |
+| **Multi-Tenant (RLS)** | Row-Level Security via PostgreSQL `SET LOCAL`. Transaction-scoped tenant context. 4 plans: Free (10 assets), Starter (25), Pro (100), Enterprise (500). Composite FKs enforce tenant-scoped references (scans → assets). |
 | **RBAC** | Hierarchical roles: viewer < analyst/ingestor < admin < superadmin. CHECK constraints enforce tenant rules. Self-protection prevents privilege escalation. |
-| **Event Bus** | Redis Streams with typed Pydantic events, consumer groups, XACK, Dead Letter Queue, auto-reconnect, and lag monitoring. |
-| **LLM Abstraction** | Provider Protocol with 8 providers. Groq (llama-3.3-70b) default. Singleton caching. `llm_safe_complete()` never raises. Credential redaction. |
+| **Event Bus** | Redis Streams with typed Pydantic events, consumer groups, XACK, Dead Letter Queue with durable ack, auto-reconnect, blocking reads (XREADGROUP), and lag monitoring. In-process async consumer — no external worker dependency. |
+| **LLM Abstraction** | Provider Protocol with 9 providers (Groq, OpenAI, Anthropic, Gemini, Mistral, Cohere, Together, HuggingFace, Ollama). Groq (llama-3.3-70b) default. Singleton caching. `llm_safe_complete()` never raises. Credential redaction. Prompt-injection sanitization for scan data. |
+| **Observability** | Multiprocess-safe Prometheus registry (`prometheus-client`). Token-authenticated `/metrics` endpoint. `child_exit` gunicorn hook for worker cleanup. Typed outage catalog (25 FlowIds) mapping failures to sanitized 503 responses with `Retry-After`. |
+| **Resilience** | Distributed locks (Redis) with retry/backoff and outage isolation. Startup Redis retry. DB index auto-recovery via `CREATE INDEX CONCURRENTLY`. Toxiproxy fault-injection test harness (revocation, scan-lock, rate-limit faults). |
 
 ---
 
@@ -54,16 +56,17 @@ Small and medium-sized businesses (PyMEs) face the same cyber threats as enterpr
 
 ```mermaid
 graph TB
-    Client["Client / Frontend"] --> API["FastAPI App<br/>(Uvicorn)"]
+    Client["Client / Frontend"] --> API["FastAPI App<br/>(Uvicorn / Gunicorn)"]
     API --> PG[("PostgreSQL 16<br/>(RLS per Tenant)")]
-    API --> Redis[("Redis 7<br/>Denylist · Cache · Events")]
-    Redis --> Worker["Celery Worker<br/>(Nmap + LLM)"]
-    Worker --> Target["Vulnerable Target<br/>(Isolated Docker Net)"]
-    Worker --> PG
-    Worker --> LLM["LLM Provider<br/>(Groq · OpenAI · etc)"]
+    API --> Redis[("Redis 7<br/>Denylist · Cache · Events · Locks")]
+    API --> Consumer["In-process Event Consumer<br/>(asyncio · XREADGROUP)"]
+    Consumer --> Redis
+    Consumer --> PG
+    API --> LLM["LLM Provider<br/>(Groq · OpenAI · etc)"]
+    Scraper["Prometheus Scraper"] -->|token auth| API
 ```
 
-The platform follows a modular monolith pattern. FastAPI handles HTTP traffic, PostgreSQL enforces tenant isolation at the row level, and Redis serves as the central nervous system for session denylisting, caching, and asynchronous event streaming. Celery workers offload heavy tasks such as Nmap scanning and LLM enrichment to isolated Docker networks.
+The platform follows a modular monolith pattern. FastAPI handles HTTP traffic, PostgreSQL enforces tenant isolation at the row level, and Redis serves as the central nervous system for session denylisting, caching, distributed locks, and asynchronous event streaming. Events are consumed by an in-process asyncio task with blocking reads — no external Celery worker is required today (Celery is planned for F2 slices 5–6, alongside the Nmap executor).
 
 ---
 
@@ -78,7 +81,9 @@ The platform follows a modular monolith pattern. FastAPI handles HTTP traffic, P
 | PostgreSQL | 16 (Alpine) |
 | Redis | 7 (Alpine, client 5.2.1) |
 | Alembic | 1.14.0 |
-| Celery | 5.4.0 |
+| Celery | 5.4.0 (planned for F2 slices 5–6) |
+| Uvicorn | 0.32.1 |
+| Gunicorn | — (prod, `gunicorn_conf.py`) |
 | Pydantic | 2.10.4 |
 | pydantic-settings | 2.7.0 |
 | PyJWT[crypto] | >=2.8,<3 |
@@ -101,22 +106,28 @@ The platform follows a modular monolith pattern. FastAPI handles HTTP traffic, P
 ```
 soc360-pymes/
 ├── app/
-│   ├── main.py                 # FastAPI entrypoint, lifespan, routers
-│   ├── dependencies.py         # FastAPI deps (get_db, get_current_user)
-│   ├── event_bus.py            # Redis Streams EventBus + DLQ
+│   ├── main.py                 # FastAPI entrypoint, lifespan, routers, /metrics, /health
+│   ├── dependencies/           # FastAPI deps (get_db, get_current_user, locks, LLM, cross-tenant)
+│   ├── event_bus/              # Redis Streams EventBus + consumer + DLQ
 │   ├── event_schemas.py        # Pydantic event schemas
+│   ├── agents/                 # F2 agents (planned)
 │   ├── core/                   # Shared layer
 │   │   ├── config.py           # pydantic-settings
 │   │   ├── database.py         # SQLAlchemy async engine, RLS helper
 │   │   ├── security.py         # JWT, bcrypt, denylist, JTI, roles
-│   │   ├── redis.py            # Redis pool + health check
+│   │   ├── redis.py            # Redis pool + health check + startup retry
 │   │   ├── middleware.py       # SecurityHeaders + HTTPS redirect
-│   │   ├── exceptions.py       # Error hierarchy
+│   │   ├── exceptions.py       # Error hierarchy (RedisOutageError, TemporaryUnavailableError)
 │   │   ├── logging.py          # structlog + redaction
-│   │   ├── llm.py              # Multi-provider LLM abstraction
+│   │   ├── llm/                # Multi-provider LLM abstraction (config, factory, providers)
 │   │   ├── contracts.py        # TypedDict contracts
 │   │   ├── pii.py              # PII sanitization
-│   │   └── types.py            # Custom types
+│   │   ├── types.py            # Custom types
+│   │   ├── metrics.py          # Multiprocess Prometheus registry
+│   │   ├── metrics_auth.py     # /metrics token auth
+│   │   ├── outage.py           # Typed outage catalog (25 FlowIds)
+│   │   ├── rate_limit.py       # Redis rate limiting
+│   │   └── dist_lock.py        # Distributed locks
 │   └── modules/                # Domain modules
 │       ├── auth/               # ✅ F1 — 984 loc
 │       ├── tenants/            # ✅ F1 — 532 loc
@@ -125,25 +136,28 @@ soc360-pymes/
 │       ├── scans/              # ✅ F2 — models (82 loc)
 │       ├── vulnerabilities/    # ✅ F2 — models (80 loc)
 │       └── reports/            # ✅ F2 — models (80 loc)
-├── tests/                      # 22,738 lines / 1,091 tests
+├── tests/                      # 1,151 tests
 │   ├── conftest.py             # Shared fixtures
 │   ├── unit/                   # Fakeredis + mocks
-│   ├── integration/            # Real DB + Alembic
+│   ├── integration/            # Real DB + Alembic + Toxiproxy fault injection
 │   ├── api/                    # httpx AsyncClient
-│   └── modules/                # Module-level tests
-├── migrations/                 # 3 Alembic migrations
+│   ├── modules/                # Module-level tests
+│   ├── sdd/                    # RLS / index / migration constraint tests
+│   └── helpers/                # broken_redis, toxiproxy harnesses
+├── migrations/                 # 7 Alembic migrations
 ├── docker/                     # Docker volumes
 ├── scripts/
 │   └── seed_db.py              # Idempotent seed
-├── docs/
-│   └── llm-abstraction.md      # LLM layer docs
 ├── docker-compose.yml
+├── Dockerfile
+├── entrypoint.sh
+├── gunicorn_conf.py
 ├── pytest.ini
 ├── .env.example
 └── AGENTS.md
 ```
 
-> **Note**: Assets, Scans, and Vulnerabilities modules have models implemented (F2 in progress). Empty scaffold modules (dashboard, alerts, anomalies, ingest) have been removed.
+> **Note**: Assets, Scans, and Vulnerabilities modules have models implemented (F2 in progress — CRUD slices per PRD v2). Empty scaffold modules (dashboard, alerts, anomalies, ingest) have been removed.
 
 ---
 
@@ -174,7 +188,7 @@ uv run alembic upgrade head
 # 6. Seed database with demo data
 uv run python scripts/seed_db.py
 
-# 7. Run tests (1,091 tests across 3 layers)
+# 7. Run tests (1,151 tests across 5 layers)
 uv run pytest -v
 
 # 8. Start dev server
@@ -188,22 +202,24 @@ curl http://localhost:8000/health
 
 ## Development Workflow
 
-1. **Branch**: Create feature branches from `develop`.
+1. **Branch**: Create feature branches from `main`.
 2. **Commits**: Use [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`).
-3. **Pull Requests**: Open PRs against `develop`. Ensure tests pass and `ruff` / `mypy` are clean.
-4. **Reviews**: All PRs require at least one review before merge.
+3. **Pull Requests**: Open PRs against `main`. CI (GitHub Actions) runs tests, ruff, mypy, and lockfile freshness checks.
+4. **Merge**: PRs are squash-merged to keep `main` history linear and readable.
 
 ---
 
 ## Testing & Quality
 
-The test suite is organized in three layers:
+The test suite is organized in five layers:
 
 | Layer | Scope | Command |
 |-------|-------|---------|
 | **Unit** | Fakeredis + mocks, no DB | `pytest tests/unit -v` |
-| **Integration** | Real PostgreSQL + Alembic migrations | `pytest tests/integration -v` |
-| **API** | Full HTTP cycle via `httpx.AsyncClient` | `pytest tests/api -v` |
+| **Integration** | Real PostgreSQL + Alembic migrations + Toxiproxy fault injection | `pytest tests/integration -v` |
+| **API** | Full HTTP cycle via `httpx.AsyncClient` | `pytest tests/api tests/test_auth.py tests/test_tenants.py tests/test_users.py -v` |
+| **Modules** | Module-scoped behavior (auth session caps, refresh-token races) | `pytest tests/modules -v` |
+| **SDD** | RLS cross-tenant, index health, migration constraints | `pytest tests/sdd -v` |
 
 Additional quality commands:
 
@@ -221,14 +237,15 @@ uv run pytest -v
 
 Key testing patterns:
 - Concurrency tests for advisory locks and parallel sessions.
-- Fail-closed tests for Redis-down scenarios.
+- Fail-closed tests for Redis-down scenarios (auth, revocation, locks, DLQ).
+- Toxiproxy fault-injection matrix: revocation events, scan locks, rate-limit, DB statement timeout.
 - Deterministic seeding with fixed UUIDs, 2 tenants, and 5 users.
 
 ---
 
 ## API Overview
 
-The following endpoints are available in F1:
+The following endpoints are currently available:
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -247,6 +264,9 @@ The following endpoints are available in F1:
 | `GET` | `/api/v1/tenants/{id}` | Get tenant by ID |
 | `PATCH` | `/api/v1/tenants/{id}` | Update tenant |
 | `DELETE` | `/api/v1/tenants/{id}` | Deactivate tenant |
+| `GET` | `/health` | Liveness probe (status + version) |
+| `GET` | `/health/db/indexes` | Invalid DB index probe (k8s target) |
+| `GET` | `/metrics` | Prometheus scrape endpoint (token-authenticated, not in schema) |
 
 Full OpenAPI documentation is available at `/api/docs` when the server is running (disabled in production).
 
@@ -275,18 +295,16 @@ sequenceDiagram
 
 ---
 
-## F2 Pipeline (Planned)
+## F2 Pipeline (In Progress — PRD v2)
 
 ```mermaid
 graph LR
-    A["Asset Scan Triggered"] --> B["Nmap Executor<br/>(dockerized, no shell)"]
-    B --> C["XML Parser<br/>(defusedxml)"]
-    C --> D["AI Enrichment<br/>(8 tasks via LLM)"]
-    D --> E["Dedup<br/>(SHA-256 fingerprint)"]
-    E --> F["Persist<br/>(RLS-enforced)"]
+    A["Slice 0: Heal F1<br/>(indexes, last_login_at)"] --> B["Slice 1-4: Vertical CRUD<br/>Assets → Scans → Vulnerabilities → Reports"]
+    B --> C["Slice 5-6: Infra<br/>Nmap executor · Celery + Beat"]
+    C --> D["Slice 7-9: Agents<br/>Dashboard · LLM enrichment · LangGraph"]
 ```
 
-The F2 pipeline will automate vulnerability discovery: an asset scan triggers a containerized Nmap execution, results are parsed safely, enriched by an LLM across 8 parallel tasks, deduplicated via SHA-256 fingerprints, and finally persisted under Row-Level Security.
+F2 follows [PRD v2](openspec/changes/prd-v2-vertical-f2/) ("build vertical, clean first"). Each module (Assets, Scans, Vulnerabilities, Reports) gets Pydantic schemas, async tenant-scoped services, RBAC routers, and tests before moving to infrastructure (safe Nmap execution, Celery workers) and agents (dashboard metrics, 8-task LLM enrichment pipeline, LangGraph agent pipeline). Models and migrations for all four modules are already implemented with composite FKs for tenant isolation.
 
 ---
 
@@ -295,15 +313,15 @@ The F2 pipeline will automate vulnerability discovery: an asset scan triggers a 
 | Phase | Focus | Status |
 |-------|-------|--------|
 | F0 | Architecture & Data Model | ✅ Complete |
-| F1 | Backend Base (Auth, Tenants, Users, RLS, Events, LLM) | ✅ Complete |
-| F2 | Vulnerability Agent (Nmap, LangGraph, Asset/Vuln CRUD, Dashboard, PDF) | 🔄 In Progress |
+| F1 | Backend Base (Auth, Tenants, Users, RLS, Events, LLM, Metrics, Outages) | ✅ Complete |
+| F2 | Vulnerability stack — vertical CRUD + infra/agents (PRD v2) | 🔄 In Progress |
 | F3 | Real-time (WebSockets, Ingestion, Anomalies) | 📋 Planned |
 | F4 | Frontend (React 18 + TS + Vite) | 📋 Planned |
 | F5 | Extra Agents (Compliance, Intelligence) | 📋 Planned |
 | F6 | Advanced (Email, PDF reports, Redis TLS) | 📋 Planned |
-| F7 | QA + Prod (E2E, CI/CD, Deploy) | 📋 Planned |
+| F7 | QA + Prod (E2E, CI/CD polish, Deploy) | 📋 Planned |
 
-> Full product requirements and phased delivery plan are documented in the [PRD v1 MVP Junio](openspec/changes/prd-v1-mvp-junio/).
+> The active delivery plan is [PRD v2 — F2 Vertical Build](openspec/changes/prd-v2-vertical-f2/), which supersedes the archived [PRD v1 MVP June](openspec/changes/archive/2026-06-28-prd-v1-mvp-junio/).
 
 ---
 

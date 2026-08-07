@@ -68,6 +68,13 @@ agents/cache/
 .pi/
 .claude/
 graphify-out/
+.windsurf/
+.gga
+.opencode/
+
+# Notas de sesión local / handoffs
+docs/notes/
+openspec/project/session-handoff-next-steps.md
 
 # Skills de agentes locales — no subir al remoto
 skills/

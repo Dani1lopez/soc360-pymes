@@ -14,6 +14,48 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import uuid4
 
 
+async def _login_with_publish_side_effect(publish_side_effect):
+    from app.modules.auth import service
+    from app.event_bus import EventBus
+
+    mock_user = MagicMock()
+    mock_user.id = uuid4()
+    mock_user.email = "publish-retry@test.com"
+    mock_user.hashed_password = "hashed_password"
+    mock_user.tenant_id = uuid4()
+    mock_user.role = "admin"
+    mock_user.is_superadmin = False
+    mock_user.is_active = True
+    mock_tenant = MagicMock()
+    mock_tenant.is_active = True
+    mock_db = MagicMock(spec=AsyncSession)
+    mock_db.execute = AsyncMock()
+    mock_redis = AsyncMock()
+    mock_event_bus = AsyncMock(spec=EventBus)
+    mock_event_bus.publish.side_effect = publish_side_effect
+
+    with patch.multiple(
+        service,
+        _check_account_lockout=AsyncMock(),
+        _get_active_user=AsyncMock(return_value=(mock_user, mock_tenant)),
+        verify_password_async=AsyncMock(return_value=True),
+        _check_tenant_active=AsyncMock(),
+        _clear_login_attempts=AsyncMock(),
+        create_access_token=MagicMock(return_value=("access_token", "jti-retry")),
+        _create_refresh_token=AsyncMock(return_value="refresh_token"),
+        get_event_bus=AsyncMock(return_value=mock_event_bus),
+    ):
+        result = await service.login(
+            email="publish-retry@test.com",
+            password="password",
+            db=mock_db,
+            redis=mock_redis,
+            request_ip="10.0.0.1",
+        )
+
+    return result, mock_event_bus
+
+
 class TestAuthLoginEventPublish:
     """Test that auth.login event is published on successful login."""
 
@@ -432,6 +474,43 @@ class TestLoginEventErrorHandling:
     RedisError → logger.warning (swallowed).
     Programming errors → logger.critical (NOT re-raised).
     """
+
+    @pytest.mark.asyncio
+    async def test_typed_outage_retries_once_then_warns_and_returns_tokens(self):
+        from app.core.exceptions import RedisOutageError
+        from app.modules.auth import service
+
+        with patch.object(service.logger, "warning") as mock_warning:
+            with patch.object(service.logger, "critical") as mock_critical:
+                result, mock_event_bus = await _login_with_publish_side_effect(
+                    [
+                        RedisOutageError("first outage"),
+                        RedisOutageError("final outage"),
+                    ]
+                )
+
+        token_response, refresh_token = result
+        assert token_response.access_token == "access_token"
+        assert refresh_token == "refresh_token"
+        assert mock_event_bus.publish.await_count == 2
+        mock_warning.assert_called_once_with(
+            "event_publish_failed", event_type="auth.login", reason="redis_error"
+        )
+        mock_critical.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_typed_outage_retry_succeeds_without_failure_warning(self):
+        from app.core.exceptions import RedisOutageError
+        from app.modules.auth import service
+
+        with patch.object(service.logger, "warning") as mock_warning:
+            result, mock_event_bus = await _login_with_publish_side_effect(
+                [RedisOutageError("transient outage"), None]
+            )
+
+        assert result[0].access_token == "access_token"
+        assert mock_event_bus.publish.await_count == 2
+        mock_warning.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_redis_error_during_publish_logs_warning(self):

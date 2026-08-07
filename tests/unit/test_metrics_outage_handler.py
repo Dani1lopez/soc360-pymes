@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.exceptions import (
     RedisOutageError,
     RedisUnreachableError,
+    ServiceUnavailableError,
     TemporaryUnavailableError,
 )
 from app.main import create_app
@@ -120,6 +121,28 @@ class TestRedisOutageHandler:
         assert "connection refused" not in response.text
 
     @pytest.mark.asyncio
+    async def test_service_unavailable_translates_to_sanitized_503_with_retry_after(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "REDIS_OUTAGE_RETRY_AFTER_SECONDS", 42)
+        app = create_app()
+
+        @app.get("/_test/raise-service-unavailable", include_in_schema=False)
+        async def _raise_service_unavailable():
+            raise ServiceUnavailableError("redis health check failed")
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/_test/raise-service-unavailable")
+
+        assert response.status_code == 503
+        assert response.headers["Retry-After"] == "42"
+        assert response.json() == {"detail": "service temporarily unavailable"}
+        assert "redis health check failed" not in response.text
+        assert "ServiceUnavailableError" not in response.text
+
+    @pytest.mark.asyncio
     async def test_temporary_unavailable_error_uses_lock_handler(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -152,3 +175,9 @@ class TestRedisOutageHandler:
             RedisOutageError in app.exception_handlers
         ), "RedisOutageError handler MUST be registered"
         assert callable(app.exception_handlers[RedisOutageError])
+
+    def test_service_unavailable_handler_is_registered(self) -> None:
+        app = create_app()
+
+        assert ServiceUnavailableError in app.exception_handlers
+        assert callable(app.exception_handlers[ServiceUnavailableError])

@@ -11,6 +11,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db, set_tenant_context
+from app.core.exceptions import ServiceUnavailableError
 from app.core.logging import get_logger
 from app.core.redis import check_redis_healthy, get_redis
 from app.core.security import decode_access_token, has_minimum_role, is_token_revoked
@@ -59,10 +60,7 @@ async def get_current_user(
     jti = payload.get("jti")
     if not await check_redis_healthy(redis):
         logger.error("redis_unhealthy", reason="auth_dependency")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Servicio temporalmente no disponible",
-        )
+        raise ServiceUnavailableError()
     if not jti or await is_token_revoked(jti, redis):
         logger.warning("auth_failed", reason="revoked_token", jti=jti)
         raise HTTPException(

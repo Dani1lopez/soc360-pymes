@@ -156,7 +156,7 @@ async def test_refresh_outage_fails_closed(
     app_via_proxy: AsyncClient,
     toxiproxy_client: ToxiproxyTransportController,
 ):
-    """Refresh fails closed through the current service-health 503 contract."""
+    """Refresh fails closed through the sanitized global outage boundary."""
     await _login(app_via_proxy)
 
     async with _connection_drop(toxiproxy_client):
@@ -165,8 +165,7 @@ async def test_refresh_outage_fails_closed(
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
 
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Servicio temporalmente no disponible"}
+    _assert_lock_outage(response)
     assert "access_token" not in response.json()
     assert "set-cookie" not in response.headers
 
@@ -179,12 +178,12 @@ async def test_refresh_outage_fails_closed(
 
 
 @pytest.mark.asyncio
-async def test_current_user_token_outage_direct_503(
+async def test_current_user_token_outage_sanitized_503(
     seed_data,
     app_via_proxy: AsyncClient,
     toxiproxy_client: ToxiproxyTransportController,
 ):
-    """Current-user token lookup keeps its direct HTTP 503 boundary."""
+    """Current-user token lookup outage surfaces the sanitized global 503 boundary."""
     access_token, _ = await _login(app_via_proxy)
     headers = {"Authorization": f"Bearer {access_token}"}
 
@@ -194,8 +193,7 @@ async def test_current_user_token_outage_direct_503(
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
 
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Servicio temporalmente no disponible"}
+    _assert_lock_outage(response)
 
     recovered = await asyncio.wait_for(
         app_via_proxy.get("/api/v1/users/me", headers=headers),

@@ -11,7 +11,7 @@ from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.exceptions import TenantError
+from app.core.exceptions import PartialFailureError, TenantError
 from app.core.security import revoke_all_user_access_tokens
 from app.modules.auth.service import _revoke_all_user_tokens_for_tenant
 from app.modules.tenants.models import Tenant
@@ -24,6 +24,37 @@ _PLAN_MAX_ASSETS: dict[str, int] = {
     "pro": 100,
     "enterprise": 500,
 }
+
+
+async def _revoke_user_tokens_deterministically(
+    user_ids: list[str],
+    redis: Redis,
+    ttl_seconds: int,
+) -> None:
+    """Revoke all user sessions and aggregate failures in input order."""
+    results = await asyncio.gather(
+        *(
+            revoke_all_user_access_tokens(
+                user_id=user_id,
+                redis=redis,
+                ttl_seconds=ttl_seconds,
+            )
+            for user_id in user_ids
+        ),
+        return_exceptions=True,
+    )
+    outcomes = [
+        (
+            f"{user_id}: {type(result).__name__} ({result})"
+            if isinstance(result, BaseException)
+            else f"{user_id}: success"
+        )
+        for user_id, result in zip(user_ids, results)
+    ]
+    if any(isinstance(result, BaseException) for result in results):
+        raise PartialFailureError(
+            "Tenant token revocation partially failed: " + "; ".join(outcomes)
+        )
 
 
 def _generate_slug(name: str) -> str:
@@ -191,15 +222,10 @@ async def update_tenant(
         user_ids = (
             await db.scalars(select(User.id).where(User.tenant_id == tenant_id))
         ).all()
-        await asyncio.gather(
-            *[
-                revoke_all_user_access_tokens(
-                    user_id=str(uid),
-                    redis=redis,
-                    ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-                )
-                for uid in user_ids
-            ]
+        await _revoke_user_tokens_deterministically(
+            user_ids=[str(uid) for uid in user_ids],
+            redis=redis,
+            ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         )
 
     await db.refresh(tenant)
@@ -232,15 +258,10 @@ async def deactivate_tenant(
     user_ids = (
         await db.scalars(select(User.id).where(User.tenant_id == tenant_id))
     ).all()
-    await asyncio.gather(
-        *[
-            revoke_all_user_access_tokens(
-                user_id=str(uid),
-                redis=redis,
-                ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            )
-            for uid in user_ids
-        ]
+    await _revoke_user_tokens_deterministically(
+        user_ids=[str(uid) for uid in user_ids],
+        redis=redis,
+        ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
     await db.flush()

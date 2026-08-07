@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import pytest
-from fastapi import HTTPException
 
 
 class TestRedisFailClosed:
@@ -111,8 +110,9 @@ class TestRedisFailClosed:
 
     @pytest.mark.asyncio
     async def test_get_current_user_returns_503_when_redis_down(self):
-        """get_current_user() MUST raise HTTPException(503) when Redis is unhealthy."""
+        """get_current_user() MUST raise ServiceUnavailableError when Redis is unhealthy."""
         from app.core.security import create_access_token
+        from app.core.exceptions import ServiceUnavailableError
 
         token, _ = create_access_token(
             user_id=str(uuid4()),
@@ -127,7 +127,7 @@ class TestRedisFailClosed:
         with patch("app.dependencies.auth.check_redis_healthy", return_value=False):
             from app.dependencies import get_current_user
 
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceUnavailableError) as exc_info:
                 await get_current_user(
                     token=token,
                     db=mock_db,

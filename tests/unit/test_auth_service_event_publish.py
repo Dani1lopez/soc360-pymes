@@ -203,7 +203,7 @@ class TestAuthLoginEventPublish:
         """Test login succeeds even if event publishing fails (non-blocking)."""
         from app.modules.auth import service
         from app.event_bus import EventBus
-        from redis.exceptions import RedisError
+        from app.core.exceptions import RedisOutageError
 
         mock_user = MagicMock()
         mock_user.id = uuid4()
@@ -221,8 +221,8 @@ class TestAuthLoginEventPublish:
         mock_redis = AsyncMock()
 
         mock_event_bus = AsyncMock(spec=EventBus)
-        # Simulate RedisError during publish (realistic failure scenario)
-        mock_event_bus.publish.side_effect = RedisError("Connection refused")
+        # EventBus classifies XADD failures as RedisOutageError.
+        mock_event_bus.publish.side_effect = RedisOutageError("Connection refused")
 
         with patch.object(service, "_check_account_lockout", return_value=None):
             with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):
@@ -255,11 +255,11 @@ class TestAuthLoginEventPublish:
         assert token_response.access_token == "access_token"
         assert refresh_token == "refresh_token"
 
-        # RedisError → warning was logged about the publish failure
+        # RedisOutageError → warning was logged about the publish failure
         mock_warning.assert_called_once_with(
             "event_publish_failed", event_type="auth.login", reason="redis_error"
         )
-        mock_event_bus.publish.assert_awaited_once()
+        assert mock_event_bus.publish.await_count == 2
         assert "Connection refused" not in repr(mock_warning.call_args)
 
     @pytest.mark.asyncio
@@ -502,6 +502,7 @@ class TestLoginEventErrorHandling:
     async def test_typed_outage_retry_succeeds_without_failure_warning(self):
         from app.core.exceptions import RedisOutageError
         from app.modules.auth import service
+        from redis.exceptions import RedisError
 
         with patch.object(service.logger, "warning") as mock_warning:
             result, mock_event_bus = await _login_with_publish_side_effect(
@@ -512,11 +513,14 @@ class TestLoginEventErrorHandling:
         assert mock_event_bus.publish.await_count == 2
         mock_warning.assert_not_called()
 
+        _, raw_event_bus = await _login_with_publish_side_effect(RedisError("raw transport"))
+        assert raw_event_bus.publish.await_count == 1
+
     @pytest.mark.asyncio
     async def test_redis_error_during_publish_logs_warning(self):
         """RedisError during publish → logger.warning, login still succeeds."""
         from app.modules.auth import service
-        from redis.exceptions import RedisError
+        from app.core.exceptions import RedisOutageError
 
         mock_user = MagicMock()
         mock_user.id = uuid4()
@@ -534,7 +538,7 @@ class TestLoginEventErrorHandling:
         mock_redis = AsyncMock()
 
         mock_event_bus = AsyncMock()
-        mock_event_bus.publish.side_effect = RedisError("Connection refused")
+        mock_event_bus.publish.side_effect = RedisOutageError("Connection refused")
 
         with patch.object(service, "_check_account_lockout", return_value=None):
             with patch.object(service, "_get_active_user", return_value=(mock_user, mock_tenant)):

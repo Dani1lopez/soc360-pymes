@@ -49,7 +49,7 @@ PR1_INDENT_IMPORT_ALLOWLIST: set[tuple[str, int, str]] = {
     # loaded at boot when `get_llm_provider()` returns a non-HTTP provider
     # (issue #194). `get_llm_provider` itself was hoisted to module level
     # (line 13) and is no longer in this allowlist.
-    ("app/main.py", 172, "_BaseHTTPProvider"),
+    ("app/main.py", 173, "_BaseHTTPProvider"),
     # `from app.core.metrics_auth import _current_bytes, _previous_bytes` is a
     # deferred import inside `create_app()` to break the
     # `app.core.config` ↔ `app.core.metrics_auth` import cycle. If hoisted to
@@ -58,7 +58,7 @@ PR1_INDENT_IMPORT_ALLOWLIST: set[tuple[str, int, str]] = {
     # module`. PR4 design rev 17 (section "Candidate encoding timing") documents
     # this as the explicit trade-off; the eager priming surfaces encoding
     # failures at app boot rather than on the first scrape.
-    ("app/main.py", 272, "_current_bytes"),
+    ("app/main.py", 273, "_current_bytes"),
 }
 
 

@@ -14,7 +14,11 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.database import engine
-from app.core.exceptions import RedisOutageError, TemporaryUnavailableError
+from app.core.exceptions import (
+    RedisOutageError,
+    ServiceUnavailableError,
+    TemporaryUnavailableError,
+)
 from app.core.logging import setup_logging, get_logger
 from app.core.metrics_auth import (
     _extract_header,
@@ -228,6 +232,18 @@ def create_app() -> FastAPI:
         )
 
     app.add_exception_handler(RedisOutageError, redis_outage_handler)  # type: ignore[arg-type]  # narrow subclass matches Starlette's wider Exception signature
+
+    async def service_unavailable_handler(
+        request: Request, exc: ServiceUnavailableError
+    ) -> JSONResponse:
+        """Translate health-check failures to a sanitized 503 response."""
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "service temporarily unavailable"},
+            headers={"Retry-After": str(settings.REDIS_OUTAGE_RETRY_AFTER_SECONDS)},
+        )
+
+    app.add_exception_handler(ServiceUnavailableError, service_unavailable_handler)  # type: ignore[arg-type]
 
     async def lock_handler(
         request: Request, exc: TemporaryUnavailableError

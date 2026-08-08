@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.core.exceptions import UserError
 from app.core.logging import get_logger
 from app.core.metrics import (
+    METRIC_CANCELLATION,
     METRIC_OPERATION_LATENCY,
     METRIC_OUTAGES,
     METRIC_PARTIAL_REVOCATION,
@@ -157,8 +158,6 @@ def _record_outage(flow_id: str | None) -> None:
 
 def _record_cancellation(flow_id: str | None) -> None:
     if flow_id is not None:
-        from app.core.metrics import METRIC_CANCELLATION
-
         METRIC_CANCELLATION.labels(flow=flow_id).inc()
 
 

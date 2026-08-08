@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.outage import _FLOW_ID_AUTH_CHANGE_PASSWORD_REVOKE
 from app.core.security import (
     create_access_token,
     hash_password,
@@ -577,4 +578,5 @@ async def change_password(
         user_id=str(user_id),
         redis=redis,
         ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        flow_id=_FLOW_ID_AUTH_CHANGE_PASSWORD_REVOKE,
     )

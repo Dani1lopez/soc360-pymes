@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import PartialFailureError, TenantError
+from app.core.metrics import METRIC_PARTIAL_REVOCATION
 from app.core.outage import (
     _FLOW_ID_TENANTS_DEACTIVATE_TENANT_REVOKE,
     _FLOW_ID_TENANTS_UPDATE_TENANT_REVOKE,
@@ -58,6 +59,8 @@ async def _revoke_user_tokens_deterministically(
         for user_id, result in zip(user_ids, results)
     ]
     if any(isinstance(result, BaseException) for result in results):
+        if flow_id is not None:
+            METRIC_PARTIAL_REVOCATION.labels(flow=flow_id).inc()
         raise PartialFailureError(
             "Tenant token revocation partially failed: " + "; ".join(outcomes)
         )

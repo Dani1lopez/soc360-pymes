@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.metrics import METRIC_RETRY
 from app.core.outage import (
     _FLOW_ID_AUTH_CHANGE_PASSWORD_REVOKE,
     _FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH,
@@ -432,6 +433,7 @@ async def login(
         try:
             await event_bus.publish(event, flow=_FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH)
         except RedisOutageError:
+            METRIC_RETRY.labels(flow=_FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH).inc()
             await event_bus.publish(event, flow=_FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH)
     except RedisOutageError:
         logger.warning("event_publish_failed", event_type="auth.login", reason="redis_error")

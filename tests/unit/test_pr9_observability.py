@@ -289,3 +289,166 @@ async def test_current_user_health_outage_metric_uses_dependency_flow_label() ->
             await auth.get_current_user(token="token", db=MagicMock(), redis=MagicMock())
 
     assert METRIC_OUTAGES.labels(flow=flow)._value.get() == before + 1
+
+
+@pytest.mark.asyncio
+async def test_login_retry_records_retry_metric_with_publish_flow() -> None:
+    from app.core.exceptions import RedisOutageError
+    from app.core.metrics import METRIC_RETRY
+    from app.core.outage import _FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH
+    from tests.unit.test_auth_service_event_publish import _login_with_publish_side_effect
+
+    before = METRIC_RETRY.labels(flow=_FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH)._value.get()
+    result, event_bus = await _login_with_publish_side_effect(
+        [RedisOutageError("first outage"), RedisOutageError("second outage")]
+    )
+
+    assert result[0].access_token == "access_token"
+    assert event_bus.publish.await_count == 2
+    assert (
+        METRIC_RETRY.labels(flow=_FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH)._value.get()
+        == before + 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_tenant_partial_revocation_records_metric_with_flow() -> None:
+    from app.core.exceptions import PartialFailureError, RedisOutageError
+    from app.core.metrics import METRIC_PARTIAL_REVOCATION
+    from app.core.outage import _FLOW_ID_TENANTS_DEACTIVATE_TENANT_REVOKE
+    from app.modules.tenants import service
+
+    flow = _FLOW_ID_TENANTS_DEACTIVATE_TENANT_REVOKE
+    before = METRIC_PARTIAL_REVOCATION.labels(flow=flow)._value.get()
+    revoke = AsyncMock(side_effect=[RedisOutageError("first"), None])
+
+    with patch.object(service, "revoke_all_user_access_tokens", revoke):
+        with pytest.raises(PartialFailureError):
+            await service._revoke_user_tokens_deterministically(
+                user_ids=["user-a", "user-b"],
+                redis=MagicMock(),
+                ttl_seconds=60,
+                flow_id=flow,
+            )
+
+    assert METRIC_PARTIAL_REVOCATION.labels(flow=flow)._value.get() == before + 1
+
+
+@pytest.mark.asyncio
+async def test_security_partial_revocation_records_metric_with_flow() -> None:
+    from app.core.exceptions import RedisOutageError
+    from app.core.metrics import METRIC_PARTIAL_REVOCATION
+    from app.core.security import revoke_all_user_access_tokens
+
+    flow = "users_update_user_revoke"
+
+    class FailingRedis(FakeRedis):
+        async def smembers(self, key: str):  # type: ignore[override]
+            return [b"jti-a", b"jti-b"]
+
+        async def set(self, key: str, *args, **kwargs):  # type: ignore[override]
+            if key == "revoked:jti-b":
+                raise RedisConnectionError("partial outage")
+            return await super().set(key, *args, **kwargs)
+
+    redis = FailingRedis()
+    before = METRIC_PARTIAL_REVOCATION.labels(flow=flow)._value.get()
+    try:
+        with pytest.raises(RedisOutageError):
+            await revoke_all_user_access_tokens(
+                user_id="partial-metric-user",
+                redis=redis,
+                ttl_seconds=60,
+                flow_id=flow,
+            )
+    finally:
+        await redis.aclose()
+
+    assert METRIC_PARTIAL_REVOCATION.labels(flow=flow)._value.get() == before + 1
+
+
+@pytest.mark.asyncio
+async def test_login_typed_publish_retry_records_retry_metric() -> None:
+    from app.core.exceptions import RedisOutageError
+    from app.core.metrics import METRIC_RETRY
+    from app.core.outage import _FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH
+    from tests.unit.test_auth_service_event_publish import _login_with_publish_side_effect
+
+    before = METRIC_RETRY.labels(flow=_FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH)._value.get()
+    _, event_bus = await _login_with_publish_side_effect(
+        [RedisOutageError("first"), RedisOutageError("second")]
+    )
+
+    assert event_bus.publish.await_count == 2
+    assert METRIC_RETRY.labels(flow=_FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH)._value.get() == before + 1
+
+
+@pytest.mark.asyncio
+async def test_tenant_partial_aggregation_records_partial_revocation_metric() -> None:
+    from app.core.exceptions import RedisOutageError, PartialFailureError
+    from app.core.metrics import METRIC_PARTIAL_REVOCATION
+    from app.core.outage import _FLOW_ID_TENANTS_DEACTIVATE_TENANT_REVOKE
+    from app.modules.tenants import service
+
+    flow = _FLOW_ID_TENANTS_DEACTIVATE_TENANT_REVOKE
+    before = METRIC_PARTIAL_REVOCATION.labels(flow=flow)._value.get()
+    revoke = AsyncMock(side_effect=[None, RedisOutageError("second-user")])
+
+    with patch.object(service, "revoke_all_user_access_tokens", revoke):
+        with pytest.raises(PartialFailureError):
+            await service._revoke_user_tokens_deterministically(
+                user_ids=["user-a", "user-b"],
+                redis=MagicMock(),
+                ttl_seconds=60,
+                flow_id=flow,
+            )
+
+    assert METRIC_PARTIAL_REVOCATION.labels(flow=flow)._value.get() == before + 1
+
+
+@pytest.mark.asyncio
+async def test_security_partial_batch_records_partial_revocation_metric() -> None:
+    from app.core.exceptions import RedisOutageError
+    from app.core.metrics import METRIC_PARTIAL_REVOCATION
+    from app.core.security import revoke_all_user_access_tokens
+
+    flow = "users_deactivate_user_revoke"
+    before = METRIC_PARTIAL_REVOCATION.labels(flow=flow)._value.get()
+    redis = MagicMock()
+    redis.smembers = AsyncMock(return_value=[b"jti-a", b"jti-b"])
+    redis.set = AsyncMock(
+        side_effect=[True, RedisConnectionError("partial-batch")]
+    )
+
+    with pytest.raises(RedisOutageError):
+        await revoke_all_user_access_tokens(
+            user_id="partial-user",
+            redis=redis,
+            ttl_seconds=60,
+            flow_id=flow,
+        )
+
+    assert METRIC_PARTIAL_REVOCATION.labels(flow=flow)._value.get() == before + 1
+
+
+@pytest.mark.asyncio
+async def test_security_zero_success_is_not_counted_as_partial_revocation() -> None:
+    from app.core.exceptions import RedisOutageError
+    from app.core.metrics import METRIC_PARTIAL_REVOCATION
+    from app.core.security import revoke_all_user_access_tokens
+
+    flow = "users_update_user_revoke"
+    before = METRIC_PARTIAL_REVOCATION.labels(flow=flow)._value.get()
+    redis = MagicMock()
+    redis.smembers = AsyncMock(return_value=[b"jti-only"])
+    redis.set = AsyncMock(side_effect=RedisConnectionError("outage-before-write"))
+
+    with pytest.raises(RedisOutageError):
+        await revoke_all_user_access_tokens(
+            user_id="zero-success-user",
+            redis=redis,
+            ttl_seconds=60,
+            flow_id=flow,
+        )
+
+    assert METRIC_PARTIAL_REVOCATION.labels(flow=flow)._value.get() == before

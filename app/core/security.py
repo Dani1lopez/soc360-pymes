@@ -17,7 +17,11 @@ from redis.asyncio import Redis
 from app.core.config import settings
 from app.core.exceptions import UserError
 from app.core.logging import get_logger
-from app.core.metrics import METRIC_OPERATION_LATENCY, METRIC_OUTAGES
+from app.core.metrics import (
+    METRIC_OPERATION_LATENCY,
+    METRIC_OUTAGES,
+    METRIC_PARTIAL_REVOCATION,
+)
 from app.core.outage import classify_redis_error
 
 logger = get_logger(__name__)
@@ -314,6 +318,8 @@ async def revoke_all_user_access_tokens(
                     extra=failure_extra,
                 )
             else:
+                if flow_id is not None:
+                    METRIC_PARTIAL_REVOCATION.labels(flow=flow_id).inc()
                 failure_extra["denylisted_count"] = denylisted_count
                 logger.warning(
                     "redis_revoke_all_partial_failure",

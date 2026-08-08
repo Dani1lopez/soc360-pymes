@@ -147,3 +147,68 @@ async def test_tenant_revocation_passes_canonical_flow_id(
         )
 
     assert revoke.await_args.kwargs["flow_id"] == flow_id
+
+
+@pytest.mark.asyncio
+async def test_login_passes_canonical_flow_label_to_event_bus() -> None:
+    from app.core.outage import _FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH
+    from app.event_bus import EventBus
+    from app.modules.auth import service
+
+    user = SimpleNamespace(
+        id=uuid4(),
+        email="flow@test.com",
+        hashed_password="hash",
+        tenant_id=uuid4(),
+        role="admin",
+        is_superadmin=False,
+        is_active=True,
+    )
+    tenant = SimpleNamespace(is_active=True)
+    db = MagicMock(spec=AsyncSession)
+    db.execute = AsyncMock()
+    redis = AsyncMock()
+    event_bus = AsyncMock(spec=EventBus)
+
+    with patch.multiple(
+        service,
+        check_redis_healthy=AsyncMock(return_value=True),
+        _check_account_lockout=AsyncMock(),
+        _get_active_user=AsyncMock(return_value=(user, tenant)),
+        verify_password_async=AsyncMock(return_value=True),
+        _check_tenant_active=AsyncMock(),
+        _clear_login_attempts=AsyncMock(),
+        create_access_token=MagicMock(return_value=("access", "jti")),
+        _create_refresh_token=AsyncMock(return_value="refresh"),
+        get_event_bus=AsyncMock(return_value=event_bus),
+    ):
+        await service.login(
+            email="flow@test.com",
+            password="password",
+            db=db,
+            redis=redis,
+        )
+
+    assert event_bus.publish.await_args.kwargs["flow"] == _FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH
+
+
+@pytest.mark.asyncio
+async def test_event_bus_publish_records_supplied_flow_label() -> None:
+    from app.event_bus import EventBus
+    from app.event_schemas import AuthLoginEvent
+
+    event = AuthLoginEvent(
+        event_id=uuid4(),
+        tenant_id=uuid4(),
+        user_id="event-flow-user",
+        email_hash="a" * 32,
+    )
+    redis = FakeRedis()
+    try:
+        with patch("app.event_bus.bus.logger.debug") as debug:
+            await EventBus(redis).publish(event, flow="auth_login_event_publish")
+
+        assert debug.call_args.kwargs["extra"]["flow"] == "auth_login_event_publish"
+        assert await redis.xlen("events:auth.login") == 1
+    finally:
+        await redis.aclose()

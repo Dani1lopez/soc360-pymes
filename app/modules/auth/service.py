@@ -13,7 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.outage import _FLOW_ID_AUTH_CHANGE_PASSWORD_REVOKE
+from app.core.outage import (
+    _FLOW_ID_AUTH_CHANGE_PASSWORD_REVOKE,
+    _FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH,
+)
 from app.core.security import (
     create_access_token,
     hash_password,
@@ -427,9 +430,9 @@ async def login(
                 user_agent=safe_user_agent,
             )
         try:
-            await event_bus.publish(event)
+            await event_bus.publish(event, flow=_FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH)
         except RedisOutageError:
-            await event_bus.publish(event)
+            await event_bus.publish(event, flow=_FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH)
     except RedisOutageError:
         logger.warning("event_publish_failed", event_type="auth.login", reason="redis_error")
     except RedisError:

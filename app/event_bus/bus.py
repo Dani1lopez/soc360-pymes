@@ -48,11 +48,12 @@ class EventBus:
         """
         return f"{settings.EVENT_STREAM_PREFIX}:{event_type}"
 
-    async def publish(self, event: BaseEvent) -> bytes:
+    async def publish(self, event: BaseEvent, *, flow: str | None = None) -> bytes:
         """Publish a typed event to its corresponding stream.
 
         Args:
             event: A BaseEvent subclass (e.g. AuthLoginEvent).
+            flow: Optional canonical FlowId used for observability labels.
 
         Returns:
             The Redis XADD message ID (bytes), e.g. b"1734567890123-0".
@@ -79,6 +80,11 @@ class EventBus:
             )
         except Exception as exc:
             raise classify_redis_error(exc) from exc
+        if flow is not None:
+            logger.debug(
+                "event_published",
+                extra={"event_type": event.event_type, "flow": flow},
+            )
         return msg_id
 
     @staticmethod

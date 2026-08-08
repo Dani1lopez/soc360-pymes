@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -452,3 +453,96 @@ async def test_security_zero_success_is_not_counted_as_partial_revocation() -> N
         )
 
     assert METRIC_PARTIAL_REVOCATION.labels(flow=flow)._value.get() == before
+
+
+def test_partial_rate_limit_recorder_uses_canonical_flow_label() -> None:
+    from app.core.metrics import METRIC_PARTIAL_RATE_LIMIT
+    from app.core.outage import _FLOW_ID_AUTH_LOGIN_RATE_RECORD
+    from app.modules.auth.router import _record_partial_rate_limit
+
+    before = METRIC_PARTIAL_RATE_LIMIT.labels(flow=_FLOW_ID_AUTH_LOGIN_RATE_RECORD)._value.get()
+    _record_partial_rate_limit(_FLOW_ID_AUTH_LOGIN_RATE_RECORD)
+
+    assert (
+        METRIC_PARTIAL_RATE_LIMIT.labels(flow=_FLOW_ID_AUTH_LOGIN_RATE_RECORD)._value.get()
+        == before + 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_lock_lease_loss_records_coordination_failure() -> None:
+    from app.core.dist_lock import LockHandle
+    from app.core.metrics import METRIC_COORDINATION_FAILURE
+    from app.core.outage import _FLOW_ID_AUTH_POST_CREDENTIAL_USER_DEACTIVATE_LOCK
+
+    flow = _FLOW_ID_AUTH_POST_CREDENTIAL_USER_DEACTIVATE_LOCK
+    before = METRIC_COORDINATION_FAILURE.labels(flow=flow)._value.get()
+    redis = MagicMock()
+    redis.eval = AsyncMock(return_value=0)
+    handle = LockHandle(
+        key="lock-key",
+        owner_token="owner",
+        acquired_at=0.0,
+        ttl_seconds=30,
+        flow_id=flow,
+        _redis=redis,
+    )
+
+    assert await handle.renew() is False
+    assert METRIC_COORDINATION_FAILURE.labels(flow=flow)._value.get() == before + 1
+
+
+@pytest.mark.asyncio
+async def test_revocation_cancellation_records_metric_and_reraises() -> None:
+    from app.core.metrics import METRIC_CANCELLATION
+    from app.core.security import revoke_access_token
+
+    flow = "users_update_user_revoke"
+    before = METRIC_CANCELLATION.labels(flow=flow)._value.get()
+    redis = MagicMock()
+    redis.set = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await revoke_access_token("cancelled-jti", 60, redis, flow_id=flow)
+
+    assert METRIC_CANCELLATION.labels(flow=flow)._value.get() == before + 1
+
+
+@pytest.mark.asyncio
+async def test_event_bus_cancellation_records_metric_and_reraises() -> None:
+    from app.core.metrics import METRIC_CANCELLATION
+    from app.event_bus import EventBus
+    from app.event_schemas import AuthLoginEvent
+
+    flow = "auth_login_event_publish"
+    before = METRIC_CANCELLATION.labels(flow=flow)._value.get()
+    redis = MagicMock()
+    redis.xadd = AsyncMock(side_effect=asyncio.CancelledError())
+    event = AuthLoginEvent(
+        event_id=uuid4(),
+        tenant_id=uuid4(),
+        user_id="cancelled-event-user",
+        email_hash="c" * 32,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await EventBus(redis).publish(event, flow=flow)
+
+    assert METRIC_CANCELLATION.labels(flow=flow)._value.get() == before + 1
+
+
+
+@pytest.mark.asyncio
+async def test_revocation_cancellation_metric_uses_flow_label() -> None:
+    from app.core.metrics import METRIC_CANCELLATION
+    from app.core.security import revoke_access_token
+
+    flow = "auth_change_password_revoke"
+    before = METRIC_CANCELLATION.labels(flow=flow)._value.get()
+    redis = MagicMock()
+    redis.set = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await revoke_access_token("cancelled-jti", 60, redis, flow_id=flow)
+
+    assert METRIC_CANCELLATION.labels(flow=flow)._value.get() == before + 1

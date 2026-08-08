@@ -6,11 +6,13 @@ Wraps Redis Streams primitives with typed Pydantic event schemas.
 # fmt: off
 from __future__ import annotations
 
+import asyncio
+
 from redis.asyncio import Redis
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.metrics import METRIC_OUTAGES
+from app.core.metrics import METRIC_CANCELLATION, METRIC_OUTAGES
 from app.core.outage import classify_redis_error
 from app.event_bus._helpers import (
     _RETRY_COUNT_KEY,
@@ -79,6 +81,10 @@ class EventBus:
                 maxlen=settings.EVENT_STREAM_MAXLEN,
                 approximate=True,
             )
+        except asyncio.CancelledError:
+            if flow is not None:
+                METRIC_CANCELLATION.labels(flow=flow).inc()
+            raise
         except Exception as exc:
             if flow is not None:
                 METRIC_OUTAGES.labels(flow=flow).inc()

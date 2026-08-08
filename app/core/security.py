@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import asyncio
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -154,6 +155,13 @@ def _record_outage(flow_id: str | None) -> None:
         METRIC_OUTAGES.labels(flow=flow_id).inc()
 
 
+def _record_cancellation(flow_id: str | None) -> None:
+    if flow_id is not None:
+        from app.core.metrics import METRIC_CANCELLATION
+
+        METRIC_CANCELLATION.labels(flow=flow_id).inc()
+
+
 def _observe_operation_latency(func):
     @wraps(func)
     async def wrapped(*args: Any, **kwargs: Any) -> Any:
@@ -182,6 +190,9 @@ async def revoke_access_token(
     if ttl_seconds > 0:
         try:
             await redis.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
+        except asyncio.CancelledError:
+            _record_cancellation(flow_id)
+            raise
         except Exception as exc:
             _record_outage(flow_id)
             raise classify_redis_error(exc) from exc
@@ -222,6 +233,9 @@ async def track_jti(
     """Añade el JTI al conjunto de JTIs activos del usuario. Idempotente (SADD)."""
     try:
         await redis.sadd(f"{_ACTIVE_JTIS_PREFIX}{user_id}", jti)
+    except asyncio.CancelledError:
+        _record_cancellation(flow_id)
+        raise
     except Exception as exc:
         _record_outage(flow_id)
         raise classify_redis_error(exc) from exc
@@ -241,6 +255,9 @@ async def untrack_jti(
     """Remueve el JTI del conjunto de JTIs activos. Seguro si no existe (SREM)."""
     try:
         await redis.srem(f"{_ACTIVE_JTIS_PREFIX}{user_id}", jti)
+    except asyncio.CancelledError:
+        _record_cancellation(flow_id)
+        raise
     except Exception as exc:
         _record_outage(flow_id)
         raise classify_redis_error(exc) from exc
@@ -281,6 +298,9 @@ async def revoke_all_user_access_tokens(
     key = f"{_ACTIVE_JTIS_PREFIX}{user_id}"
     try:
         jtis = await redis.smembers(key)
+    except asyncio.CancelledError:
+        _record_cancellation(flow_id)
+        raise
     except Exception as exc:
         _record_outage(flow_id)
         logger.warning(
@@ -304,6 +324,9 @@ async def revoke_all_user_access_tokens(
         try:
             await redis.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
             denylisted_count += 1
+        except asyncio.CancelledError:
+            _record_cancellation(flow_id)
+            raise
         except Exception as exc:
             _record_outage(flow_id)
             failure_extra = {
@@ -330,6 +353,9 @@ async def revoke_all_user_access_tokens(
     # Fase 2: DELETE del set active_jtis only after total success
     try:
         await redis.delete(key)
+    except asyncio.CancelledError:
+        _record_cancellation(flow_id)
+        raise
     except Exception as exc:
         _record_outage(flow_id)
         extra = {"user_id": user_id}

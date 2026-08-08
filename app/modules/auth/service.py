@@ -13,10 +13,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.metrics import METRIC_RETRY
+from app.core.metrics import (
+    METRIC_COORDINATION_FAILURE,
+    METRIC_PARTIAL_RATE_LIMIT,
+    METRIC_RETRY,
+)
 from app.core.outage import (
     _FLOW_ID_AUTH_CHANGE_PASSWORD_REVOKE,
     _FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH,
+    _FLOW_ID_AUTH_LOGIN_SERVICE,
+    _FLOW_ID_AUTH_POST_CREDENTIAL_SESSION_LOCK,
 )
 from app.core.security import (
     create_access_token,
@@ -98,6 +104,7 @@ async def _record_failed_attempt(email: str, redis: Redis) -> None:
         if attempts == 1:
             await redis.expire(key, LOGIN_ATTEMPTS_WINDOW_SECONDS)
     except Exception:
+        METRIC_PARTIAL_RATE_LIMIT.labels(flow=_FLOW_ID_AUTH_LOGIN_SERVICE).inc()
         logger.warning("login_record_failed_attempt_failed", reason="redis_error")
 
 
@@ -109,6 +116,7 @@ async def _clear_login_attempts(email: str, redis: Redis) -> None:
     try:
         await redis.delete(key)
     except Exception:
+        METRIC_PARTIAL_RATE_LIMIT.labels(flow=_FLOW_ID_AUTH_LOGIN_SERVICE).inc()
         logger.warning("login_clear_attempts_failed", reason="redis_error")
 
 
@@ -272,6 +280,9 @@ async def _acquire_session_cap_lock(user_id: UUID, db: AsyncSession) -> None:
         await db.execute(_ADVISORY_LOCK_SQL, {"user_id": str(user_id)})
     except DBAPIError as exc:
         if _is_lock_timeout_error(exc):
+            METRIC_COORDINATION_FAILURE.labels(
+                flow=_FLOW_ID_AUTH_POST_CREDENTIAL_SESSION_LOCK
+            ).inc()
             logger.warning(
                 "session_cap_lock_timeout",
                 user_id=str(user_id),

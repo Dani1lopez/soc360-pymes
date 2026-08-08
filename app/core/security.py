@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import hmac
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from typing import Any
 
 import anyio
@@ -15,6 +17,7 @@ from redis.asyncio import Redis
 from app.core.config import settings
 from app.core.exceptions import UserError
 from app.core.logging import get_logger
+from app.core.metrics import METRIC_OPERATION_LATENCY, METRIC_OUTAGES
 from app.core.outage import classify_redis_error
 
 logger = get_logger(__name__)
@@ -142,6 +145,28 @@ _DENYLIST_PREFIX = "revoked:"
 _ACTIVE_JTIS_PREFIX = "active_jtis:"
 
 
+def _record_outage(flow_id: str | None) -> None:
+    if flow_id is not None:
+        METRIC_OUTAGES.labels(flow=flow_id).inc()
+
+
+def _observe_operation_latency(func):
+    @wraps(func)
+    async def wrapped(*args: Any, **kwargs: Any) -> Any:
+        started = time.perf_counter()
+        try:
+            return await func(*args, **kwargs)
+        finally:
+            flow_id = kwargs.get("flow_id")
+            if flow_id is not None:
+                METRIC_OPERATION_LATENCY.labels(flow=flow_id).observe(
+                    time.perf_counter() - started
+                )
+
+    return wrapped
+
+
+@_observe_operation_latency
 async def revoke_access_token(
     jti: str,
     ttl_seconds: int,
@@ -154,6 +179,7 @@ async def revoke_access_token(
         try:
             await redis.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
         except Exception as exc:
+            _record_outage(flow_id)
             raise classify_redis_error(exc) from exc
         extra = {"jti": jti, "ttl": ttl_seconds}
         if flow_id is not None:
@@ -181,6 +207,7 @@ async def revoke_tokens_by_jtis(jtis: list[str], redis: Redis, ttl_seconds: int 
     logger.info("Sesiones invalidas en bulk", extra={"count": len(jtis)})
 
 
+@_observe_operation_latency
 async def track_jti(
     user_id: str,
     jti: str,
@@ -192,6 +219,7 @@ async def track_jti(
     try:
         await redis.sadd(f"{_ACTIVE_JTIS_PREFIX}{user_id}", jti)
     except Exception as exc:
+        _record_outage(flow_id)
         raise classify_redis_error(exc) from exc
     extra = {"user_id": user_id, "jti": jti}
     if flow_id is not None:
@@ -210,6 +238,7 @@ async def untrack_jti(
     try:
         await redis.srem(f"{_ACTIVE_JTIS_PREFIX}{user_id}", jti)
     except Exception as exc:
+        _record_outage(flow_id)
         raise classify_redis_error(exc) from exc
     extra = {"user_id": user_id, "jti": jti}
     if flow_id is not None:
@@ -226,6 +255,7 @@ async def get_active_jtis(user_id: str, redis: Redis) -> list[str]:
     return [m.decode() if isinstance(m, bytes) else m for m in members]
 
 
+@_observe_operation_latency
 async def revoke_all_user_access_tokens(
     user_id: str,
     redis: Redis,
@@ -248,6 +278,7 @@ async def revoke_all_user_access_tokens(
     try:
         jtis = await redis.smembers(key)
     except Exception as exc:
+        _record_outage(flow_id)
         logger.warning(
             "redis_revoke_active_jtis_read_failed",
             extra={"user_id": user_id},
@@ -270,6 +301,7 @@ async def revoke_all_user_access_tokens(
             await redis.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
             denylisted_count += 1
         except Exception as exc:
+            _record_outage(flow_id)
             failure_extra = {
                 "user_id": user_id,
                 "jtis_count": len(jti_strs),
@@ -293,6 +325,7 @@ async def revoke_all_user_access_tokens(
     try:
         await redis.delete(key)
     except Exception as exc:
+        _record_outage(flow_id)
         extra = {"user_id": user_id}
         if flow_id is not None:
             extra["flow"] = flow_id
@@ -309,6 +342,7 @@ async def revoke_all_user_access_tokens(
     logger.info("Todos los JTIs del usuario revocados", extra=extra)
 
 
+@_observe_operation_latency
 async def revoke_all_user_access_tokens_batch(
     user_ids: list[str],
     redis: Redis,
@@ -366,6 +400,7 @@ async def revoke_all_user_access_tokens_batch(
         try:
             await pipe.execute()
         except Exception:
+            _record_outage(flow_id)
             logger.exception(
                 "redis_batch_pipeline_failed",
                 extra={"user_count": len(user_ids), "jti_count": len(all_jtis)},

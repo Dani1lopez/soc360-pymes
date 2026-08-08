@@ -6,7 +6,21 @@ from uuid import uuid4
 
 import pytest
 from fakeredis.aioredis import FakeRedis
+from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _histogram_count(histogram: object, flow: str) -> float:
+    collector = next(iter(histogram.collect()))
+    sample = next(
+        (
+            sample
+            for sample in collector.samples
+            if sample.name.endswith("_count") and sample.labels["flow"] == flow
+        ),
+        None,
+    )
+    return sample.value if sample is not None else 0.0
 
 
 @pytest.mark.asyncio
@@ -212,3 +226,66 @@ async def test_event_bus_publish_records_supplied_flow_label() -> None:
         assert await redis.xlen("events:auth.login") == 1
     finally:
         await redis.aclose()
+
+
+@pytest.mark.asyncio
+async def test_revocation_outage_and_latency_metrics_use_flow_label() -> None:
+    from app.core.metrics import METRIC_OPERATION_LATENCY, METRIC_OUTAGES
+    from app.core.security import revoke_access_token, track_jti
+    from app.core.exceptions import RedisOutageError
+
+    flow = "auth_change_password_revoke"
+    outage_before = METRIC_OUTAGES.labels(flow=flow)._value.get()
+    latency_before = _histogram_count(METRIC_OPERATION_LATENCY, flow)
+    redis = MagicMock()
+    redis.set = AsyncMock(side_effect=RedisConnectionError("redis-down"))
+    redis.sadd = AsyncMock(return_value=1)
+
+    with pytest.raises(RedisOutageError):
+        await revoke_access_token("jti-metrics", 60, redis, flow_id=flow)
+    await track_jti("user-metrics", "jti-metrics", redis, flow_id=flow)
+
+    assert METRIC_OUTAGES.labels(flow=flow)._value.get() == outage_before + 1
+    assert _histogram_count(METRIC_OPERATION_LATENCY, flow) == latency_before + 2
+
+
+@pytest.mark.asyncio
+async def test_event_bus_outage_metric_uses_supplied_flow_label() -> None:
+    from app.core.exceptions import RedisOutageError
+    from app.core.metrics import METRIC_OUTAGES
+    from app.event_bus import EventBus
+    from app.event_schemas import AuthLoginEvent
+
+    flow = "auth_login_event_publish"
+    before = METRIC_OUTAGES.labels(flow=flow)._value.get()
+    redis = MagicMock()
+    redis.xadd = AsyncMock(side_effect=RedisConnectionError("redis-down"))
+    event = AuthLoginEvent(
+        event_id=uuid4(),
+        tenant_id=uuid4(),
+        user_id="event-outage-user",
+        email_hash="b" * 32,
+    )
+
+    with pytest.raises(RedisOutageError):
+        await EventBus(redis).publish(event, flow=flow)
+
+    assert METRIC_OUTAGES.labels(flow=flow)._value.get() == before + 1
+
+
+@pytest.mark.asyncio
+async def test_current_user_health_outage_metric_uses_dependency_flow_label() -> None:
+    from app.core.metrics import METRIC_OUTAGES
+    from app.dependencies import auth
+    from app.core.exceptions import ServiceUnavailableError
+
+    flow = "auth_current_user_dep"
+    before = METRIC_OUTAGES.labels(flow=flow)._value.get()
+    with (
+        patch.object(auth, "decode_access_token", return_value={"sub": str(uuid4()), "jti": "jti"}),
+        patch.object(auth, "check_redis_healthy", AsyncMock(return_value=False)),
+    ):
+        with pytest.raises(ServiceUnavailableError):
+            await auth.get_current_user(token="token", db=MagicMock(), redis=MagicMock())
+
+    assert METRIC_OUTAGES.labels(flow=flow)._value.get() == before + 1

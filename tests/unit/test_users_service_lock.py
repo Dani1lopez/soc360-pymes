@@ -4,6 +4,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.outage import _FLOW_ID_USERS_DEACTIVATE_USER_REVOKE
+
 
 def _user(tenant_id, active=True):
     return SimpleNamespace(id=uuid4(), tenant_id=tenant_id, is_active=active)
@@ -39,6 +41,7 @@ async def test_deactivate_user_mutates_without_service_owned_lock() -> None:
         user_id=str(target.id),
         redis=redis,
         ttl_seconds=service.settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        flow_id=_FLOW_ID_USERS_DEACTIVATE_USER_REVOKE,
     )
 
 

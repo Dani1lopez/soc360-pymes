@@ -46,7 +46,7 @@ class RedisLockWaiter:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 25-FlowId catalog (exact set — spec rev 9 §25-FlowId)
+# 29-FlowId catalog (exact set — spec rev 9 §29-FlowId)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _FLOW_ID_AUTH_LOGIN_RATE_PRECHECK = "auth_login_rate_precheck"

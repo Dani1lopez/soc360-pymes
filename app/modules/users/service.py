@@ -9,6 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import UserError
+from app.core.outage import (
+    _FLOW_ID_USERS_DEACTIVATE_USER_REVOKE,
+    _FLOW_ID_USERS_UPDATE_USER_REVOKE,
+)
 from app.core.security import (
     hash_password_async,
     revoke_all_user_access_tokens,
@@ -179,6 +183,7 @@ async def update_user(
             user_id=str(user_id),
             redis=redis,
             ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            flow_id=_FLOW_ID_USERS_UPDATE_USER_REVOKE,
         )
 
     await db.refresh(user)
@@ -218,4 +223,5 @@ async def deactivate_user(
         user_id=str(user_id),
         redis=redis,
         ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        flow_id=_FLOW_ID_USERS_DEACTIVATE_USER_REVOKE,
     )

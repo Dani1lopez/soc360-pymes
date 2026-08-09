@@ -7,6 +7,17 @@ from redis.exceptions import RedisError
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
+from app.core.metrics import METRIC_OUTAGES, METRIC_PARTIAL_RATE_LIMIT
+from app.core.outage import (
+    _FLOW_ID_AUTH_CHANGE_PASSWORD_RATE_PRECHECK,
+    _FLOW_ID_AUTH_CHANGE_PASSWORD_RATE_RECORD,
+    _FLOW_ID_AUTH_LOGIN_RATE_PRECHECK,
+    _FLOW_ID_AUTH_LOGIN_RATE_RECORD,
+    _FLOW_ID_AUTH_LOGOUT_RATE_PRECHECK,
+    _FLOW_ID_AUTH_LOGOUT_RATE_RECORD,
+    _FLOW_ID_AUTH_REFRESH_RATE_PRECHECK,
+    _FLOW_ID_AUTH_REFRESH_RATE_RECORD,
+)
 from app.core.rate_limit import RateLimiter
 from app.core.security import decode_access_token
 from app.dependencies import DBDep, RedisDep, CurrentUserDep
@@ -18,6 +29,15 @@ from app.modules.auth.schemas import (
 from app.modules.auth import service
 
 logger = get_logger(__name__)
+
+
+def _record_partial_rate_limit(flow_id: str) -> None:
+    METRIC_PARTIAL_RATE_LIMIT.labels(flow=flow_id).inc()
+
+
+def _record_outage(flow_id: str) -> None:
+    METRIC_OUTAGES.labels(flow=flow_id).inc()
+
 
 REFRESH_COOKIE_NAME = "refresh_token"
 
@@ -84,6 +104,7 @@ async def login(
         except HTTPException:
             raise
         except RedisError:
+            _record_outage(_FLOW_ID_AUTH_LOGIN_RATE_PRECHECK)
             logger.warning("rate_limit_check_failed", reason="redis_error", ip=ip)
             raise HTTPException(
                 status_code=401,
@@ -110,6 +131,7 @@ async def login(
             try:
                 await rate_limiter.record_failure(ip, body.email)
             except Exception:
+                _record_partial_rate_limit(_FLOW_ID_AUTH_LOGIN_RATE_RECORD)
                 logger.warning("rate_limit_record_failed", reason="redis_error", ip=ip)
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
@@ -118,6 +140,7 @@ async def login(
         try:
             await rate_limiter.record_success(ip, body.email)
         except Exception:
+            _record_partial_rate_limit(_FLOW_ID_AUTH_LOGIN_RATE_RECORD)
             logger.warning("rate_limit_reset_failed", reason="redis_error", ip=ip)
 
     _set_refresh_cookie(response, refresh_token)
@@ -151,6 +174,9 @@ async def refresh(
                 )
         except HTTPException:
             raise
+        except RedisError:
+            _record_outage(_FLOW_ID_AUTH_REFRESH_RATE_PRECHECK)
+            logger.warning("rate_limit_check_failed", reason="redis_error", ip=ip)
         except Exception:
             logger.warning("rate_limit_check_failed", reason="redis_error", ip=ip)
 
@@ -181,6 +207,7 @@ async def refresh(
             try:
                 await rate_limiter.record_failure(ip, f"refresh:{ip}")
             except Exception:
+                _record_partial_rate_limit(_FLOW_ID_AUTH_REFRESH_RATE_RECORD)
                 logger.warning("rate_limit_record_failed", reason="redis_error", ip=ip)
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
@@ -189,6 +216,7 @@ async def refresh(
         try:
             await rate_limiter.record_success(ip, f"refresh:{ip}")
         except Exception:
+            _record_partial_rate_limit(_FLOW_ID_AUTH_REFRESH_RATE_RECORD)
             logger.warning("rate_limit_reset_failed", reason="redis_error", ip=ip)
 
     _set_refresh_cookie(response, new_refresh)
@@ -219,6 +247,9 @@ async def logout(
                 )
         except HTTPException:
             raise
+        except RedisError:
+            _record_outage(_FLOW_ID_AUTH_LOGOUT_RATE_PRECHECK)
+            logger.warning("rate_limit_check_failed", reason="redis_error", ip=ip)
         except Exception:
             logger.warning("rate_limit_check_failed", reason="redis_error", ip=ip)
 
@@ -238,6 +269,7 @@ async def logout(
             try:
                 await rate_limiter.record_failure(ip, f"logout:{current_user.id}")
             except Exception:
+                _record_partial_rate_limit(_FLOW_ID_AUTH_LOGOUT_RATE_RECORD)
                 logger.warning("rate_limit_record_failed", reason="redis_error", ip=ip)
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
@@ -269,6 +301,9 @@ async def change_password(
                 )
         except HTTPException:
             raise
+        except RedisError:
+            _record_outage(_FLOW_ID_AUTH_CHANGE_PASSWORD_RATE_PRECHECK)
+            logger.warning("rate_limit_check_failed", reason="redis_error", ip=ip)
         except Exception:
             logger.warning("rate_limit_check_failed", reason="redis_error", ip=ip)
 
@@ -288,6 +323,7 @@ async def change_password(
             try:
                 await rate_limiter.record_failure(ip, f"change-password:{current_user.id}")
             except Exception:
+                _record_partial_rate_limit(_FLOW_ID_AUTH_CHANGE_PASSWORD_RATE_RECORD)
                 logger.warning("rate_limit_record_failed", reason="redis_error", ip=ip)
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 

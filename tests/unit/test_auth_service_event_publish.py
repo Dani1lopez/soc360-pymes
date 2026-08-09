@@ -86,7 +86,7 @@ class TestAuthLoginEventPublish:
         # Capture published events
         published_events: list[AuthLoginEvent] = []
 
-        async def mock_publish(event: AuthLoginEvent) -> bytes:
+        async def mock_publish(event: AuthLoginEvent, *, flow: str | None = None) -> bytes:
             published_events.append(event)
             return b"1234567890123-0"
 
@@ -158,7 +158,7 @@ class TestAuthLoginEventPublish:
 
         published_events: list[AuthLoginEvent] = []
 
-        async def mock_publish(event: AuthLoginEvent) -> bytes:
+        async def mock_publish(event: AuthLoginEvent, *, flow: str | None = None) -> bytes:
             published_events.append(event)
             return b"1234567890123-0"
 
@@ -335,7 +335,7 @@ class TestAuthSuperadminLoginEventPublish:
 
         published_events: list = []
 
-        async def mock_publish(event) -> bytes:
+        async def mock_publish(event, *, flow: str | None = None) -> bytes:
             published_events.append(event)
             return b"1234567890123-0"
 
@@ -414,7 +414,7 @@ class TestAuthSuperadminLoginEventPublish:
 
         published_events: list = []
 
-        async def mock_publish(event) -> bytes:
+        async def mock_publish(event, *, flow: str | None = None) -> bytes:
             published_events.append(event)
             return b"1234567890123-0"
 
@@ -679,7 +679,7 @@ class TestUserAgentSanitizationInEvents:
 
         published_events: list[AuthLoginEvent] = []
 
-        async def mock_publish(event: AuthLoginEvent) -> bytes:
+        async def mock_publish(event: AuthLoginEvent, *, flow: str | None = None) -> bytes:
             published_events.append(event)
             return b"1234567890123-0"
 
@@ -741,7 +741,7 @@ class TestUserAgentSanitizationInEvents:
 
         published_events: list = []
 
-        async def mock_publish(event) -> bytes:
+        async def mock_publish(event, *, flow: str | None = None) -> bytes:
             published_events.append(event)
             return b"1234567890123-0"
 
@@ -805,7 +805,7 @@ class TestUserAgentSanitizationInEvents:
 
         published_events: list = []
 
-        async def mock_publish(event) -> bytes:
+        async def mock_publish(event, *, flow: str | None = None) -> bytes:
             published_events.append(event)
             return b"1234567890123-0"
 

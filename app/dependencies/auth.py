@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db, set_tenant_context
 from app.core.exceptions import ServiceUnavailableError
 from app.core.logging import get_logger
+from app.core.metrics import METRIC_OUTAGES
+from app.core.outage import _FLOW_ID_AUTH_CURRENT_USER_DEP
 from app.core.redis import check_redis_healthy, get_redis
 from app.core.security import decode_access_token, has_minimum_role, is_token_revoked
 from app.modules.tenants.models import Tenant
@@ -59,6 +61,7 @@ async def get_current_user(
         )
     jti = payload.get("jti")
     if not await check_redis_healthy(redis):
+        METRIC_OUTAGES.labels(flow=_FLOW_ID_AUTH_CURRENT_USER_DEP).inc()
         logger.error("redis_unhealthy", reason="auth_dependency")
         raise ServiceUnavailableError()
     if not jti or await is_token_revoked(jti, redis):

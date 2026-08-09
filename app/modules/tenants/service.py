@@ -12,6 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import PartialFailureError, TenantError
+from app.core.metrics import METRIC_PARTIAL_REVOCATION
+from app.core.outage import (
+    _FLOW_ID_TENANTS_DEACTIVATE_TENANT_REVOKE,
+    _FLOW_ID_TENANTS_UPDATE_TENANT_REVOKE,
+)
 from app.core.security import revoke_all_user_access_tokens
 from app.modules.auth.service import _revoke_all_user_tokens_for_tenant
 from app.modules.tenants.models import Tenant
@@ -30,6 +35,7 @@ async def _revoke_user_tokens_deterministically(
     user_ids: list[str],
     redis: Redis,
     ttl_seconds: int,
+    flow_id: str | None = None,
 ) -> None:
     """Revoke all user sessions and aggregate failures in input order."""
     results = await asyncio.gather(
@@ -38,6 +44,7 @@ async def _revoke_user_tokens_deterministically(
                 user_id=user_id,
                 redis=redis,
                 ttl_seconds=ttl_seconds,
+                **({"flow_id": flow_id} if flow_id is not None else {}),
             )
             for user_id in user_ids
         ),
@@ -52,6 +59,8 @@ async def _revoke_user_tokens_deterministically(
         for user_id, result in zip(user_ids, results)
     ]
     if any(isinstance(result, BaseException) for result in results):
+        if flow_id is not None:
+            METRIC_PARTIAL_REVOCATION.labels(flow=flow_id).inc()
         raise PartialFailureError(
             "Tenant token revocation partially failed: " + "; ".join(outcomes)
         )
@@ -226,6 +235,7 @@ async def update_tenant(
             user_ids=[str(uid) for uid in user_ids],
             redis=redis,
             ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            flow_id=_FLOW_ID_TENANTS_UPDATE_TENANT_REVOKE,
         )
 
     await db.refresh(tenant)
@@ -262,6 +272,7 @@ async def deactivate_tenant(
         user_ids=[str(uid) for uid in user_ids],
         redis=redis,
         ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        flow_id=_FLOW_ID_TENANTS_DEACTIVATE_TENANT_REVOKE,
     )
 
     await db.flush()

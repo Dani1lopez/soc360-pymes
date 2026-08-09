@@ -6,10 +6,13 @@ Wraps Redis Streams primitives with typed Pydantic event schemas.
 # fmt: off
 from __future__ import annotations
 
+import asyncio
+
 from redis.asyncio import Redis
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.metrics import METRIC_CANCELLATION, METRIC_OUTAGES
 from app.core.outage import classify_redis_error
 from app.event_bus._helpers import (
     _RETRY_COUNT_KEY,
@@ -48,11 +51,12 @@ class EventBus:
         """
         return f"{settings.EVENT_STREAM_PREFIX}:{event_type}"
 
-    async def publish(self, event: BaseEvent) -> bytes:
+    async def publish(self, event: BaseEvent, *, flow: str | None = None) -> bytes:
         """Publish a typed event to its corresponding stream.
 
         Args:
             event: A BaseEvent subclass (e.g. AuthLoginEvent).
+            flow: Optional canonical FlowId used for observability labels.
 
         Returns:
             The Redis XADD message ID (bytes), e.g. b"1734567890123-0".
@@ -77,8 +81,19 @@ class EventBus:
                 maxlen=settings.EVENT_STREAM_MAXLEN,
                 approximate=True,
             )
+        except asyncio.CancelledError:
+            if flow is not None:
+                METRIC_CANCELLATION.labels(flow=flow).inc()
+            raise
         except Exception as exc:
+            if flow is not None:
+                METRIC_OUTAGES.labels(flow=flow).inc()
             raise classify_redis_error(exc) from exc
+        if flow is not None:
+            logger.debug(
+                "event_published",
+                extra={"event_type": event.event_type, "flow": flow},
+            )
         return msg_id
 
     @staticmethod

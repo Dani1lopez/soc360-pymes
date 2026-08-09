@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import hmac
+import asyncio
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from typing import Any
 
 import anyio
@@ -15,6 +18,12 @@ from redis.asyncio import Redis
 from app.core.config import settings
 from app.core.exceptions import UserError
 from app.core.logging import get_logger
+from app.core.metrics import (
+    METRIC_CANCELLATION,
+    METRIC_OPERATION_LATENCY,
+    METRIC_OUTAGES,
+    METRIC_PARTIAL_REVOCATION,
+)
 from app.core.outage import classify_redis_error
 
 logger = get_logger(__name__)
@@ -142,14 +151,54 @@ _DENYLIST_PREFIX = "revoked:"
 _ACTIVE_JTIS_PREFIX = "active_jtis:"
 
 
-async def revoke_access_token(jti: str, ttl_seconds: int, redis: Redis) -> None:
+def _record_outage(flow_id: str | None) -> None:
+    if flow_id is not None:
+        METRIC_OUTAGES.labels(flow=flow_id).inc()
+
+
+def _record_cancellation(flow_id: str | None) -> None:
+    if flow_id is not None:
+        METRIC_CANCELLATION.labels(flow=flow_id).inc()
+
+
+def _observe_operation_latency(func):
+    @wraps(func)
+    async def wrapped(*args: Any, **kwargs: Any) -> Any:
+        started = time.perf_counter()
+        try:
+            return await func(*args, **kwargs)
+        finally:
+            flow_id = kwargs.get("flow_id")
+            if flow_id is not None:
+                METRIC_OPERATION_LATENCY.labels(flow=flow_id).observe(
+                    time.perf_counter() - started
+                )
+
+    return wrapped
+
+
+@_observe_operation_latency
+async def revoke_access_token(
+    jti: str,
+    ttl_seconds: int,
+    redis: Redis,
+    *,
+    flow_id: str | None = None,
+) -> None:
     """Añade el JTI a la denylist con TTL igual al tiempo restante del token"""
     if ttl_seconds > 0:
         try:
             await redis.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
+        except asyncio.CancelledError:
+            _record_cancellation(flow_id)
+            raise
         except Exception as exc:
+            _record_outage(flow_id)
             raise classify_redis_error(exc) from exc
-        logger.debug("Token revocado", extra={"jti": jti, "ttl": ttl_seconds})
+        extra = {"jti": jti, "ttl": ttl_seconds}
+        if flow_id is not None:
+            extra["flow"] = flow_id
+        logger.debug("Token revocado", extra=extra)
 
 
 async def is_token_revoked(jti: str, redis: Redis) -> bool:
@@ -172,22 +221,49 @@ async def revoke_tokens_by_jtis(jtis: list[str], redis: Redis, ttl_seconds: int 
     logger.info("Sesiones invalidas en bulk", extra={"count": len(jtis)})
 
 
-async def track_jti(user_id: str, jti: str, redis: Redis) -> None:
+@_observe_operation_latency
+async def track_jti(
+    user_id: str,
+    jti: str,
+    redis: Redis,
+    *,
+    flow_id: str | None = None,
+) -> None:
     """Añade el JTI al conjunto de JTIs activos del usuario. Idempotente (SADD)."""
     try:
         await redis.sadd(f"{_ACTIVE_JTIS_PREFIX}{user_id}", jti)
+    except asyncio.CancelledError:
+        _record_cancellation(flow_id)
+        raise
     except Exception as exc:
+        _record_outage(flow_id)
         raise classify_redis_error(exc) from exc
-    logger.debug("JTI trackeado", extra={"user_id": user_id, "jti": jti})
+    extra = {"user_id": user_id, "jti": jti}
+    if flow_id is not None:
+        extra["flow"] = flow_id
+    logger.debug("JTI trackeado", extra=extra)
 
 
-async def untrack_jti(user_id: str, jti: str, redis: Redis) -> None:
+async def untrack_jti(
+    user_id: str,
+    jti: str,
+    redis: Redis,
+    *,
+    flow_id: str | None = None,
+) -> None:
     """Remueve el JTI del conjunto de JTIs activos. Seguro si no existe (SREM)."""
     try:
         await redis.srem(f"{_ACTIVE_JTIS_PREFIX}{user_id}", jti)
+    except asyncio.CancelledError:
+        _record_cancellation(flow_id)
+        raise
     except Exception as exc:
+        _record_outage(flow_id)
         raise classify_redis_error(exc) from exc
-    logger.debug("JTI untrackeado", extra={"user_id": user_id, "jti": jti})
+    extra = {"user_id": user_id, "jti": jti}
+    if flow_id is not None:
+        extra["flow"] = flow_id
+    logger.debug("JTI untrackeado", extra=extra)
 
 
 async def get_active_jtis(user_id: str, redis: Redis) -> list[str]:
@@ -199,10 +275,13 @@ async def get_active_jtis(user_id: str, redis: Redis) -> list[str]:
     return [m.decode() if isinstance(m, bytes) else m for m in members]
 
 
+@_observe_operation_latency
 async def revoke_all_user_access_tokens(
     user_id: str,
     redis: Redis,
     ttl_seconds: int,
+    *,
+    flow_id: str | None = None,
 ) -> None:
     """Revoca todos los JTIs activos del usuario usando comandos ordenados (REQ-140-R05).
 
@@ -218,7 +297,11 @@ async def revoke_all_user_access_tokens(
     key = f"{_ACTIVE_JTIS_PREFIX}{user_id}"
     try:
         jtis = await redis.smembers(key)
+    except asyncio.CancelledError:
+        _record_cancellation(flow_id)
+        raise
     except Exception as exc:
+        _record_outage(flow_id)
         logger.warning(
             "redis_revoke_active_jtis_read_failed",
             extra={"user_id": user_id},
@@ -226,7 +309,10 @@ async def revoke_all_user_access_tokens(
         raise classify_redis_error(exc) from exc
 
     if not jtis:
-        logger.debug("No hay JTIs activos para revocar", extra={"user_id": user_id})
+        extra = {"user_id": user_id}
+        if flow_id is not None:
+            extra["flow"] = flow_id
+        logger.debug("No hay JTIs activos para revocar", extra=extra)
         return
 
     jti_strs = sorted(j.decode() if isinstance(j, bytes) else j for j in jtis)
@@ -237,43 +323,63 @@ async def revoke_all_user_access_tokens(
         try:
             await redis.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
             denylisted_count += 1
+        except asyncio.CancelledError:
+            _record_cancellation(flow_id)
+            raise
         except Exception as exc:
+            _record_outage(flow_id)
+            failure_extra = {
+                "user_id": user_id,
+                "jtis_count": len(jti_strs),
+            }
+            if flow_id is not None:
+                failure_extra["flow"] = flow_id
             if denylisted_count == 0:
                 logger.warning(
                     "redis_revoke_zero_success",
-                    extra={"user_id": user_id, "jtis_count": len(jti_strs)},
+                    extra=failure_extra,
                 )
             else:
+                if flow_id is not None:
+                    METRIC_PARTIAL_REVOCATION.labels(flow=flow_id).inc()
+                failure_extra["denylisted_count"] = denylisted_count
                 logger.warning(
                     "redis_revoke_all_partial_failure",
-                    extra={
-                        "user_id": user_id,
-                        "jtis_count": len(jti_strs),
-                        "denylisted_count": denylisted_count,
-                    },
+                    extra=failure_extra,
                 )
             raise classify_redis_error(exc) from exc
 
     # Fase 2: DELETE del set active_jtis only after total success
     try:
         await redis.delete(key)
+    except asyncio.CancelledError:
+        _record_cancellation(flow_id)
+        raise
     except Exception as exc:
-        logger.warning(
-            "redis_active_jtis_cleanup_failed",
-            extra={"user_id": user_id},
-        )
+        _record_outage(flow_id)
+        extra = {"user_id": user_id}
+        if flow_id is not None:
+            extra["flow"] = flow_id
+        logger.warning("redis_active_jtis_cleanup_failed", extra=extra)
         raise classify_redis_error(exc) from exc
 
-    logger.info(
-        "Todos los JTIs del usuario revocados",
-        extra={"user_id": user_id, "count": denylisted_count, "total_jtis": len(jti_strs)},
-    )
+    extra = {
+        "user_id": user_id,
+        "count": denylisted_count,
+        "total_jtis": len(jti_strs),
+    }
+    if flow_id is not None:
+        extra["flow"] = flow_id
+    logger.info("Todos los JTIs del usuario revocados", extra=extra)
 
 
+@_observe_operation_latency
 async def revoke_all_user_access_tokens_batch(
     user_ids: list[str],
     redis: Redis,
     ttl_seconds: int,
+    *,
+    flow_id: str | None = None,
 ) -> None:
     """Batch revocation for multiple users — O(1) pipelines instead of O(u).
     
@@ -325,6 +431,7 @@ async def revoke_all_user_access_tokens_batch(
         try:
             await pipe.execute()
         except Exception:
+            _record_outage(flow_id)
             logger.exception(
                 "redis_batch_pipeline_failed",
                 extra={"user_count": len(user_ids), "jti_count": len(all_jtis)},

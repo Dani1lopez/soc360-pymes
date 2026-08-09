@@ -17,6 +17,7 @@ from redis.exceptions import ResponseError
 from app.core.config import settings
 from app.core.exceptions import RedisOutageError, TemporaryUnavailableError
 from app.core.logging import get_logger
+from app.core.metrics import METRIC_CANCELLATION, METRIC_COORDINATION_FAILURE
 from app.core.outage import AsyncWaiter, RedisLockWaiter, classify_redis_error
 from app.core.redis import get_redis_client
 
@@ -34,6 +35,14 @@ RELEASE_LUA = (
 _SAFE_COMPONENT = re.compile(r"[A-Za-z0-9_-]+")
 _ACTIVE_TOKENS: dict[str, str] = {}
 logger = get_logger(__name__)
+
+
+def _record_coordination_failure(flow_id: str) -> None:
+    METRIC_COORDINATION_FAILURE.labels(flow=flow_id).inc()
+
+
+def _record_cancellation(flow_id: str) -> None:
+    METRIC_CANCELLATION.labels(flow=flow_id).inc()
 
 
 def _safe_component(value: str) -> str:
@@ -232,6 +241,7 @@ class LockHandle:
             return True
         self._mark_lost()
         _log_not_owner("distributed_lock_renew_not_owner", self)
+        _record_coordination_failure(self.flow_id)
         _record("renew", self.flow_id, "lost")
         return False
 
@@ -261,6 +271,7 @@ class LockHandle:
             return True
         self._mark_lost()
         _log_not_owner("distributed_lock_release_not_owner", self)
+        _record_coordination_failure(self.flow_id)
         _record("release", self.flow_id, "not_owner")
         return False
 
@@ -274,6 +285,7 @@ class LockHandle:
             except BaseException:
                 _log_not_owner("distributed_lock_release_failed_on_cancel", self)
             finally:
+                _record_cancellation(self.flow_id)
                 _record("release", self.flow_id, "cancelled")
                 raise asyncio.CancelledError
         await self.release()
@@ -300,6 +312,7 @@ async def acquire_dist_lock(
     wait_started_at = time.monotonic()
     if not await _set_lock(redis_client, key, token, ttl_seconds):
         if key in _ACTIVE_TOKENS:
+            _record_coordination_failure(flow_id)
             _record_wait(flow_id, operation, time.monotonic() - wait_started_at)
             _record("acquire", flow_id, "reentry")
             _record("contention", flow_id, "reentry", operation)
@@ -322,6 +335,7 @@ async def acquire_dist_lock(
             await _cancel_retry(task)
             raise
         if not acquired:
+            _record_coordination_failure(flow_id)
             _record_wait(flow_id, operation, time.monotonic() - wait_started_at)
             _record("acquire", flow_id, "contended")
             _record("contention", flow_id, "contended", operation)

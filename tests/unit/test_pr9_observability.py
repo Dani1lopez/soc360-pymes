@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from fakeredis.aioredis import FakeRedis
 from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -263,6 +264,110 @@ def test_partial_rate_limit_recorder_uses_canonical_flow_label() -> None:
 
 
 @pytest.mark.asyncio
+async def test_login_rate_precheck_redis_error_records_outage_not_partial_rate_limit() -> None:
+    from fastapi import HTTPException
+
+    from app.core.metrics import METRIC_OUTAGES, METRIC_PARTIAL_RATE_LIMIT
+    from app.core.outage import _FLOW_ID_AUTH_LOGIN_RATE_PRECHECK
+    from app.modules.auth import router as auth_router
+    from app.modules.auth.schemas import LoginRequest
+
+    flow = _FLOW_ID_AUTH_LOGIN_RATE_PRECHECK
+    outages_before = METRIC_OUTAGES.labels(flow=flow)._value.get()
+    partial_before = METRIC_PARTIAL_RATE_LIMIT.labels(flow=flow)._value.get()
+    rate_limiter = MagicMock()
+    rate_limiter.check = AsyncMock(side_effect=RedisError("redis-down"))
+
+    with patch.object(auth_router.settings, "RATE_LIMIT_ENABLED", True):
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_router.login(
+                body=LoginRequest(email="precheck@test.com", password="Password123!"),
+                request=SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"), headers={}),
+                response=MagicMock(),
+                db=MagicMock(),
+                redis=MagicMock(),
+                rate_limiter=rate_limiter,
+            )
+
+    assert exc_info.value.status_code == 401
+    assert METRIC_OUTAGES.labels(flow=flow)._value.get() == outages_before + 1
+    assert METRIC_PARTIAL_RATE_LIMIT.labels(flow=flow)._value.get() == partial_before
+
+
+@pytest.mark.asyncio
+async def test_login_rate_precheck_generic_error_records_no_metric() -> None:
+    from app.core.metrics import METRIC_OUTAGES, METRIC_PARTIAL_RATE_LIMIT
+    from app.core.outage import _FLOW_ID_AUTH_LOGIN_RATE_PRECHECK
+    from app.modules.auth import router as auth_router
+    from app.modules.auth.schemas import LoginRequest, TokenResponse
+
+    flow = _FLOW_ID_AUTH_LOGIN_RATE_PRECHECK
+    outages_before = METRIC_OUTAGES.labels(flow=flow)._value.get()
+    partial_before = METRIC_PARTIAL_RATE_LIMIT.labels(flow=flow)._value.get()
+    rate_limiter = MagicMock()
+    rate_limiter.check = AsyncMock(side_effect=RuntimeError("unexpected"))
+    rate_limiter.record_success = AsyncMock()
+
+    with (
+        patch.object(auth_router.settings, "RATE_LIMIT_ENABLED", True),
+        patch.object(
+            auth_router.service,
+            "login",
+            AsyncMock(return_value=(TokenResponse(access_token="access", expires_in=60), "refresh")),
+        ),
+    ):
+        result = await auth_router.login(
+            body=LoginRequest(email="generic@test.com", password="Password123!"),
+            request=SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"), headers={}),
+            response=MagicMock(),
+            db=MagicMock(),
+            redis=MagicMock(),
+            rate_limiter=rate_limiter,
+        )
+
+    assert result.access_token == "access"
+    assert METRIC_OUTAGES.labels(flow=flow)._value.get() == outages_before
+    assert METRIC_PARTIAL_RATE_LIMIT.labels(flow=flow)._value.get() == partial_before
+
+
+@pytest.mark.asyncio
+async def test_login_rate_record_failure_redis_error_records_partial_rate_limit() -> None:
+    from fastapi import HTTPException
+
+    from app.core.exceptions import AuthError
+    from app.core.metrics import METRIC_PARTIAL_RATE_LIMIT
+    from app.core.outage import _FLOW_ID_AUTH_LOGIN_RATE_RECORD
+    from app.modules.auth import router as auth_router
+    from app.modules.auth.schemas import LoginRequest
+
+    flow = _FLOW_ID_AUTH_LOGIN_RATE_RECORD
+    before = METRIC_PARTIAL_RATE_LIMIT.labels(flow=flow)._value.get()
+    rate_limiter = MagicMock()
+    rate_limiter.record_failure = AsyncMock(side_effect=RedisError("redis-down"))
+
+    with (
+        patch.object(auth_router.settings, "RATE_LIMIT_ENABLED", True),
+        patch.object(
+            auth_router.service,
+            "login",
+            AsyncMock(side_effect=AuthError(status_code=401, detail="invalid credentials")),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_router.login(
+                body=LoginRequest(email="mutation@test.com", password="Password123!"),
+                request=SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"), headers={}),
+                response=MagicMock(),
+                db=MagicMock(),
+                redis=MagicMock(),
+                rate_limiter=rate_limiter,
+            )
+
+    assert exc_info.value.status_code == 401
+    assert METRIC_PARTIAL_RATE_LIMIT.labels(flow=flow)._value.get() == before + 1
+
+
+@pytest.mark.asyncio
 async def test_lock_lease_loss_records_coordination_failure() -> None:
     from app.core.dist_lock import LockHandle
     from app.core.metrics import METRIC_COORDINATION_FAILURE
@@ -307,5 +412,3 @@ def test_outage_catalog_docstring_matches_29_flow_catalog() -> None:
     assert outage.__doc__ is not None
     assert "29-FlowId" in outage.__doc__
     assert "25-FlowId" not in outage.__doc__
-
-

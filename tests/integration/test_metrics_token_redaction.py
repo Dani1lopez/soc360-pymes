@@ -18,6 +18,7 @@ The module-level env-var priming is required because the file is run with
 ``from app.main import create_app`` import below would fail because
 ``app.core.config.settings = Settings()`` runs at module load.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -46,7 +47,7 @@ os.environ.setdefault("POSTGRES_DB", "soc360_test")
 os.environ.setdefault("REDIS_HOST", "localhost")
 os.environ.setdefault("REDIS_PORT", "6379")
 os.environ.setdefault("REDIS_DB", "15")
-os.environ.setdefault("REDIS_PASSWORD", "test_redis_password")
+os.environ.setdefault("REDIS_PASSWORD", "soc360_redis_dev_password")
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -85,9 +86,7 @@ async def test_100_concurrent_no_credential_leak(
     token = "test-token-correct"
 
     async def _hit(client: AsyncClient) -> int:
-        response = await client.get(
-            "/metrics", headers={"x-metrics-token": token}
-        )
+        response = await client.get("/metrics", headers={"x-metrics-token": token})
         return response.status_code
 
     with caplog.at_level("DEBUG"):
@@ -96,9 +95,7 @@ async def test_100_concurrent_no_credential_leak(
         ) as client:
             statuses = await asyncio.gather(*[_hit(client) for _ in range(100)])
 
-    assert all(s == 200 for s in statuses), (
-        f"Expected all 200, got {set(statuses)}"
-    )
+    assert all(s == 200 for s in statuses), f"Expected all 200, got {set(statuses)}"
     # No token material in logs.
     full_log = caplog.text
     assert token not in full_log, f"Token leaked in logs: {full_log!r}"
@@ -124,10 +121,6 @@ async def test_100_concurrent_unauthorized_no_token_leak(
         ) as client:
             statuses = await asyncio.gather(*[_hit(client) for _ in range(100)])
 
-    assert all(s == 401 for s in statuses), (
-        f"Expected all 401, got {set(statuses)}"
-    )
+    assert all(s == 401 for s in statuses), f"Expected all 401, got {set(statuses)}"
     full_log = caplog.text
-    assert "test-token-correct" not in full_log, (
-        f"Token leaked in logs: {full_log!r}"
-    )
+    assert "test-token-correct" not in full_log, f"Token leaked in logs: {full_log!r}"

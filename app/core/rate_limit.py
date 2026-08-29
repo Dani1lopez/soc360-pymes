@@ -6,10 +6,12 @@ Design: dual-key lockout (IP + email) with escalating timeouts.
 - Successful login resets the failure counter.
 - Lockout message is generic (doesn't reveal the duration).
 """
+
 from __future__ import annotations
 
 import hashlib
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from redis.asyncio import Redis
@@ -26,10 +28,10 @@ _EMAIL_PREFIX = "ratelimit:email:"
 # Lockout escalation table: (threshold, lockout_seconds)
 # When cumulative failures reach `threshold`, lockout is `lockout_seconds`.
 _LOCKOUT_TABLE: list[tuple[int, int]] = [
-    (5, 3 * 60),         # 5 failures  → 3 min
-    (10, 15 * 60),       # 10 failures → 15 min
-    (15, 60 * 60),       # 15 failures → 1 hour
-    (20, 4 * 60 * 60),   # 20 failures → 4 hours
+    (5, 3 * 60),  # 5 failures  → 3 min
+    (10, 15 * 60),  # 10 failures → 15 min
+    (15, 60 * 60),  # 15 failures → 1 hour
+    (20, 4 * 60 * 60),  # 20 failures → 4 hours
     (25, 24 * 60 * 60),  # 25 failures → 24 hours
 ]
 
@@ -39,12 +41,21 @@ def _hash_email(email: str) -> str:
     return hashlib.sha256(email.lower().strip().encode()).hexdigest()[:16]
 
 
+def _get_hash_field(
+    data: Mapping[str | bytes, str | bytes], field: str
+) -> str | bytes | int:
+    """Read a Redis hash field from text- or bytes-mode responses."""
+    if field in data:
+        return data[field]
+    return data.get(field.encode(), 0)
+
+
 def _get_lockout_seconds(failures: int) -> int:
     """Return lockout duration for the given failure count.
 
     Returns 0 if no lockout threshold has been reached.
     For failures beyond the last threshold, uses the max lockout (24h).
-    
+
     Lockout only applies when failures EXCEED the threshold, not when they
     equal it. This allows one more attempt at the threshold before locking.
     """
@@ -61,6 +72,7 @@ def _get_lockout_seconds(failures: int) -> int:
 @dataclass
 class LockoutStatus:
     """Result of a rate limit check."""
+
     is_locked: bool
     retry_after: int | None = None  # seconds until unlock, None if not locked
     failures: int = 0
@@ -100,26 +112,38 @@ class RateLimiter:
         now = time.time()
 
         # Check IP lockout
-        ip_locked_until = float(ip_data.get(b"locked_until", 0))
+        ip_locked_until = float(_get_hash_field(ip_data, "locked_until"))
         if ip_locked_until > now:
             remaining = int(ip_locked_until - now)
-            logger.warning("rate_limit_locked", key_type="ip", ip=ip, retry_after=remaining)
-            return LockoutStatus(is_locked=True, retry_after=remaining,
-                                 failures=int(ip_data.get(b"failures", 0)))
+            logger.warning(
+                "rate_limit_locked", key_type="ip", ip=ip, retry_after=remaining
+            )
+            return LockoutStatus(
+                is_locked=True,
+                retry_after=remaining,
+                failures=int(_get_hash_field(ip_data, "failures")),
+            )
 
         # Check email lockout
-        email_locked_until = float(email_data.get(b"locked_until", 0))
+        email_locked_until = float(_get_hash_field(email_data, "locked_until"))
         if email_locked_until > now:
             remaining = int(email_locked_until - now)
-            logger.warning("rate_limit_locked", key_type="email",
-                           email_hash=_hash_email(email), retry_after=remaining)
-            return LockoutStatus(is_locked=True, retry_after=remaining,
-                                 failures=int(email_data.get(b"failures", 0)))
+            logger.warning(
+                "rate_limit_locked",
+                key_type="email",
+                email_hash=_hash_email(email),
+                retry_after=remaining,
+            )
+            return LockoutStatus(
+                is_locked=True,
+                retry_after=remaining,
+                failures=int(_get_hash_field(email_data, "failures")),
+            )
 
         # Not locked — return current failure count
         max_failures = max(
-            int(ip_data.get(b"failures", 0)),
-            int(email_data.get(b"failures", 0)),
+            int(_get_hash_field(ip_data, "failures")),
+            int(_get_hash_field(email_data, "failures")),
         )
         return LockoutStatus(is_locked=False, failures=max_failures)
 

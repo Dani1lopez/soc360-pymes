@@ -8,16 +8,16 @@ from pathlib import Path
 import bcrypt
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy import text, make_url
+from fakeredis.aioredis import FakeRedis
+from httpx import ASGITransport, AsyncClient
+from redis.asyncio import Redis
+from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
 from sqlalchemy.pool import NullPool
-from fakeredis.aioredis import FakeRedis
-from redis.asyncio import Redis
 
 os.environ.setdefault("ENVIRONMENT", "development")
 os.environ.setdefault(
@@ -42,7 +42,7 @@ os.environ.setdefault("POSTGRES_DB", "soc360_test")
 os.environ.setdefault("REDIS_HOST", "localhost")
 os.environ.setdefault("REDIS_PORT", "6379")
 os.environ.setdefault("REDIS_DB", "15")
-os.environ.setdefault("REDIS_PASSWORD", "test_redis_password")
+os.environ.setdefault("REDIS_PASSWORD", "soc360_redis_dev_password")
 # PR5b' distributed lock secret (must be at least 32 bytes to satisfy production
 # validation in app/core/config.py; this default is test-only).
 os.environ.setdefault(
@@ -50,11 +50,11 @@ os.environ.setdefault(
     "ci-test-lock-secret-key-32bytes-min-do-not-use-in-prod",
 )
 
-from app.main import create_app
 from app.core.redis import close_pool, get_redis
 from app.dependencies import get_db, get_db_with_tenant
-from app.modules.users.models import User
+from app.main import create_app
 from app.modules.tenants.models import Tenant
+from app.modules.users.models import User
 
 TENANT_A_ID = "11111111-1111-1111-1111-111111111111"
 TENANT_B_ID = "22222222-2222-2222-2222-222222222222"
@@ -204,6 +204,7 @@ async def db_session():
 @pytest_asyncio.fixture
 async def seed_data(db_session: AsyncSession):
     from uuid import UUID
+
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     # Idempotent tenant inserts — concurrency tests may have already committed these
@@ -362,7 +363,9 @@ class _LuaCapableFakeRedis(FakeRedis):
 @pytest_asyncio.fixture
 async def client(db_session: AsyncSession):
     app = create_app()
-    fake_redis = _LuaCapableFakeRedis()  # ✅ mismo loop que el test (function scope)
+    fake_redis = _LuaCapableFakeRedis(
+        decode_responses=True
+    )  # ✅ mismo loop que el test (function scope)
 
     async def override_get_db():
         yield db_session

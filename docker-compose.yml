@@ -42,11 +42,14 @@ services:
   redis:
     image: redis:7-alpine
     container_name: soc360_redis
+    # Memory values are environment-owned and must be measured per environment.
+    # test values are never production sizing; provide both values explicitly.
     command: >
       redis-server
-      --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory ${REDIS_MAXMEMORY:?REDIS_MAXMEMORY must be set}
+      --maxmemory-policy noeviction
       --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    mem_limit: ${REDIS_CONTAINER_MEMORY_LIMIT:?REDIS_CONTAINER_MEMORY_LIMIT must be set}
     # Host port mapping for local dev ONLY — do not expose in staging/production
     ports:
       - "6379:6379"

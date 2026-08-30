@@ -115,7 +115,7 @@ jobs:
       - name: Run direct tests
         env:
           SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
-        run: uv run pytest -m "not toxiproxy"
+        run: uv run pytest -m "not toxiproxy and not redis_pressure"
 
       - name: Wait for Toxiproxy readiness
         shell: bash
@@ -142,3 +142,21 @@ jobs:
         env:
           SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
         run: uv run pytest -m "integration and toxiproxy" -x
+
+      - name: Redis no-eviction pressure gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          project=soc360-redis-pressure
+          compose=(docker compose -f docker-compose.redis-pressure.yml --project-name "$project")
+          trap '${compose[@]} down -v' EXIT
+          export REDIS_PRESSURE_MAXMEMORY=32mb
+          export REDIS_PRESSURE_MEM_LIMIT=64m
+          export REDIS_PRESSURE_PORT=16379
+          export REDIS_PRESSURE_PASSWORD=ci_pressure_redis_password
+          "${compose[@]}" up -d --wait
+          container_id=$("${compose[@]}" ps -q redis-pressure)
+          memory=$(docker inspect --format '{{.HostConfig.Memory}}' "$container_id")
+          test "$memory" -gt 0
+          export REDIS_PRESSURE_CONTAINER_ID="$container_id"
+          uv run pytest -m redis_pressure -q

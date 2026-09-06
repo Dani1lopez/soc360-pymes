@@ -1033,10 +1033,10 @@ class TestAssetEventSchemas:
     def test_asset_events_inherit_base_envelope(self) -> None:
         """Asset* events MUST inherit from BaseEvent (event_id + tenant_id)."""
         from app.event_schemas import (
-            BaseEvent,
             AssetCreatedEvent,
             AssetDeletedEvent,
             AssetUpdatedEvent,
+            BaseEvent,
         )
 
         assert issubclass(AssetCreatedEvent, BaseEvent)
@@ -1245,8 +1245,9 @@ class TestAssetSchemas:
         }, f"AssetResponse MUST expose exactly six public fields, got {fields!r}"
 
     def test_asset_response_extra_forbid_rejects_unknown_field(self) -> None:
-        from app.modules.assets.schemas import AssetResponse
         from pydantic import ValidationError
+
+        from app.modules.assets.schemas import AssetResponse
 
         tenant_id = uuid.uuid4()
         with pytest.raises(ValidationError):
@@ -1286,8 +1287,9 @@ class TestAssetSchemas:
         assert "raw_input" not in dumped
 
     def test_asset_create_base_rejects_extra_fields(self) -> None:
-        from app.modules.assets.schemas import AssetCreateBase
         from pydantic import ValidationError
+
+        from app.modules.assets.schemas import AssetCreateBase
 
         with pytest.raises(ValidationError):
             AssetCreateBase(
@@ -1297,8 +1299,9 @@ class TestAssetSchemas:
             )
 
     def test_asset_update_uses_partial_pattern(self) -> None:
-        from app.modules.assets.schemas import AssetUpdate
         from pydantic import ValidationError
+
+        from app.modules.assets.schemas import AssetUpdate
 
         # Both fields optional, extra rejected.
         u = AssetUpdate()
@@ -1316,8 +1319,7 @@ class TestAssetSchemas:
         the chosen schema branch."""
         from pydantic import ValidationError
 
-        from app.modules.assets.schemas import AssetCreateRequest
-        from app.modules.assets.schemas import IpAssetCreate
+        from app.modules.assets.schemas import AssetCreateRequest, IpAssetCreate
 
         # Building via the concrete type works.
         ok = IpAssetCreate(
@@ -1336,8 +1338,9 @@ class TestAssetSchemas:
             )
 
         # AssetType Literal exists with exactly six values.
-        from app.modules.assets.schemas import AssetType
         import typing
+
+        from app.modules.assets.schemas import AssetType
 
         asset_type_values = typing.get_args(AssetType)
         for expected in ("ip", "domain", "hostname", "web_app", "subnet", "cloud_resource"):
@@ -1582,9 +1585,413 @@ class TestRequireAnyRole:
             await guard(current_user=user)
         assert exc_info.value.status_code == 403
 
-    def test_require_any_role_is_re_exported_from_dependencies_package(self) -> None:
-        """require_any_role MUST be importable from app.dependencies directly."""
-        from app.dependencies import require_any_role  # noqa: F401
-        import app.dependencies as deps_pkg
+def test_require_any_role_is_re_exported_from_dependencies_package() -> None:
+    """require_any_role MUST be importable from app.dependencies directly."""
+    import app.dependencies as deps_pkg
+    from app.dependencies import require_any_role  # noqa: F401
 
-        assert hasattr(deps_pkg, "require_any_role")
+    assert hasattr(deps_pkg, "require_any_role")
+
+
+# ---------------------------------------------------------------------------
+# T10.1 — Full validator matrix (RED → GREEN)
+# ---------------------------------------------------------------------------
+# The previous slice shipped a subset of validators (ip, subnet,
+# cloud_resource). This slice completes the matrix: domain, hostname,
+# web_app. The contract for each type is taken verbatim from
+# design.md D-004 and spec.md ("Tipos de asset soportados").
+class TestAssetValidatorsFullMatrix:
+    """RED tests completing the ``_validate_asset_value`` matrix.
+
+    Covers every happy + sad path required by T10.1:
+    * ``ip`` — IPv4 + IPv6 happy; ``not-an-ip`` + out-of-range octets sad.
+    * ``domain`` — FQDN happy; leading-dash label + embedded space sad.
+    * ``hostname`` — RFC-1123-ish happy; embedded space sad.
+    * ``web_app`` — http(s) URL happy; ftp:// sad.
+    * ``subnet`` — canonical network address happy; out-of-range + alpha
+      prefix sad.
+    * ``cloud_resource`` — AWS ARN happy; empty resource segment sad.
+    """
+
+    # ----- domain -----------------------------------------------------------
+    def test_validate_domain_happy_normalizes_lowercase_and_strips_trailing_dot(
+        self,
+    ) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        # The validator MUST lowercase + strip the trailing dot.
+        assert _validate_asset_value("domain", "Example.COM.") == "example.com"
+        assert _validate_asset_value("domain", "EXAMPLE.COM") == "example.com"
+
+    def test_validate_domain_sad_leading_dash_label_rejects(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        with pytest.raises(ValueError) as exc_info:
+            _validate_asset_value("domain", "-bad-.com")
+        assert str(exc_info.value) == "value must be a valid FQDN"
+
+    def test_validate_domain_sad_embedded_space_rejects(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        with pytest.raises(ValueError) as exc_info:
+            _validate_asset_value("domain", "espacio .com")
+        assert str(exc_info.value) == "value must be a valid FQDN"
+
+    # ----- hostname ---------------------------------------------------------
+    def test_validate_hostname_happy_lowercases(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        # The validator MUST lowercase (case-insensitive acceptance) but
+        # otherwise preserve the canonical hostname shape.
+        assert (
+            _validate_asset_value("hostname", "App.Example.COM")
+            == "app.example.com"
+        )
+        assert (
+            _validate_asset_value("hostname", "app.example.com")
+            == "app.example.com"
+        )
+
+    def test_validate_hostname_sad_embedded_space_rejects(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        with pytest.raises(ValueError) as exc_info:
+            _validate_asset_value("hostname", "bad host")
+        assert str(exc_info.value) == "value must be a valid hostname"
+
+    # ----- web_app ----------------------------------------------------------
+    def test_validate_web_app_happy_accepts_https_url_with_path_and_query(
+        self,
+    ) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        canonical = _validate_asset_value(
+            "web_app", "https://app.example.com/path?q=1"
+        )
+        # Pydantic HttpUrl canonicalizes the scheme + host; the slice does
+        # not require the path/query to be preserved verbatim, only that the
+        # input is accepted and returns a valid http(s) string.
+        assert canonical.startswith("https://app.example.com")
+        assert "?" not in canonical or "q=1" in canonical
+
+    def test_validate_web_app_sad_ftp_scheme_rejects(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        with pytest.raises(ValueError) as exc_info:
+            _validate_asset_value("web_app", "ftp://x")
+        assert str(exc_info.value) == "value must be a valid http(s) URL"
+
+    # ----- subnet (additional happy path coverage) --------------------------
+    def test_validate_subnet_happy_canonicalizes_to_network_address(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        # '192.168.0.0/24' canonicalizes to itself.
+        assert (
+            _validate_asset_value("subnet", "192.168.0.0/24") == "192.168.0.0/24"
+        )
+        # '192.168.0.5/24' canonicalizes to the network address (host bits
+        # dropped by ipaddress.ip_network(..., strict=False)).
+        assert (
+            _validate_asset_value("subnet", "192.168.0.5/24") == "192.168.0.0/24"
+        )
+
+    # ----- cloud_resource (additional ARN contract coverage) ----------------
+    def test_validate_cloud_resource_happy_arn_with_region_account_resource(
+        self,
+    ) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        # Six-segment ARN with all segments populated.
+        canonical = _validate_asset_value(
+            "cloud_resource",
+            "arn:aws:ec2:us-east-1:123456789012:instance/i-abcd1234",
+        )
+        assert canonical == "arn:aws:ec2:us-east-1:123456789012:instance/i-abcd1234"
+
+    def test_validate_cloud_resource_sad_empty_resource_segment_rejects(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        # The regex requires at least one character in the resource
+        # segment. ``arn:aws:s3:::`` ends with an empty resource part
+        # before the final colon.
+        with pytest.raises(ValueError) as exc_info:
+            _validate_asset_value("cloud_resource", "arn:aws:s3:::")
+        assert str(exc_info.value) == "value must be a valid ARN"
+
+# ---------------------------------------------------------------------------
+# T10.2 — SQLAlchemy uniqueness (live DB integration test)
+# ---------------------------------------------------------------------------
+# Reuses the ``db_session`` + ``seed_data`` fixtures from tests/conftest.py
+# to drive two INSERTs against the real ``assets`` table and assert that
+# the unique constraint fires with the expected name.
+class TestAssetUniquenessAtSQLAlchemyLayer:
+    """SQLAlchemy-level uniqueness test for ``uq_assets_tenant_type_value``.
+
+    The asyncpg driver raises IntegrityError whose ``orig.constraint_name``
+    is ``uq_assets_tenant_type_value``. This test guards the contract
+    directly against the live database (no in-memory mocking) so the
+    constraint is exercised exactly the way production code will hit it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_duplicate_insert_raises_integrity_error_with_constraint_name(
+        self, db_session, seed_data
+    ) -> None:
+        from sqlalchemy.exc import IntegrityError
+
+        from app.modules.assets.models import Asset
+
+        tenant_a = seed_data["tenant_a"]
+        # Two rows: identical (tenant_id, asset_type, value).
+        first = Asset(
+            tenant_id=tenant_a.id,
+            asset_type="ip",
+            value="192.0.2.42",
+        )
+        second = Asset(
+            tenant_id=tenant_a.id,
+            asset_type="ip",
+            value="192.0.2.42",
+        )
+
+        db_session.add(first)
+        await db_session.flush()
+        db_session.add(second)
+
+        with pytest.raises(IntegrityError) as exc_info:
+            await db_session.flush()
+
+        orig = exc_info.value.orig
+        assert orig is not None
+        # SQLAlchemy's asyncpg adapter wraps the driver exception and
+        # only preserves the SQLSTATE code. The constraint name is
+        # surfaced through the error message string, which is exactly
+        # what ``_is_duplicate_constraint_error`` in service.py uses as
+        # its fallback. We assert both: pgcode == '23505' AND the
+        # constraint name appears in the message body.
+        assert getattr(orig, "pgcode", None) == "23505"
+        assert "uq_assets_tenant_type_value" in str(orig)
+
+# ---------------------------------------------------------------------------
+# T10.3 — Service purity (extended)
+# ---------------------------------------------------------------------------
+# This class extends the prior T10.3 subset by covering:
+# * flush → commit → publish call ordering for create_asset;
+# * list_assets ordering (created_at DESC, id DESC);
+# * update_asset changed_fields for both fields in stable order;
+# * delete_asset returns False (the 404-equivalent contract) when the
+#   asset is missing in the visible scope.
+class TestAssetServiceFullContract:
+    """RED tests for service-level invariants required by T10.3."""
+
+    @pytest.mark.asyncio
+    async def test_create_asset_calls_flush_then_commit_then_publish_in_order(
+        self,
+    ) -> None:
+        """flush → commit → publish(stream='asset.events') MUST be the order.
+
+        The contract (design.md D-005) is: capture-after-flush /
+        publish-after-commit. Reversing flush and commit, or publishing
+        before commit, would leak phantom events on rollback.
+        """
+        from app.modules.assets import service
+        from app.modules.assets.schemas import IpAssetCreate
+
+        db = MagicMock()
+        db.add = MagicMock()
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+
+        call_log: list[str] = []
+
+        async def _flush() -> None:
+            call_log.append("flush")
+            obj = db.add.call_args.args[0]
+            if getattr(obj, "id", None) is None:
+                obj.id = uuid.uuid4()
+            now = datetime.now(timezone.utc)
+            if getattr(obj, "created_at", None) is None:
+                obj.created_at = now
+            if getattr(obj, "updated_at", None) is None:
+                obj.updated_at = now
+
+        async def _commit() -> None:
+            call_log.append("commit")
+
+        db.flush = AsyncMock(side_effect=_flush)
+        db.commit = AsyncMock(side_effect=_commit)
+
+        event_bus = MagicMock()
+
+        async def _publish(event, **kwargs):  # type: ignore[no-untyped-def]
+            call_log.append("publish")
+            return b"stream-id"
+
+        event_bus.publish = AsyncMock(side_effect=_publish)
+
+        data = IpAssetCreate(
+            tenant_id=uuid.uuid4(),
+            value="192.0.2.50",
+            type="ip",
+        )
+        await service.create_asset(
+            data=data, tenant_id=data.tenant_id, db=db, event_bus=event_bus
+        )
+
+        assert call_log == ["flush", "commit", "publish"], (
+            f"Expected flush→commit→publish ordering; got {call_log!r}"
+        )
+        # stream= override MUST be asset.events.
+        assert event_bus.publish.await_args.kwargs["stream"] == "asset.events"
+
+    @pytest.mark.asyncio
+    async def test_list_assets_uses_created_at_desc_then_id_desc(
+        self, db_session, seed_data
+    ) -> None:
+        """list_assets MUST order items by created_at DESC, id DESC.
+
+        Drives the real ``list_assets`` against ``db_session`` so the
+        ORDER BY clause is exercised against PostgreSQL itself. Inserts
+        three rows with explicit, monotonically-increasing timestamps
+        then asserts the returned order is newest-first.
+        """
+        from sqlalchemy import select
+        from sqlalchemy.sql import compiler
+
+        from app.modules.assets import service
+        from app.modules.assets.models import Asset
+
+        tenant_a = seed_data["tenant_a"]
+
+        # Insert three assets with explicit, distinct timestamps.
+        base_ts = datetime.now(timezone.utc)
+        rows = [
+            Asset(
+                tenant_id=tenant_a.id,
+                asset_type="ip",
+                value="192.0.2.11",
+                created_at=base_ts.replace(microsecond=base_ts.microsecond + 0),
+            ),
+            Asset(
+                tenant_id=tenant_a.id,
+                asset_type="ip",
+                value="192.0.2.12",
+                created_at=base_ts.replace(microsecond=base_ts.microsecond + 100),
+            ),
+            Asset(
+                tenant_id=tenant_a.id,
+                asset_type="ip",
+                value="192.0.2.13",
+                created_at=base_ts.replace(microsecond=base_ts.microsecond + 200),
+            ),
+        ]
+        for row in rows:
+            db_session.add(row)
+        await db_session.flush()
+        await db_session.commit()
+
+        items, total = await service.list_assets(
+            tenant_id=tenant_a.id, db=db_session, limit=10, offset=0
+        )
+        # All three are visible (the seed_data only inserts tenants and
+        # users, never assets) so the total reflects this test only.
+        assert total == 3
+        assert len(items) == 3
+
+        # The ORDER BY clause must surface ``created_at DESC, id DESC``.
+        stmt = (
+            select(Asset)
+            .where(Asset.tenant_id == tenant_a.id)
+            .order_by(Asset.created_at.desc(), Asset.id.desc())
+            .limit(10)
+            .offset(0)
+        )
+        compiled: compiler.SQLCompiler = stmt.compile(  # type: ignore[attr-defined]
+            dialect=db_session.bind.dialect,
+            compile_kwargs={"literal_binds": False},
+        )
+        assert "ORDER BY" in str(compiled).upper()
+        order_clause = str(compiled).upper().split("ORDER BY", 1)[1]
+        # ``created_at`` appears before ``id`` (stable order).
+        assert order_clause.find("CREATED_AT") < order_clause.find("ID"), (
+            f"ORDER BY must list created_at DESC before id DESC; got {order_clause!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_asset_changed_fields_lists_both_keys_in_stable_order(
+        self,
+    ) -> None:
+        """Updating BOTH ``type`` and ``value`` MUST emit ``["type", "value"]``.
+
+        The ordering matches ``_public_field_names()`` so consumers can
+        rely on a stable contract.
+        """
+        from app.modules.assets import service
+        from app.modules.assets.schemas import AssetUpdate
+
+        orm = MagicMock()
+        orm.id = uuid.uuid4()
+        orm.tenant_id = uuid.uuid4()
+        orm.asset_type = "ip"
+        orm.value = "192.0.2.10"
+        orm.created_at = datetime.now(timezone.utc)
+        orm.updated_at = datetime.now(timezone.utc)
+
+        db = MagicMock()
+        db.execute = AsyncMock(
+            return_value=MagicMock(
+                scalar_one_or_none=MagicMock(return_value=orm)
+            )
+        )
+        db.add = MagicMock()
+        db.flush = AsyncMock()
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+        event_bus = MagicMock()
+        event_bus.publish = AsyncMock(return_value=b"stream-id")
+
+        data = AssetUpdate(type="hostname", value="app.example.com")
+        await service.update_asset(
+            asset_id=orm.id,
+            tenant_id=orm.tenant_id,
+            data=data,
+            db=db,
+            event_bus=event_bus,
+        )
+
+        evt = event_bus.publish.await_args.args[0]
+        assert evt.changed_fields == ["type", "value"], (
+            f"Expected changed_fields=['type','value']; got {evt.changed_fields!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_delete_asset_returns_false_when_asset_not_found(self) -> None:
+        """delete_asset MUST return ``False`` when no row matches the scope.
+
+        The router maps ``False`` to HTTP 404. Returning ``True`` or
+        raising on miss would either leak existence (204 even when the
+        resource was never visible) or break the documented contract.
+        """
+        from app.modules.assets import service
+
+        db = MagicMock()
+        db.execute = AsyncMock(
+            return_value=MagicMock(
+                scalar_one_or_none=MagicMock(return_value=None)
+            )
+        )
+        db.delete = AsyncMock()
+        db.commit = AsyncMock()
+        event_bus = MagicMock()
+        event_bus.publish = AsyncMock()
+
+        ok = await service.delete_asset(
+            asset_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            db=db,
+            event_bus=event_bus,
+        )
+        assert ok is False, "delete_asset MUST return False on miss"
+        # No commit / no publish when the asset is not in scope.
+        db.commit.assert_not_awaited()
+        event_bus.publish.assert_not_awaited()

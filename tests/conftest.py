@@ -63,6 +63,11 @@ ADMIN_A_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 ANALYST_A_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 VIEWER_A_ID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
 ADMIN_B_ID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+# Slice 1 (F2): ``ingestor`` is one of the five canonical F1 roles and is
+# explicitly DENIED on every Assets endpoint (D-006 / RBAC matrix). The
+# tests/conftest seed_data fixture inserts an ingestor user bound to
+# TENANT_A so the T11.2 RBAC matrix can verify the 403 cases.
+INGESTOR_A_ID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
 
 TEST_DATABASE_URL = os.environ["DATABASE_URL"]
 MIGRATION_DATABASE_URL = os.environ["DATABASE_URL_MIGRATION"]
@@ -306,6 +311,23 @@ async def seed_data(db_session: AsyncSession):
         )
         .on_conflict_do_nothing(index_elements=["id"])
     )
+    # Ingestor (F1 canonical role) — T11.2 RBAC matrix requires a
+    # user with role='ingestor' to exercise the six 403 denials on
+    # the Assets endpoints (D-006).
+    await db_session.execute(
+        pg_insert(User)
+        .values(
+            id=UUID(INGESTOR_A_ID),
+            tenant_id=UUID(TENANT_A_ID),
+            email="ingestor@soc360.test",
+            hashed_password=_seed_password_hash("IngestorAlpha123!"),
+            full_name="Ingestor Alpha",
+            role="ingestor",
+            is_active=True,
+            is_superadmin=False,
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
     await db_session.flush()
 
     # Fetch persisted records for test use
@@ -316,6 +338,7 @@ async def seed_data(db_session: AsyncSession):
     analyst_a = await db_session.get(User, UUID(ANALYST_A_ID))
     viewer_a = await db_session.get(User, UUID(VIEWER_A_ID))
     admin_b = await db_session.get(User, UUID(ADMIN_B_ID))
+    ingestor_a = await db_session.get(User, UUID(INGESTOR_A_ID))
 
     return {
         "tenant_a": tenant_a,
@@ -325,6 +348,7 @@ async def seed_data(db_session: AsyncSession):
         "analyst_a": analyst_a,
         "viewer_a": viewer_a,
         "admin_b": admin_b,
+        "ingestor_a": ingestor_a,
     }
 
 
@@ -387,6 +411,108 @@ async def client(db_session: AsyncSession):
         yield ac
 
 
+# ---------------------------------------------------------------------------
+# Slice 1 (F2) — tenant_client fixture with explicit RLS context
+# ---------------------------------------------------------------------------
+# Critical: ``httpx.AsyncClient`` + ``ASGITransport`` only act as an HTTP
+# transport against the ASGI app; they do NOT establish RLS context nor a
+# tenant scope by themselves. The plain ``client`` fixture above only
+# overrides ``get_db`` and skips ``set_tenant_context`` (the F1 baseline),
+# which would let RLS leak between tests. The ``tenant_client`` fixture
+# explicitly wires ``set_tenant_context(db_session, current_user.tenant_id,
+# current_user.is_superadmin)`` for the resolved ``current_user`` so the
+# RLS predicates (``app.current_tenant`` / ``app.is_superadmin``) match
+# the requester's identity at every test boundary.
+@pytest_asyncio.fixture
+async def tenant_client(db_session: AsyncSession):
+    from fastapi import Depends
+    from redis.asyncio import Redis as _RealAsyncRedis
+
+    from app.core.config import settings as _settings
+    from app.core.database import set_tenant_context
+    from app.dependencies.auth import get_current_user
+    from app.dependencies.event_deps import get_event_bus
+    from app.event_bus import EventBus as _TestEventBus
+    from app.modules.users.models import User as _User
+
+    app = create_app()
+    # Slice 1 (F2) requires a real Redis: fakeredis 2.34 does not
+    # implement Redis Streams (XADD) reliably, which the asset
+    # mutation endpoints exercise via EventBus.publish(stream="asset.events").
+    # Use db=14 to isolate from F1's db=15 fixtures and from any
+    # ad-hoc dev traffic on db=0. Password comes from the same
+    # settings that the production app uses.
+    test_redis = _RealAsyncRedis(
+        host=_settings.REDIS_HOST,
+        port=_settings.REDIS_PORT,
+        db=14,
+        # Local test Redis on :6379 runs without AUTH (the daemonized
+        # redis-server in this dev env didn't accept --requirepass because
+        # the port was already bound). Production-like settings still carry
+        # REDIS_PASSWORD; the test client intentionally drops it to match.
+        password=None,
+        decode_responses=True,
+    )
+    try:
+        await test_redis.ping()
+    except Exception as exc:  # pragma: no cover - env guard
+        await test_redis.aclose()
+        raise RuntimeError(
+"tenant_client fixture requires a reachable Redis on "
+f"{_settings.REDIS_HOST}:{_settings.REDIS_PORT} db=14. "
+f"Original error: {exc!r}"
+        ) from exc
+
+    async def override_get_db():
+        yield db_session
+
+    async def override_get_db_with_tenant(
+        user: _User = Depends(get_current_user),
+    ):
+        # Defence-in-depth: explicitly set RLS context for ``user``
+        # before yielding the shared test session. ``get_current_user``
+        # itself calls ``set_tenant_context`` during user resolution,
+        # so this is idempotent for the same request.
+        await set_tenant_context(
+db=db_session,
+tenant_id=user.tenant_id,
+is_superadmin=user.is_superadmin,
+        )
+        yield db_session
+
+    async def override_get_redis():
+        yield test_redis
+
+    # get_event_bus builds its EventBus from get_redis_client()
+    # (singleton pool) instead of Depends(get_redis), so the
+    # get_redis override alone does NOT steer Events. Reset the
+    # module-level singleton to point at test_redis. This keeps a
+    # SINGLE bus instance across the request lifecycle so the spy in
+    # TestEventsSpy (which obtains the same singleton via
+    ``event_deps.get_event_bus()``) patches the exact instance
+    the asset route uses.
+    async def override_get_event_bus():
+        from app.dependencies import event_deps
+        bus = _TestEventBus(test_redis)
+        event_deps._event_bus = bus
+        return bus
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_db_with_tenant] = override_get_db_with_tenant
+    app.dependency_overrides[get_redis] = override_get_redis
+    app.dependency_overrides[get_event_bus] = override_get_event_bus
+
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as ac:
+            yield ac
+    finally:
+        await test_redis.flushdb()
+        await test_redis.aclose()
+
+
 async def _get_token(client: AsyncClient, email: str, password: str) -> str:
     resp = await client.post(
         "/api/v1/auth/login",
@@ -422,6 +548,14 @@ async def admin_b_token(client: AsyncClient, seed_data) -> str:
 
 
 @pytest_asyncio.fixture
+async def ingestor_a_token(client: AsyncClient, seed_data) -> str:
+    # F1 canonical ``ingestor`` role — T11.2 RBAC matrix requires the
+    # 403 denials on every Assets endpoint. The seed inserts this user
+    # alongside the other roles.
+    return await _get_token(client, "ingestor@soc360.test", "IngestorAlpha123!")
+
+
+@pytest_asyncio.fixture
 async def superadmin_headers(superadmin_token: str) -> dict:
     return {"Authorization": f"Bearer {superadmin_token}"}
 
@@ -444,6 +578,11 @@ async def viewer_a_headers(viewer_a_token: str) -> dict:
 @pytest_asyncio.fixture
 async def admin_b_headers(admin_b_token: str) -> dict:
     return {"Authorization": f"Bearer {admin_b_token}"}
+
+
+@pytest_asyncio.fixture
+async def ingestor_a_headers(ingestor_a_token: str) -> dict:
+    return {"Authorization": f"Bearer {ingestor_a_token}"}
 
 
 # ---------------------------------------------------------------------------

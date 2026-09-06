@@ -203,3 +203,41 @@ uv run pytest tests/unit/test_assets.py tests/unit/test_event_bus.py tests/unit/
   - Verify the ``tests/unit/test_assets.py`` line budget against the 400-line review budget. The file currently has ~1590 lines: the migration shape tests + the T1.4 online behaviour tests account for ~840 of those; the new T3-T8 tests are ~430. If T11 wants to keep adding tests in this file, split into ``tests/unit/test_assets_schemas.py`` / ``test_assets_service.py`` to comply with the 400-line per-file review budget. (This slice did NOT split — the budget remains a future-slice concern.)
 - next_recommended: `sdd-apply` (continuation for T10 unit-test completion and T11 API tests).
 - Status of this slice: **ready-for-verify** (implementation matches design.md + spec.md contracts; TDD evidence captured). Final verify (T12) is owned by a separate delegation.
+
+## T10+T11 — Implementation status (WIP, not green gate)
+
+- **Result**: `uv run pytest tests/unit/test_assets.py tests/api/test_assets.py` -> 60 unit GREEN, 46 API pass, 10 API fail.
+- **Branch**: `sdd/f2-slice-01-assets`, this is the 3rd WIP commit on the slice branch (T1+T2 -> 3fda6a8, T3-T9 -> 593ec71, T10+T11 -> pending).
+- **Fixtures changed**: `tests/conftest.py` `tenant_client` switched from `_LuaCapableFakeRedis` to a real `redis.asyncio.Redis` on `db=14` (test-isolated). `app.dependency_overrides[get_event_bus]` overridden so the EventBus singleton is reset to point at `test_redis` (matches the spy in TestEventsSpy which obtains the singleton via `event_deps.get_event_bus()`).
+
+### Known failures (10) — accepted as WIP, fix in next slice commit or before merge gate
+
+| # | Test | Symptom | Root cause hypothesis | Owner |
+| - | ---- | ------- | --------------------- | ----- |
+| F-1 | `TestRBACMatrix::test_rbac_cell[GET_by_id_cross_admin_b]` | expected 404, got 200 | `admin_b` cross-tenant access returned 200 instead of 404. Tenant scoping predicate for `is_superadmin=False` likely has a bug in `_scope_asset_query` (router.py). | next |
+| F-2..5 | `TestRBACMatrix::test_rbac_cell[CSV_*]` (4 cells) | expected 200, got 503/500 | CSV export endpoint likely hits Redis Stream read or RLS predicate that the test fixture doesn't satisfy, or query builder for the unpaginated CSV path has a bug. | next |
+| F-6 | `TestSuperadminCrossTenant::test_superadmin_csv_export_returns_text_csv` | expected 200 text/csv, got 503 | Same as F-2..5, superadmin path. | next |
+| F-7..9 | `TestEventsSpy::test_post_publishes_asset_created` / `test_patch_publishes_asset_updated_with_changed_fields` / `test_delete_publishes_asset_deleted` | `Expected 1 publish; got []` | After resetting the singleton, the spy should work, but tests were run BEFORE that fix in this WIP pass. Re-run needed after this commit. | this commit re-verify |
+| F-10 | `TestEventsSpy::test_commit_failure_does_not_publish_event` | `RuntimeError: simulated commit failure for T11.7 negative test` | The negative-test asserts that commit failure does NOT publish. Setup may also need re-run with the singleton-reset fixture. | this commit re-verify |
+
+### Re-verify command (post-commit)
+
+```bash
+export SECRET_KEY=$(.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(96))")
+export DATABASE_URL='postgresql+asyncpg://soc360_app:***REMOVED***@localhost:5434/soc360_test'
+export DATABASE_URL_MIGRATION='postgresql+asyncpg://soc360_migration:***REMOVED***@localhost:5434/soc360_test'
+.venv/bin/python -m pytest tests/unit/test_assets.py tests/api/test_assets.py --tb=short -q
+```
+
+Expected after re-verify: F-7..F-10 should now pass (singleton reset was applied); F-1..F-6 still need code-level fixes in `_scope_asset_query` (router) and the CSV query path.
+
+### Out of scope for this WIP commit
+
+- T1..T9 already on this branch (3fda6a8, 593ec71).
+- T12 verify/lint/mypy/gate -> next delegation after F-1..F-6 are fixed.
+
+### Operational notes (not slice risk, env-only)
+
+- Local Postgres@16 started on `localhost:5434` (Docker daemon down). Roles `soc360_admin`, `soc360_migration`, `soc360_app` created with `.env` passwords. DBs `soc360` and `soc360_test` created. `alembic upgrade head` applied (last rev `e0eafdf389fc`).
+- Local Redis on `localhost:6379` (no AUTH) running. Tests use `db=14` to isolate from F1's `db=15` and prod's `db=0`.
+- `.env` has `SECRET_KEY` of 67 chars; Settings requires >=128 (PR3 #260). Tests use env-var override (`secrets.token_urlsafe(96)` -> 128 chars); production .env remains untouched.

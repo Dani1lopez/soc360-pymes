@@ -141,6 +141,41 @@ def require_role(minimum_role: str):
     return _check
 
 
+def require_any_role(*roles: str):
+    """Authorize any user whose role matches one of ``roles`` exactly.
+
+    This guard is RBAC-FLAVOR 2 (allowlist exact match) per design.md
+    D-006: it does NOT consult any hierarchical role relationship. It is
+    the right primitive when an endpoint needs to admit a fixed set of
+    roles (e.g. ``admin`` + ``superadmin`` for write endpoints, the four
+    canonical reader roles for read endpoints).
+
+    ``superadmin`` is NOT implicitly included — callers MUST pass it
+    explicitly when they want to admit superadmins. The five canonical F1
+    roles are ``viewer``, ``analyst``, ``ingestor``, ``admin`` and
+    ``superadmin`` (see ``app.modules.users.models.User``).
+    """
+
+    async def _check(
+        current_user: User = Depends(get_current_user),
+    ) -> User:
+        if current_user.role not in roles:
+            logger.warning(
+                "auth_failed",
+                reason="role_not_in_allowlist",
+                user_id=str(current_user.id),
+                actual=current_user.role,
+                allowlist=list(roles),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Permisos insuficientes",
+            )
+        return current_user
+
+    return _check
+
+
 async def require_superadmin(
     current_user: User = Depends(get_current_user),
 ) -> User:

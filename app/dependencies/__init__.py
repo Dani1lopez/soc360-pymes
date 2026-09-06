@@ -11,11 +11,12 @@ from fastapi import Depends
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db  # noqa: F401 — re-exported
-from app.core.redis import get_redis  # noqa: F401 — re-exported
+from app.core.database import get_db
+from app.core.redis import get_redis
 from app.dependencies.auth import (  # noqa: F401
     get_current_user,
     oauth2_scheme,
+    require_any_role,
     require_role,
     require_superadmin,
 )
@@ -30,13 +31,13 @@ from app.dependencies.cross_tenant import (  # noqa: F401
     get_user_for_admin_get,
     get_user_for_admin_patch,
 )
-from app.dependencies.db_deps import get_db_with_tenant  # noqa: F401
+from app.dependencies.db_deps import get_db_with_tenant
 from app.dependencies.event_deps import (  # noqa: F401
     _event_bus,
     get_event_bus,
 )
 from app.dependencies.llm_deps import get_llm  # noqa: F401
-from app.dependencies.lock_deps import (  # noqa: F401
+from app.dependencies.lock_deps import (
     get_tenant_deactivation_db,
     get_user_deactivation_db,
 )

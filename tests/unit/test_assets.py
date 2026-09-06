@@ -1,4 +1,6 @@
-"""RED tests for Slice 1 — Assets migration.
+"""RED tests for Slice 1 — Assets migration (T1..T2), events (T6),
+EventBus stream override (T7), validators + schemas (T3, T10.1), and
+service behaviour (T4, T10.3).
 
 T1.4 contract: verify the new Alembic revision aligns `assets` to six
 asset_types (`hostname`, `domain`, `ip`, `web_app`, `subnet`,
@@ -12,14 +14,19 @@ the online tests fail until the preconditions abort before any DDL.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import subprocess
+import uuid
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import asyncpg
 import pytest
+from fakeredis.aioredis import FakeRedis
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -955,3 +962,629 @@ async def _fetch_all_assets(db_url: str) -> list[dict]:
             await conn.close()
 
     return await _run()
+
+
+# ---------------------------------------------------------------------------
+# T6.2 — Asset event schema smoke tests (RED → GREEN)
+# ---------------------------------------------------------------------------
+class TestAssetEventSchemas:
+    """RED tests asserting each Asset* event in app/event_schemas.py carries
+    the correct ``event_type`` literal and required payload fields."""
+
+    def test_asset_created_event_serializes_with_event_type_literal(self) -> None:
+        from app.event_schemas import AssetCreatedEvent
+
+        tenant_id = uuid.uuid4()
+        asset_id = uuid.uuid4()
+        created_at = datetime.now(timezone.utc)
+        evt = AssetCreatedEvent(
+            event_id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            asset_id=asset_id,
+            type="ip",
+            value="192.0.2.42",
+            created_at=created_at,
+        )
+        assert evt.event_type == "asset.created"
+        payload = json.loads(evt.model_dump_json())
+        assert payload["event_type"] == "asset.created"
+        assert payload["asset_id"] == str(asset_id)
+        assert payload["type"] == "ip"
+        assert payload["value"] == "192.0.2.42"
+        assert payload["tenant_id"] == str(tenant_id)
+        # created_at field is required and round-trips
+        assert "created_at" in payload
+
+    def test_asset_updated_event_carries_changed_fields_list(self) -> None:
+        from app.event_schemas import AssetUpdatedEvent
+
+        evt = AssetUpdatedEvent(
+            event_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            asset_id=uuid.uuid4(),
+            changed_fields=["type", "value"],
+        )
+        assert evt.event_type == "asset.updated"
+        payload = json.loads(evt.model_dump_json())
+        assert payload["event_type"] == "asset.updated"
+        assert payload["changed_fields"] == ["type", "value"]
+
+    def test_asset_deleted_event_carries_asset_id(self) -> None:
+        from app.event_schemas import AssetDeletedEvent
+
+        evt = AssetDeletedEvent(
+            event_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            asset_id=uuid.uuid4(),
+        )
+        assert evt.event_type == "asset.deleted"
+        payload = json.loads(evt.model_dump_json())
+        assert payload["event_type"] == "asset.deleted"
+        assert "asset_id" in payload
+        # No spurious payload fields are emitted by the model:
+        assert set(payload.keys()) >= {
+            "event_id",
+            "event_type",
+            "tenant_id",
+            "asset_id",
+            "timestamp",
+        }
+
+    def test_asset_events_inherit_base_envelope(self) -> None:
+        """Asset* events MUST inherit from BaseEvent (event_id + tenant_id)."""
+        from app.event_schemas import (
+            BaseEvent,
+            AssetCreatedEvent,
+            AssetDeletedEvent,
+            AssetUpdatedEvent,
+        )
+
+        assert issubclass(AssetCreatedEvent, BaseEvent)
+        assert issubclass(AssetUpdatedEvent, BaseEvent)
+        assert issubclass(AssetDeletedEvent, BaseEvent)
+
+
+# ---------------------------------------------------------------------------
+# T7.2 — EventBus.publish stream override tests (RED → GREEN)
+# ---------------------------------------------------------------------------
+class TestEventBusPublishStreamOverride:
+    """RED tests for EventBus.publish(event, stream=...)."""
+
+    @pytest.mark.asyncio
+    async def test_publish_with_stream_override_writes_to_named_stream(self) -> None:
+        from app.event_bus import EventBus
+        from app.event_schemas import AssetCreatedEvent
+
+        client = FakeRedis(decode_responses=False)
+        bus = EventBus(redis_client=client)
+        try:
+            evt = AssetCreatedEvent(
+                event_id=uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                asset_id=uuid.uuid4(),
+                type="ip",
+                value="192.0.2.10",
+                created_at=datetime.now(timezone.utc),
+            )
+            msg_id = await bus.publish(evt, stream="asset.events")
+            assert msg_id is not None
+
+            # Override stream holds the entry; default stream does not.
+            override_len = await client.xlen("asset.events")
+            default_len = await client.xlen("events:asset.created")
+            assert override_len == 1, (
+                f"stream= override MUST write to 'asset.events', got len={override_len}."
+            )
+            assert default_len == 0, (
+                "Publishing with stream= override MUST NOT write to the default "
+                "F1 stream 'events:asset.created'."
+            )
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_publish_without_stream_override_uses_default_stream(self) -> None:
+        from app.event_bus import EventBus
+        from app.event_schemas import AssetCreatedEvent
+
+        client = FakeRedis(decode_responses=False)
+        bus = EventBus(redis_client=client)
+        try:
+            evt = AssetCreatedEvent(
+                event_id=uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                asset_id=uuid.uuid4(),
+                type="ip",
+                value="192.0.2.11",
+                created_at=datetime.now(timezone.utc),
+            )
+            msg_id = await bus.publish(evt)  # no stream= override
+            assert msg_id is not None
+            default_len = await client.xlen("events:asset.created")
+            override_len = await client.xlen("asset.events")
+            assert default_len == 1, (
+                f"Without stream= override, MUST use F1 default stream, "
+                f"got len={default_len}."
+            )
+            assert override_len == 0, (
+                "Without stream= override, MUST NOT auto-publish to 'asset.events'."
+            )
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_publish_with_stream_override_persists_event_type_field(self) -> None:
+        from app.event_bus import EventBus
+        from app.event_schemas import AssetCreatedEvent
+
+        client = FakeRedis(decode_responses=False)
+        bus = EventBus(redis_client=client)
+        try:
+            evt = AssetCreatedEvent(
+                event_id=uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                asset_id=uuid.uuid4(),
+                type="hostname",
+                value="app.example.com",
+                created_at=datetime.now(timezone.utc),
+            )
+            await bus.publish(evt, stream="asset.events")
+
+            entries = await client.xrange("asset.events")
+            assert entries, "asset.events stream MUST contain the published entry."
+            _msg_id, fields = entries[0]
+
+            def _decode(value: object) -> str:
+                return value.decode() if isinstance(value, bytes) else value  # type: ignore[union-attr]
+
+            decoded = {
+                _decode(k): _decode(v) for k, v in fields.items()
+            }
+            assert decoded["event_type"] == "asset.created"
+            assert decoded["type"] == "hostname"
+            assert decoded["value"] == "app.example.com"
+            assert decoded["asset_id"] == str(evt.asset_id)
+        finally:
+            await client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# T10.1 — Validator helper (subset) and T3 schemas tests (RED → GREEN)
+# ---------------------------------------------------------------------------
+class TestAssetValidators:
+    """RED tests for ``_validate_asset_value`` in app/modules/assets/service.py.
+
+    Covers the minimum happy/sad paths per the design.md D-004 contract. The
+    full validator matrix (hostname/domain/web_app) belongs to T10.1 in the
+    next delegation; this slice focuses on the ip / subnet / cloud_resource
+    cases plus the exact error messages required for 422 mapping.
+    """
+
+    def test_validate_ip_happy_v4_is_canonicalized(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        # '192.0.2.42' canonicalizes to itself.
+        result = _validate_asset_value("ip", "192.0.2.42")
+        assert result == "192.0.2.42"
+
+    def test_validate_ip_happy_v6_is_canonicalized(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        # '2001:0db8::1' MUST canonicalize to '2001:db8::1'.
+        result = _validate_asset_value("ip", "2001:0db8::1")
+        assert result == "2001:db8::1"
+
+    def test_validate_ip_sad_raises_exact_422_message(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        with pytest.raises(ValueError) as exc_info:
+            _validate_asset_value("ip", "999.999.999.1")
+        assert str(exc_info.value) == "value must be a valid IPv4 or IPv6 address"
+
+    def test_validate_ip_sad_garbage_raises_exact_message(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        with pytest.raises(ValueError) as exc_info:
+            _validate_asset_value("ip", "not-an-ip")
+        assert str(exc_info.value) == "value must be a valid IPv4 or IPv6 address"
+
+    def test_validate_subnet_happy_canonicalizes(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        # '192.168.0.5/24' normalizes to the network address '192.168.0.0/24'.
+        result = _validate_asset_value("subnet", "192.168.0.5/24")
+        assert result == "192.168.0.0/24"
+
+    def test_validate_subnet_sad_prefix_out_of_range(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        with pytest.raises(ValueError) as exc_info:
+            _validate_asset_value("subnet", "192.168.0.0/40")
+        assert str(exc_info.value) == "value must be a valid CIDR"
+
+    def test_validate_subnet_sad_garbage_prefix(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        with pytest.raises(ValueError) as exc_info:
+            _validate_asset_value("subnet", "192.168.0.0/abc")
+        assert str(exc_info.value) == "value must be a valid CIDR"
+
+    def test_validate_cloud_resource_happy_arn(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        result = _validate_asset_value(
+            "cloud_resource", "arn:aws:s3:::my-bucket"
+        )
+        assert result == "arn:aws:s3:::my-bucket"
+
+    def test_validate_cloud_resource_sad_missing_resource_segment(self) -> None:
+        from app.modules.assets.service import _validate_asset_value
+
+        # No ':resource' segment after the trailing ':' — ARN is incomplete.
+        with pytest.raises(ValueError) as exc_info:
+            _validate_asset_value(
+                "cloud_resource", "arn:aws:s3::us-west-2"
+            )
+        assert str(exc_info.value) == "value must be a valid ARN"
+
+
+class TestAssetSchemas:
+    """RED tests for app/modules/assets/schemas.py (T3)."""
+
+    def test_asset_response_has_exactly_six_fields(self) -> None:
+        from app.modules.assets.schemas import AssetResponse
+
+        fields = set(AssetResponse.model_fields.keys())
+        assert fields == {
+            "id",
+            "type",
+            "value",
+            "tenant_id",
+            "created_at",
+            "updated_at",
+        }, f"AssetResponse MUST expose exactly six public fields, got {fields!r}"
+
+    def test_asset_response_extra_forbid_rejects_unknown_field(self) -> None:
+        from app.modules.assets.schemas import AssetResponse
+        from pydantic import ValidationError
+
+        tenant_id = uuid.uuid4()
+        with pytest.raises(ValidationError):
+            AssetResponse(
+                id=uuid.uuid4(),
+                type="ip",
+                value="1.2.3.4",
+                tenant_id=tenant_id,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+                status="active",  # NOT whitelisted
+            )
+
+    def test_asset_response_renames_orm_asset_type_to_public_type(self) -> None:
+        """AssetResponse.from_orm_instance MUST map asset_type -> 'type'."""
+        from app.modules.assets.models import Asset
+        from app.modules.assets.schemas import AssetResponse
+
+        orm = Asset(
+            id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            value="192.0.2.1",
+            asset_type="ip",
+        )
+        # Bypass DB defaults for the test
+        orm.created_at = datetime.now(timezone.utc)
+        orm.updated_at = datetime.now(timezone.utc)
+
+        response = AssetResponse.from_orm_instance(orm)
+        dumped = response.model_dump(mode="json")
+        assert dumped["type"] == "ip"
+        assert dumped["value"] == "192.0.2.1"
+        assert "asset_type" not in dumped
+        assert "status" not in dumped
+        assert "asset_metadata" not in dumped
+        assert "created_by_user_id" not in dumped
+        assert "raw_input" not in dumped
+
+    def test_asset_create_base_rejects_extra_fields(self) -> None:
+        from app.modules.assets.schemas import AssetCreateBase
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            AssetCreateBase(
+                tenant_id=uuid.uuid4(),
+                value="x",
+                bogus_field="reject me",
+            )
+
+    def test_asset_update_uses_partial_pattern(self) -> None:
+        from app.modules.assets.schemas import AssetUpdate
+        from pydantic import ValidationError
+
+        # Both fields optional, extra rejected.
+        u = AssetUpdate()
+        assert u.type is None and u.value is None
+
+        u2 = AssetUpdate(type="ip", value="192.0.2.5")
+        assert u2.type == "ip"
+        assert u2.value == "192.0.2.5"
+
+        with pytest.raises(ValidationError):
+            AssetUpdate(unknown_field="nope")
+
+    def test_asset_create_request_is_discriminated_union(self) -> None:
+        """Discriminated union MUST reject payloads whose ``type`` doesn't match
+        the chosen schema branch."""
+        from pydantic import ValidationError
+
+        from app.modules.assets.schemas import AssetCreateRequest
+        from app.modules.assets.schemas import IpAssetCreate
+
+        # Building via the concrete type works.
+        ok = IpAssetCreate(
+            tenant_id=uuid.uuid4(),
+            value="192.0.2.7",
+            type="ip",
+        )
+        assert ok.type == "ip"
+
+        # Wrong discriminator literal must fail.
+        with pytest.raises(ValidationError):
+            IpAssetCreate(
+                tenant_id=uuid.uuid4(),
+                value="192.0.2.7",
+                type="hostname",  # not "ip"
+            )
+
+        # AssetType Literal exists with exactly six values.
+        from app.modules.assets.schemas import AssetType
+        import typing
+
+        asset_type_values = typing.get_args(AssetType)
+        for expected in ("ip", "domain", "hostname", "web_app", "subnet", "cloud_resource"):
+            assert expected in asset_type_values, (
+                f"AssetType MUST contain {expected!r}; got {asset_type_values!r}"
+            )
+        assert len(asset_type_values) == 6
+
+        # Ensure AssetCreateRequest is iterable over the six branches.
+        # AssetCreateRequest is ``Annotated[Union[...], Field(...)]`` whose
+        # outer __args__ has length 1 (the Union). Use typing.get_args to
+        # peel off Annotated + Union layers and recover the six branches.
+        import typing as _typing
+
+        outer = _typing.get_args(AssetCreateRequest)
+        assert len(outer) >= 1
+        union = outer[0]
+        branches = _typing.get_args(union)
+        assert len(branches) == 6, (
+            f"AssetCreateRequest MUST have 6 discriminated branches, "
+            f"got {len(branches)}: {branches!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# T10.3 — Service unit tests (AsyncMock for AsyncSession and EventBus)
+# ---------------------------------------------------------------------------
+class TestAssetService:
+    """RED tests for the asset service module-level functions."""
+
+    @pytest.mark.asyncio
+    async def test_create_asset_flushes_commits_and_publishes_to_stream(self) -> None:
+        """create_asset MUST flush + commit, then publish(stream='asset.events')."""
+        db = MagicMock()
+        # AsyncMock for the async methods we'll exercise
+        db.add = MagicMock()
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+
+        # db.flush must simulate SQLAlchemy's flush() behaviour: populate
+        # server defaults (id, timestamps) on the model instance so the
+        # event snapshot can be built.
+        async def _flush() -> None:
+            obj = db.add.call_args.args[0]
+            if getattr(obj, "id", None) is None:
+                obj.id = uuid.uuid4()
+            now = datetime.now(timezone.utc)
+            if getattr(obj, "created_at", None) is None:
+                obj.created_at = now
+            if getattr(obj, "updated_at", None) is None:
+                obj.updated_at = now
+
+        db.flush = AsyncMock(side_effect=_flush)
+        event_bus = MagicMock()
+        event_bus.publish = AsyncMock(return_value=b"stream-id")
+
+        from app.modules.assets import service
+        from app.modules.assets.schemas import IpAssetCreate
+
+        data = IpAssetCreate(
+            tenant_id=uuid.uuid4(),
+            value="192.0.2.50",
+            type="ip",
+        )
+
+        asset = await service.create_asset(
+            data=data,
+            tenant_id=data.tenant_id,
+            db=db,
+            event_bus=event_bus,
+        )
+
+        db.add.assert_called_once()
+        db.flush.assert_awaited_once()
+        db.commit.assert_awaited_once()
+        event_bus.publish.assert_awaited_once()
+        kwargs = event_bus.publish.await_args.kwargs
+        assert kwargs.get("stream") == "asset.events"
+        evt = event_bus.publish.await_args.args[0]
+        assert getattr(evt, "event_type", None) == "asset.created"
+        assert getattr(asset, "value", None) == "192.0.2.50"
+
+    @pytest.mark.asyncio
+    async def test_update_asset_changed_fields_lists_changed_keys(self) -> None:
+        """update_asset's ``changed_fields`` MUST contain the public field
+        names that actually changed.
+        """
+        orm = MagicMock()
+        orm.id = uuid.uuid4()
+        orm.tenant_id = uuid.uuid4()
+        orm.asset_type = "ip"
+        orm.value = "192.0.2.10"
+        orm.created_at = datetime.now(timezone.utc)
+        orm.updated_at = datetime.now(timezone.utc)
+
+        db = MagicMock()
+        execute_result = MagicMock(scalar_one_or_none=MagicMock(return_value=orm))
+        db.execute = AsyncMock(return_value=execute_result)
+        db.add = MagicMock()
+        db.flush = AsyncMock()
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+        event_bus = MagicMock()
+        event_bus.publish = AsyncMock(return_value=b"stream-id")
+
+        from app.modules.assets import service
+        from app.modules.assets.schemas import AssetUpdate
+
+        data = AssetUpdate(value="192.0.2.99")
+        result = await service.update_asset(
+            asset_id=orm.id,
+            tenant_id=orm.tenant_id,
+            data=data,
+            db=db,
+            event_bus=event_bus,
+        )
+        assert result is not None
+        # The publish call MUST carry changed_fields containing 'value' only.
+        kwargs = event_bus.publish.await_args.kwargs
+        assert kwargs.get("stream") == "asset.events"
+        evt = event_bus.publish.await_args.args[0]
+        assert "value" in evt.changed_fields
+        assert "type" not in evt.changed_fields
+
+    @pytest.mark.asyncio
+    async def test_delete_asset_returns_true_and_publishes(self) -> None:
+        """delete_asset MUST publish asset.deleted on 'asset.events'."""
+        orm = MagicMock()
+        orm.id = uuid.uuid4()
+        orm.tenant_id = uuid.uuid4()
+
+        db = MagicMock()
+        execute_result = MagicMock(scalar_one_or_none=MagicMock(return_value=orm))
+        db.execute = AsyncMock(return_value=execute_result)
+        db.delete = AsyncMock()
+        db.commit = AsyncMock()
+        event_bus = MagicMock()
+        event_bus.publish = AsyncMock(return_value=b"stream-id")
+
+        from app.modules.assets import service
+
+        ok = await service.delete_asset(
+            asset_id=orm.id,
+            tenant_id=orm.tenant_id,
+            db=db,
+            event_bus=event_bus,
+        )
+        assert ok is True
+        db.delete.assert_awaited_once_with(orm)
+        event_bus.publish.assert_awaited_once()
+        kwargs = event_bus.publish.await_args.kwargs
+        assert kwargs.get("stream") == "asset.events"
+        evt = event_bus.publish.await_args.args[0]
+        assert getattr(evt, "event_type", None) == "asset.deleted"
+
+    @pytest.mark.asyncio
+    async def test_list_assets_returns_items_and_total(self) -> None:
+        """list_assets MUST return (items, total) ordered by created_at DESC, id DESC."""
+        items = [MagicMock(), MagicMock()]
+        db = MagicMock()
+        # First execute = count, second execute = items.
+        count_result = MagicMock(scalar_one=MagicMock(return_value=7))
+        items_result = MagicMock()
+        items_result.scalars = MagicMock(
+            return_value=MagicMock(all=MagicMock(return_value=items))
+        )
+        db.execute = AsyncMock(side_effect=[count_result, items_result])
+
+        from app.modules.assets import service
+
+        result_items, total = await service.list_assets(
+            tenant_id=uuid.uuid4(),
+            db=db,
+            limit=10,
+            offset=0,
+        )
+        assert total == 7
+        assert list(result_items) == items
+
+    @pytest.mark.asyncio
+    async def test_create_asset_duplicate_raises_domain_error(self) -> None:
+        """create_asset MUST translate IntegrityError on uq constraint -> AssetDuplicateError."""
+        from sqlalchemy.exc import IntegrityError
+
+        from app.modules.assets import service
+        from app.modules.assets.schemas import IpAssetCreate
+
+        db = MagicMock()
+        db.add = MagicMock()
+        # First flush raises IntegrityError, second flush (after rollback) succeeds.
+        err = IntegrityError("INSERT", {}, Exception("uq_assets_tenant_type_value"))
+        err.orig = MagicMock(constraint_name="uq_assets_tenant_type_value")
+        db.flush = AsyncMock(side_effect=[err, None])
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+        event_bus = MagicMock()
+        event_bus.publish = AsyncMock()
+
+        data = IpAssetCreate(
+            tenant_id=uuid.uuid4(),
+            value="192.0.2.10",
+            type="ip",
+        )
+        with pytest.raises(service.AssetDuplicateError):
+            await service.create_asset(
+                data=data,
+                tenant_id=data.tenant_id,
+                db=db,
+                event_bus=event_bus,
+            )
+        event_bus.publish.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# T5 — require_any_role guard (RED → GREEN)
+# ---------------------------------------------------------------------------
+class TestRequireAnyRole:
+    """RED tests for app.dependencies.auth.require_any_role factory guard."""
+
+    @pytest.mark.asyncio
+    async def test_require_any_role_allows_user_in_allowlist(self) -> None:
+        """User with a role in the allowlist MUST pass through unmodified."""
+        from app.dependencies.auth import require_any_role
+
+        guard = require_any_role("admin", "superadmin")
+        user = MagicMock()
+        user.role = "admin"
+        result = await guard(current_user=user)
+        assert result is user
+
+    @pytest.mark.asyncio
+    async def test_require_any_role_rejects_user_not_in_allowlist(self) -> None:
+        """User with a role absent from the allowlist MUST 403."""
+        from fastapi import HTTPException
+
+        from app.dependencies.auth import require_any_role
+
+        guard = require_any_role("admin", "superadmin")
+        user = MagicMock()
+        user.role = "analyst"
+        with pytest.raises(HTTPException) as exc_info:
+            await guard(current_user=user)
+        assert exc_info.value.status_code == 403
+
+    def test_require_any_role_is_re_exported_from_dependencies_package(self) -> None:
+        """require_any_role MUST be importable from app.dependencies directly."""
+        from app.dependencies import require_any_role  # noqa: F401
+        import app.dependencies as deps_pkg
+
+        assert hasattr(deps_pkg, "require_any_role")

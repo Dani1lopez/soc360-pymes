@@ -1,4 +1,5 @@
 """Authentication dependencies: OAuth2 scheme, current user, role guards."""
+
 from __future__ import annotations
 
 from uuid import UUID
@@ -100,7 +101,9 @@ async def get_current_user(
 
     if not user.is_superadmin:
         if not row.Tenant or not row.Tenant.is_active:
-            logger.warning("auth_failed", reason="tenant_inactive", tenant_id=str(user.tenant_id))
+            logger.warning(
+                "auth_failed", reason="tenant_inactive", tenant_id=str(user.tenant_id)
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Tenant inactivo o no encontrado",
@@ -109,7 +112,9 @@ async def get_current_user(
     if user.is_superadmin:
         await set_tenant_context(db, user.tenant_id, True)
     elif user.tenant_id is None:
-        logger.warning("auth_failed", reason="missing_tenant_id", user_id=str(user_uuid))
+        logger.warning(
+            "auth_failed", reason="missing_tenant_id", user_id=str(user_uuid)
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Usuario no encontrado o inactivo",
@@ -134,10 +139,10 @@ def require_role(minimum_role: str):
                 actual=current_user.role,
             )
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Permisos insuficientes"
+                status_code=status.HTTP_403_FORBIDDEN, detail="Permisos insuficientes"
             )
         return current_user
+
     return _check
 
 

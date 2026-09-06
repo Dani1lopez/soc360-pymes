@@ -64,13 +64,12 @@ class Asset(Base):
         ),
         UniqueConstraint("id", "tenant_id", name="uq_assets_id_tenant_id"),
         UniqueConstraint(
-            "tenant_id", "asset_type", "value",
+            "tenant_id",
+            "asset_type",
+            "value",
             name="uq_assets_tenant_type_value",
         ),
     )
 
     def __repr__(self) -> str:
-        return (
-            f"<Asset id={self.id} "
-            f"type={self.asset_type!r} value={self.value!r}>"
-        )
+        return f"<Asset id={self.id} " f"type={self.asset_type!r} value={self.value!r}>"

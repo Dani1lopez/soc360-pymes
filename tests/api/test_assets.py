@@ -26,6 +26,7 @@ Test groups:
 * ``TestSemanticValidation422`` — type-specific error messages
   (T11.9).
 """
+
 from __future__ import annotations
 
 import csv
@@ -65,53 +66,258 @@ def _rbac_cases() -> list[tuple[str, str, int, dict[str, Any]]]:
     #   }
     return [
         # ----- POST /assets -----
-        ("POST_admin_a",            "admin_a",     201, {"verb": "POST",    "url": "/api/v1/assets/",       "body": {"tenant_id": TENANT_A_ID, "type": "ip",        "value": "192.0.2.10"}}),
-        ("POST_analyst_a",          "analyst_a",   403, {"verb": "POST",    "url": "/api/v1/assets/",       "body": {"tenant_id": TENANT_A_ID, "type": "ip",        "value": "192.0.2.11"}}),
-        ("POST_viewer_a",           "viewer_a",    403, {"verb": "POST",    "url": "/api/v1/assets/",       "body": {"tenant_id": TENANT_A_ID, "type": "ip",        "value": "192.0.2.12"}}),
+        (
+            "POST_admin_a",
+            "admin_a",
+            201,
+            {
+                "verb": "POST",
+                "url": "/api/v1/assets/",
+                "body": {"tenant_id": TENANT_A_ID, "type": "ip", "value": "192.0.2.10"},
+            },
+        ),
+        (
+            "POST_analyst_a",
+            "analyst_a",
+            403,
+            {
+                "verb": "POST",
+                "url": "/api/v1/assets/",
+                "body": {"tenant_id": TENANT_A_ID, "type": "ip", "value": "192.0.2.11"},
+            },
+        ),
+        (
+            "POST_viewer_a",
+            "viewer_a",
+            403,
+            {
+                "verb": "POST",
+                "url": "/api/v1/assets/",
+                "body": {"tenant_id": TENANT_A_ID, "type": "ip", "value": "192.0.2.12"},
+            },
+        ),
         # superadmin POSTs with explicit tenant_id (target = TENANT_A).
-        ("POST_superadmin_a",       "superadmin",  201, {"verb": "POST",    "url": "/api/v1/assets/",       "body": {"tenant_id": TENANT_A_ID, "type": "ip",        "value": "192.0.2.13"}}),
-        ("POST_ingestor_a",         "ingestor_a",  403, {"verb": "POST",    "url": "/api/v1/assets/",       "body": {"tenant_id": TENANT_A_ID, "type": "ip",        "value": "192.0.2.14"}}),
+        (
+            "POST_superadmin_a",
+            "superadmin",
+            201,
+            {
+                "verb": "POST",
+                "url": "/api/v1/assets/",
+                "body": {"tenant_id": TENANT_A_ID, "type": "ip", "value": "192.0.2.13"},
+            },
+        ),
+        (
+            "POST_ingestor_a",
+            "ingestor_a",
+            403,
+            {
+                "verb": "POST",
+                "url": "/api/v1/assets/",
+                "body": {"tenant_id": TENANT_A_ID, "type": "ip", "value": "192.0.2.14"},
+            },
+        ),
         # ----- GET /assets (list) -----
-        ("GET_list_admin_a",        "admin_a",     200, {"verb": "GET",     "url": "/api/v1/assets/"}),
-        ("GET_list_analyst_a",      "analyst_a",   200, {"verb": "GET",     "url": "/api/v1/assets/"}),
-        ("GET_list_viewer_a",       "viewer_a",    200, {"verb": "GET",     "url": "/api/v1/assets/"}),
-        ("GET_list_superadmin",     "superadmin",  200, {"verb": "GET",     "url": "/api/v1/assets/"}),
-        ("GET_list_ingestor_a",     "ingestor_a",  403, {"verb": "GET",     "url": "/api/v1/assets/"}),
+        ("GET_list_admin_a", "admin_a", 200, {"verb": "GET", "url": "/api/v1/assets/"}),
+        (
+            "GET_list_analyst_a",
+            "analyst_a",
+            200,
+            {"verb": "GET", "url": "/api/v1/assets/"},
+        ),
+        (
+            "GET_list_viewer_a",
+            "viewer_a",
+            200,
+            {"verb": "GET", "url": "/api/v1/assets/"},
+        ),
+        (
+            "GET_list_superadmin",
+            "superadmin",
+            200,
+            {"verb": "GET", "url": "/api/v1/assets/"},
+        ),
+        (
+            "GET_list_ingestor_a",
+            "ingestor_a",
+            403,
+            {"verb": "GET", "url": "/api/v1/assets/"},
+        ),
         # ----- GET /assets/{id} (own tenant) -----
         # Each "own" case uses an id that the role can see: admin_a / analyst_a /
         # viewer_a / superadmin see their own tenant (admin_a) AND
         # superadmin also sees cross-tenant. ingestor is always 403.
         # The fixture pre-creates an asset per role via seed.
-        ("GET_by_id_admin_a",       "admin_a",     200, {"verb": "GET",     "url": "/api/v1/assets/__OWN__"}),
-        ("GET_by_id_analyst_a",     "analyst_a",   200, {"verb": "GET",     "url": "/api/v1/assets/__OWN__"}),
-        ("GET_by_id_viewer_a",      "viewer_a",    200, {"verb": "GET",     "url": "/api/v1/assets/__OWN__"}),
-        ("GET_by_id_superadmin",    "superadmin",  200, {"verb": "GET",     "url": "/api/v1/assets/__OWN__"}),
-        ("GET_by_id_ingestor_a",    "ingestor_a",  403, {"verb": "GET",     "url": "/api/v1/assets/__OWN__"}),
+        (
+            "GET_by_id_admin_a",
+            "admin_a",
+            200,
+            {"verb": "GET", "url": "/api/v1/assets/__OWN__"},
+        ),
+        (
+            "GET_by_id_analyst_a",
+            "analyst_a",
+            200,
+            {"verb": "GET", "url": "/api/v1/assets/__OWN__"},
+        ),
+        (
+            "GET_by_id_viewer_a",
+            "viewer_a",
+            200,
+            {"verb": "GET", "url": "/api/v1/assets/__OWN__"},
+        ),
+        (
+            "GET_by_id_superadmin",
+            "superadmin",
+            200,
+            {"verb": "GET", "url": "/api/v1/assets/__OWN__"},
+        ),
+        (
+            "GET_by_id_ingestor_a",
+            "ingestor_a",
+            403,
+            {"verb": "GET", "url": "/api/v1/assets/__OWN__"},
+        ),
         # ----- GET /assets/{id} (cross-tenant) -----
         # Non-superadmin users get 404 for cross-tenant lookups (no leak);
         # superadmin gets 200; ingestor is 403 regardless.
-        ("GET_by_id_cross_admin_b",  "admin_b",    404, {"verb": "GET",     "url": "/api/v1/assets/__CROSS__"}),
-        ("GET_by_id_cross_admin_a",  "admin_a",    404, {"verb": "GET",     "url": "/api/v1/assets/__CROSS__"}),
-        ("GET_by_id_cross_analyst_a","analyst_a",  404, {"verb": "GET",     "url": "/api/v1/assets/__CROSS__"}),
-        ("GET_by_id_cross_superadmin","superadmin",200, {"verb": "GET",     "url": "/api/v1/assets/__CROSS__"}),
+        (
+            "GET_by_id_cross_admin_b",
+            "admin_b",
+            404,
+            {"verb": "GET", "url": "/api/v1/assets/__CROSS__"},
+        ),
+        (
+            "GET_by_id_cross_admin_a",
+            "admin_a",
+            404,
+            {"verb": "GET", "url": "/api/v1/assets/__CROSS__"},
+        ),
+        (
+            "GET_by_id_cross_analyst_a",
+            "analyst_a",
+            404,
+            {"verb": "GET", "url": "/api/v1/assets/__CROSS__"},
+        ),
+        (
+            "GET_by_id_cross_superadmin",
+            "superadmin",
+            200,
+            {"verb": "GET", "url": "/api/v1/assets/__CROSS__"},
+        ),
         # ----- PATCH /assets/{id} -----
-        ("PATCH_admin_a",           "admin_a",     200, {"verb": "PATCH",   "url": "/api/v1/assets/__OWN__", "body": {"value": "192.0.2.20"}}),
-        ("PATCH_analyst_a",         "analyst_a",   403, {"verb": "PATCH",   "url": "/api/v1/assets/__OWN__", "body": {"value": "192.0.2.21"}}),
-        ("PATCH_viewer_a",          "viewer_a",    403, {"verb": "PATCH",   "url": "/api/v1/assets/__OWN__", "body": {"value": "192.0.2.22"}}),
-        ("PATCH_superadmin",        "superadmin",  200, {"verb": "PATCH",   "url": "/api/v1/assets/__OWN__", "body": {"value": "192.0.2.23"}}),
-        ("PATCH_ingestor_a",        "ingestor_a",  403, {"verb": "PATCH",   "url": "/api/v1/assets/__OWN__", "body": {"value": "192.0.2.24"}}),
+        (
+            "PATCH_admin_a",
+            "admin_a",
+            200,
+            {
+                "verb": "PATCH",
+                "url": "/api/v1/assets/__OWN__",
+                "body": {"value": "192.0.2.20"},
+            },
+        ),
+        (
+            "PATCH_analyst_a",
+            "analyst_a",
+            403,
+            {
+                "verb": "PATCH",
+                "url": "/api/v1/assets/__OWN__",
+                "body": {"value": "192.0.2.21"},
+            },
+        ),
+        (
+            "PATCH_viewer_a",
+            "viewer_a",
+            403,
+            {
+                "verb": "PATCH",
+                "url": "/api/v1/assets/__OWN__",
+                "body": {"value": "192.0.2.22"},
+            },
+        ),
+        (
+            "PATCH_superadmin",
+            "superadmin",
+            200,
+            {
+                "verb": "PATCH",
+                "url": "/api/v1/assets/__OWN__",
+                "body": {"value": "192.0.2.23"},
+            },
+        ),
+        (
+            "PATCH_ingestor_a",
+            "ingestor_a",
+            403,
+            {
+                "verb": "PATCH",
+                "url": "/api/v1/assets/__OWN__",
+                "body": {"value": "192.0.2.24"},
+            },
+        ),
         # ----- DELETE /assets/{id} -----
-        ("DELETE_admin_a",          "admin_a",     204, {"verb": "DELETE",  "url": "/api/v1/assets/__OWN__"}),
-        ("DELETE_analyst_a",        "analyst_a",   403, {"verb": "DELETE",  "url": "/api/v1/assets/__OWN__"}),
-        ("DELETE_viewer_a",         "viewer_a",    403, {"verb": "DELETE",  "url": "/api/v1/assets/__OWN__"}),
-        ("DELETE_superadmin",       "superadmin",  204, {"verb": "DELETE",  "url": "/api/v1/assets/__OWN__"}),
-        ("DELETE_ingestor_a",       "ingestor_a",  403, {"verb": "DELETE",  "url": "/api/v1/assets/__OWN__"}),
+        (
+            "DELETE_admin_a",
+            "admin_a",
+            204,
+            {"verb": "DELETE", "url": "/api/v1/assets/__OWN__"},
+        ),
+        (
+            "DELETE_analyst_a",
+            "analyst_a",
+            403,
+            {"verb": "DELETE", "url": "/api/v1/assets/__OWN__"},
+        ),
+        (
+            "DELETE_viewer_a",
+            "viewer_a",
+            403,
+            {"verb": "DELETE", "url": "/api/v1/assets/__OWN__"},
+        ),
+        (
+            "DELETE_superadmin",
+            "superadmin",
+            204,
+            {"verb": "DELETE", "url": "/api/v1/assets/__OWN__"},
+        ),
+        (
+            "DELETE_ingestor_a",
+            "ingestor_a",
+            403,
+            {"verb": "DELETE", "url": "/api/v1/assets/__OWN__"},
+        ),
         # ----- GET /assets?export=csv -----
-        ("CSV_admin_a",             "admin_a",     200, {"verb": "GET",     "url": "/api/v1/assets/?export=csv"}),
-        ("CSV_analyst_a",           "analyst_a",   200, {"verb": "GET",     "url": "/api/v1/assets/?export=csv"}),
-        ("CSV_viewer_a",            "viewer_a",    200, {"verb": "GET",     "url": "/api/v1/assets/?export=csv"}),
-        ("CSV_superadmin",          "superadmin",  200, {"verb": "GET",     "url": "/api/v1/assets/?export=csv"}),
-        ("CSV_ingestor_a",          "ingestor_a",  403, {"verb": "GET",     "url": "/api/v1/assets/?export=csv"}),
+        (
+            "CSV_admin_a",
+            "admin_a",
+            200,
+            {"verb": "GET", "url": "/api/v1/assets/?export=csv"},
+        ),
+        (
+            "CSV_analyst_a",
+            "analyst_a",
+            200,
+            {"verb": "GET", "url": "/api/v1/assets/?export=csv"},
+        ),
+        (
+            "CSV_viewer_a",
+            "viewer_a",
+            200,
+            {"verb": "GET", "url": "/api/v1/assets/?export=csv"},
+        ),
+        (
+            "CSV_superadmin",
+            "superadmin",
+            200,
+            {"verb": "GET", "url": "/api/v1/assets/?export=csv"},
+        ),
+        (
+            "CSV_ingestor_a",
+            "ingestor_a",
+            403,
+            {"verb": "GET", "url": "/api/v1/assets/?export=csv"},
+        ),
     ]
 
 
@@ -287,9 +493,9 @@ class TestCrossTenant404:
             headers=admin_b_headers,
             json={"value": "192.0.2.64"},
         )
-        assert resp.status_code == 404, (
-            f"admin_b PATCH on tenant_a asset MUST be 404; got {resp.status_code}"
-        )
+        assert (
+            resp.status_code == 404
+        ), f"admin_b PATCH on tenant_a asset MUST be 404; got {resp.status_code}"
 
     @pytest.mark.asyncio
     async def test_admin_b_delete_cross_tenant_returns_404(
@@ -305,9 +511,9 @@ class TestCrossTenant404:
         resp = await tenant_client.delete(
             f"/api/v1/assets/{a1.id}", headers=admin_b_headers
         )
-        assert resp.status_code == 404, (
-            f"admin_b DELETE on tenant_a asset MUST be 404; got {resp.status_code}"
-        )
+        assert (
+            resp.status_code == 404
+        ), f"admin_b DELETE on tenant_a asset MUST be 404; got {resp.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -385,9 +591,9 @@ class TestSuperadminCrossTenant:
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["tenant_id"] == TENANT_A_ID, (
-            "superadmin PATCH MUST NOT change the asset's tenant_id"
-        )
+        assert (
+            body["tenant_id"] == TENANT_A_ID
+        ), "superadmin PATCH MUST NOT change the asset's tenant_id"
 
     @pytest.mark.asyncio
     async def test_superadmin_delete_cross_tenant_returns_204(
@@ -403,9 +609,9 @@ class TestSuperadminCrossTenant:
         resp = await tenant_client.delete(
             f"/api/v1/assets/{a.id}", headers=superadmin_headers
         )
-        assert resp.status_code == 204, (
-            f"superadmin cross-tenant DELETE expected 204, got {resp.status_code}"
-        )
+        assert (
+            resp.status_code == 204
+        ), f"superadmin cross-tenant DELETE expected 204, got {resp.status_code}"
 
     @pytest.mark.asyncio
     async def test_superadmin_post_without_tenant_id_returns_422(
@@ -416,17 +622,17 @@ class TestSuperadminCrossTenant:
             headers=superadmin_headers,
             json={"type": "ip", "value": "192.0.2.84"},
         )
-        assert resp.status_code == 422, (
-            f"superadmin POST without tenant_id MUST be 422; got {resp.status_code}"
-        )
+        assert (
+            resp.status_code == 422
+        ), f"superadmin POST without tenant_id MUST be 422; got {resp.status_code}"
         # The error detail MUST mention the missing field.
         body = resp.json()
         detail = body.get("detail") or []
         if isinstance(detail, list):
             fields = {err.get("loc", [])[-1] for err in detail}
-            assert "tenant_id" in fields, (
-                f"422 detail MUST mention tenant_id; got fields={fields!r}"
-            )
+            assert (
+                "tenant_id" in fields
+            ), f"422 detail MUST mention tenant_id; got fields={fields!r}"
         else:
             assert "tenant_id" in str(detail).lower()
 
@@ -464,9 +670,9 @@ class TestSuperadminCrossTenant:
             "/api/v1/assets/?export=csv", headers=superadmin_headers
         )
         assert resp.status_code == 200, resp.text
-        assert resp.headers["content-type"].startswith("text/csv"), (
-            f"CSV MUST advertise text/csv; got {resp.headers.get('content-type')!r}"
-        )
+        assert resp.headers["content-type"].startswith(
+            "text/csv"
+        ), f"CSV MUST advertise text/csv; got {resp.headers.get('content-type')!r}"
         text = resp.text
         reader = csv.DictReader(io.StringIO(text))
         rows = list(reader)
@@ -507,9 +713,9 @@ class TestUniqueness409:
                 "value": "192.0.2.90",
             },
         )
-        assert dup.status_code == 409, (
-            f"Duplicate POST MUST be 409; got {dup.status_code}: {dup.text}"
-        )
+        assert (
+            dup.status_code == 409
+        ), f"Duplicate POST MUST be 409; got {dup.status_code}: {dup.text}"
 
     @pytest.mark.asyncio
     async def test_patch_inducing_duplicate_returns_409(
@@ -547,9 +753,9 @@ class TestUniqueness409:
             headers=admin_a_headers,
             json={"value": "192.0.2.91"},
         )
-        assert patch_resp.status_code == 409, (
-            f"PATCH-induced duplicate MUST be 409; got {patch_resp.status_code}: {patch_resp.text}"
-        )
+        assert (
+            patch_resp.status_code == 409
+        ), f"PATCH-induced duplicate MUST be 409; got {patch_resp.status_code}: {patch_resp.text}"
 
 
 # ---------------------------------------------------------------------------
@@ -591,9 +797,9 @@ class TestPagination:
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["total"] >= 150, (
-            f"total MUST be at least 150 (seeded); got {body['total']}"
-        )
+        assert (
+            body["total"] >= 150
+        ), f"total MUST be at least 150 (seeded); got {body['total']}"
         assert body["limit"] == 50
         assert body["offset"] == 0
         assert len(body["items"]) == 50
@@ -605,15 +811,13 @@ class TestPagination:
         resp = await tenant_client.get(
             "/api/v1/assets/?limit=500", headers=admin_a_headers
         )
-        assert resp.status_code == 422, (
-            f"limit=500 MUST be 422; got {resp.status_code}: {resp.text}"
-        )
+        assert (
+            resp.status_code == 422
+        ), f"limit=500 MUST be 422; got {resp.status_code}: {resp.text}"
         body = resp.json()
         # FastAPI surfaces the offending query parameter in the error detail.
         text = resp.text.lower()
-        assert "limit" in text, (
-            f"422 message MUST mention 'limit'; got {resp.text}"
-        )
+        assert "limit" in text, f"422 message MUST mention 'limit'; got {resp.text}"
 
 
 # ---------------------------------------------------------------------------
@@ -799,9 +1003,7 @@ class TestEventsSpy:
         from sqlalchemy.ext.asyncio import AsyncSession
 
         original_commit = AsyncSession.commit
-        monkeypatch.setattr(
-            AsyncSession, "commit", _boom, raising=True
-        )
+        monkeypatch.setattr(AsyncSession, "commit", _boom, raising=True)
         try:
             resp = await tenant_client.post(
                 "/api/v1/assets/",
@@ -814,12 +1016,12 @@ class TestEventsSpy:
             )
             # Any 5xx is acceptable. 4xx means the router rejected the
             # request before commit, which would defeat the test purpose.
-            assert resp.status_code >= 500, (
-                f"commit failure MUST yield 5xx; got {resp.status_code}: {resp.text}"
-            )
-            assert calls == [], (
-                f"NO event MUST be published on commit failure; got {calls!r}"
-            )
+            assert (
+                resp.status_code >= 500
+            ), f"commit failure MUST yield 5xx; got {resp.status_code}: {resp.text}"
+            assert (
+                calls == []
+            ), f"NO event MUST be published on commit failure; got {calls!r}"
         finally:
             monkeypatch.setattr(AsyncSession, "commit", original_commit, raising=True)
 
@@ -866,9 +1068,9 @@ class TestResponseHygiene:
             "raw_input",
             "asset_type",
         ):
-            assert forbidden not in body, (
-                f"Field {forbidden!r} MUST NOT appear in the public response"
-            )
+            assert (
+                forbidden not in body
+            ), f"Field {forbidden!r} MUST NOT appear in the public response"
 
 
 # ---------------------------------------------------------------------------

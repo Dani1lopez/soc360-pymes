@@ -26,6 +26,7 @@ pre-existing condition that would invalidate the new constraint raises
 run only in online mode (a real DB connection); the offline ``--sql``
 render path skips them because ``op.get_bind()`` is not available.
 """
+
 from collections.abc import Sequence
 from typing import Union
 
@@ -33,8 +34,8 @@ import sqlalchemy as sa
 from alembic import context, op
 
 # revision identifiers, used by Alembic.
-revision: str = 'e0eafdf389fc'
-down_revision: Union[str, None] = 'a1b2c3d4e5f6'
+revision: str = "e0eafdf389fc"
+down_revision: Union[str, None] = "a1b2c3d4e5f6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -45,9 +46,7 @@ NEW_ASSET_TYPES_SQL = (
 )
 
 # Historical four-value allowlist restored by downgrade.
-OLD_ASSET_TYPES_SQL = (
-    "asset_type IN ('host','domain','ip','web_app')"
-)
+OLD_ASSET_TYPES_SQL = "asset_type IN ('host','domain','ip','web_app')"
 
 
 def _is_offline_mode() -> bool:
@@ -82,14 +81,15 @@ def upgrade() -> None:
     op.drop_constraint("chk_assets_asset_type", "assets", type_="check")
     op.alter_column("assets", "name", new_column_name="value")
     op.drop_column("assets", "hostname")
-    op.execute(
-        "UPDATE assets SET asset_type='hostname' WHERE asset_type='host'"
-    )
+    op.execute("UPDATE assets SET asset_type='hostname' WHERE asset_type='host'")
     op.create_check_constraint(
-        "chk_assets_asset_type", "assets", NEW_ASSET_TYPES_SQL,
+        "chk_assets_asset_type",
+        "assets",
+        NEW_ASSET_TYPES_SQL,
     )
     op.create_unique_constraint(
-        "uq_assets_tenant_type_value", "assets",
+        "uq_assets_tenant_type_value",
+        "assets",
         ["tenant_id", "asset_type", "value"],
     )
 
@@ -117,17 +117,19 @@ def downgrade() -> None:
             )
 
     op.drop_constraint(
-        "uq_assets_tenant_type_value", "assets", type_="unique",
+        "uq_assets_tenant_type_value",
+        "assets",
+        type_="unique",
     )
     op.drop_constraint("chk_assets_asset_type", "assets", type_="check")
-    op.execute(
-        "UPDATE assets SET asset_type='host' WHERE asset_type='hostname'"
-    )
+    op.execute("UPDATE assets SET asset_type='host' WHERE asset_type='hostname'")
     op.add_column(
         "assets",
         sa.Column("hostname", sa.String(length=255), nullable=True),
     )
     op.alter_column("assets", "value", new_column_name="name")
     op.create_check_constraint(
-        "chk_assets_asset_type", "assets", OLD_ASSET_TYPES_SQL,
+        "chk_assets_asset_type",
+        "assets",
+        OLD_ASSET_TYPES_SQL,
     )

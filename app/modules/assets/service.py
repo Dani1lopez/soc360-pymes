@@ -17,6 +17,7 @@ Design anchors:
 * D-008 — pagination is ``count(*)`` + items ordered
   ``created_at DESC, id DESC``.
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -101,9 +102,7 @@ def _validate_asset_value(asset_type: str, value: str) -> str:
         try:
             return str(ipaddress.ip_address(value))
         except (ValueError, TypeError) as exc:
-            raise ValueError(
-                "value must be a valid IPv4 or IPv6 address"
-            ) from exc
+            raise ValueError("value must be a valid IPv4 or IPv6 address") from exc
 
     if asset_type == "domain":
         v = value.strip().rstrip(".").lower()
@@ -182,9 +181,11 @@ def _is_duplicate_constraint_error(exc: IntegrityError) -> bool:
     orig = getattr(exc, "orig", None)
     if orig is None:
         return False
-    name = getattr(orig, "constraint_name", None) or getattr(
-        orig, "diag", None
-    ) and getattr(orig.diag, "constraint_name", None)
+    name = (
+        getattr(orig, "constraint_name", None)
+        or getattr(orig, "diag", None)
+        and getattr(orig.diag, "constraint_name", None)
+    )
     if name and _UNIQUE_CONSTRAINT_NAME in str(name):
         return True
     # Fallback: search the asyncpg message string for the constraint name.

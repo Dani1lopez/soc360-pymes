@@ -11,6 +11,7 @@ These tests are written BEFORE the migration is created (RED state).
 The offline SQL tests fail until the migration emits the right DDL;
 the online tests fail until the preconditions abort before any DDL.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -183,9 +184,7 @@ class TestMigrationShape:
             "The migration must drop the old check before recreating it."
         )
 
-    def test_uq_assets_tenant_type_value_added(
-        self, new_revision_sql: str
-    ) -> None:
+    def test_uq_assets_tenant_type_value_added(self, new_revision_sql: str) -> None:
         # uq_assets_tenant_type_value UNIQUE (tenant_id, asset_type, value)
         pattern = (
             r"alter table assets\s+add constraint uq_assets_tenant_type_value\s+"
@@ -282,17 +281,17 @@ class TestMigrationShape:
         self, new_revision_downgrade_sql: str
     ) -> None:
         pattern = r"drop constraint uq_assets_tenant_type_value"
-        assert re.search(pattern, new_revision_downgrade_sql, re.IGNORECASE), (
-            "Downgrade must drop uq_assets_tenant_type_value."
-        )
+        assert re.search(
+            pattern, new_revision_downgrade_sql, re.IGNORECASE
+        ), "Downgrade must drop uq_assets_tenant_type_value."
 
     def test_downgrade_renames_value_to_name(
         self, new_revision_downgrade_sql: str
     ) -> None:
         pattern = r"alter table\s+assets\s+rename\s+\"?value\"?\s+to\s+\"?name\"?"
-        assert re.search(pattern, new_revision_downgrade_sql, re.IGNORECASE), (
-            "Downgrade must rename value → name."
-        )
+        assert re.search(
+            pattern, new_revision_downgrade_sql, re.IGNORECASE
+        ), "Downgrade must rename value → name."
 
     def test_downgrade_readds_hostname_column(
         self, new_revision_downgrade_sql: str
@@ -302,9 +301,9 @@ class TestMigrationShape:
             r"alter table\s+assets\s+add column\s+\"?hostname\"?\s+"
             r"(?:character varying|varchar)"
         )
-        assert re.search(pattern, new_revision_downgrade_sql, re.IGNORECASE), (
-            "Downgrade must re-add the hostname column as nullable varchar(255)."
-        )
+        assert re.search(
+            pattern, new_revision_downgrade_sql, re.IGNORECASE
+        ), "Downgrade must re-add the hostname column as nullable varchar(255)."
         # And nullable (no NOT NULL after the type).
         m = re.search(
             r"alter table\s+assets\s+add column\s+\"?hostname\"?\s+"
@@ -313,9 +312,9 @@ class TestMigrationShape:
             re.IGNORECASE,
         )
         assert m is not None
-        assert "not null" not in m.group(1).lower(), (
-            "hostname column in downgrade must be nullable."
-        )
+        assert (
+            "not null" not in m.group(1).lower()
+        ), "hostname column in downgrade must be nullable."
 
     def test_downgrade_maps_hostname_back_to_host(
         self, new_revision_downgrade_sql: str
@@ -324,9 +323,9 @@ class TestMigrationShape:
             r"update\s+assets\s+set\s+asset_type\s*=\s*'host'"
             r"\s+where\s+asset_type\s*=\s*'hostname'"
         )
-        assert re.search(pattern, new_revision_downgrade_sql, re.IGNORECASE), (
-            "Downgrade must UPDATE asset_type='hostname' back to 'host'."
-        )
+        assert re.search(
+            pattern, new_revision_downgrade_sql, re.IGNORECASE
+        ), "Downgrade must UPDATE asset_type='hostname' back to 'host'."
 
 
 # ---------------------------------------------------------------------------
@@ -347,9 +346,8 @@ def _alembic_returns_alembic_error(
     Alembic traps RuntimeError and returns exit code 1 with a traceback
     in stderr that contains the original RuntimeError text.
     """
-    return (
-        result.returncode != 0
-        and ("RuntimeError" in result.stderr or "RuntimeError" in result.stdout)
+    return result.returncode != 0 and (
+        "RuntimeError" in result.stderr or "RuntimeError" in result.stdout
     )
 
 
@@ -372,6 +370,7 @@ def _run_in_event_loop(coro):
     functions synchronous while still using asyncpg.
     """
     import concurrent.futures
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(asyncio.run, coro)
         return future.result()
@@ -388,8 +387,11 @@ def _check_value_count(db_url: str, sql: str) -> int:
 
     async def _run() -> int:
         conn = await asyncpg.connect(
-            user=user, password=password,
-            host=host, port=int(port), database=dbname,
+            user=user,
+            password=password,
+            host=host,
+            port=int(port),
+            database=dbname,
         )
         try:
             return await conn.fetchval(sql)
@@ -410,8 +412,11 @@ def _fetch_scalar(db_url: str, sql: str) -> object:
 
     async def _run() -> object:
         conn = await asyncpg.connect(
-            user=user, password=password,
-            host=host, port=int(port), database=dbname,
+            user=user,
+            password=password,
+            host=host,
+            port=int(port),
+            database=dbname,
         )
         try:
             return await conn.fetchval(sql)
@@ -445,8 +450,11 @@ def isolated_db(migration_chain: tuple[str, str]) -> Iterator[None]:
 
     async def _setup() -> None:
         admin = await asyncpg.connect(
-            user=admin_user, password=admin_password or None,
-            host=host, port=int(port), database="postgres",
+            user=admin_user,
+            password=admin_password or None,
+            host=host,
+            port=int(port),
+            database="postgres",
         )
         try:
             await admin.execute(
@@ -462,8 +470,11 @@ def isolated_db(migration_chain: tuple[str, str]) -> Iterator[None]:
         # Grant the migration role the privileges alembic/env.py need
         # (CREATE on schema public, plus DDL on existing objects).
         owner = await asyncpg.connect(
-            user=admin_user, password=admin_password or None,
-            host=host, port=int(port), database=dbname,
+            user=admin_user,
+            password=admin_password or None,
+            host=host,
+            port=int(port),
+            database=dbname,
         )
         try:
             await owner.execute("GRANT ALL ON SCHEMA public TO soc360_migration")
@@ -473,8 +484,11 @@ def isolated_db(migration_chain: tuple[str, str]) -> Iterator[None]:
 
     async def _teardown() -> None:
         admin = await asyncpg.connect(
-            user=admin_user, password=admin_password or None,
-            host=host, port=int(port), database="postgres",
+            user=admin_user,
+            password=admin_password or None,
+            host=host,
+            port=int(port),
+            database="postgres",
         )
         try:
             await admin.execute(
@@ -518,11 +532,14 @@ class _AssetsMigrationTestBase:
 
     def _clean_assets_rows(self) -> None:
         """Wipe rows from assets so each test starts from a known state."""
+
         async def _wipe() -> None:
             conn = await asyncpg.connect(
                 user="soc360_migration",
                 password="***REMOVED***",
-                host="localhost", port=5432, database=ISOLATED_DB,
+                host="localhost",
+                port=5432,
+                database=ISOLATED_DB,
             )
             try:
                 await conn.execute("DELETE FROM assets")
@@ -553,7 +570,9 @@ class TestUpgradePrecondition(_AssetsMigrationTestBase):
             conn = await asyncpg.connect(
                 user="soc360_migration",
                 password="***REMOVED***",
-                host="localhost", port=5432, database=ISOLATED_DB,
+                host="localhost",
+                port=5432,
+                database=ISOLATED_DB,
             )
             try:
                 tenant_id = "11111111-1111-1111-1111-111111111111"
@@ -561,7 +580,10 @@ class TestUpgradePrecondition(_AssetsMigrationTestBase):
                     "INSERT INTO tenants (id, name, slug, plan, is_active, max_assets) "
                     "VALUES ($1, $2, $3, $4, true, 50) "
                     "ON CONFLICT (id) DO NOTHING",
-                    tenant_id, "Empresa Alpha", "empresa-alpha", "starter",
+                    tenant_id,
+                    "Empresa Alpha",
+                    "empresa-alpha",
+                    "starter",
                 )
                 await conn.execute(
                     "INSERT INTO assets (id, tenant_id, name, asset_type, status) "
@@ -609,9 +631,9 @@ class TestUpgradePrecondition(_AssetsMigrationTestBase):
             "WHERE t.relname = 'assets' AND c.conname = 'uq_assets_tenant_type_value'"
         )
         uq_count = _check_value_count(ISOLATED_DB_URL, uq_sql)
-        assert uq_count == 0, (
-            "uq_assets_tenant_type_value must NOT exist after a failed upgrade."
-        )
+        assert (
+            uq_count == 0
+        ), "uq_assets_tenant_type_value must NOT exist after a failed upgrade."
 
         name_count = _check_value_count(
             ISOLATED_DB_URL,
@@ -653,7 +675,9 @@ class TestUpgradePrecondition(_AssetsMigrationTestBase):
             conn = await asyncpg.connect(
                 user="soc360_migration",
                 password="***REMOVED***",
-                host="localhost", port=5432, database=ISOLATED_DB,
+                host="localhost",
+                port=5432,
+                database=ISOLATED_DB,
             )
             try:
                 tenant_id = "11111111-1111-1111-1111-111111111111"
@@ -664,16 +688,44 @@ class TestUpgradePrecondition(_AssetsMigrationTestBase):
                     tenant_id,
                 )
                 rows = [
-                    ("00000000-0000-0000-0000-0000000000a1", tenant_id, "host-1", "host", "active"),
-                    ("00000000-0000-0000-0000-0000000000a2", tenant_id, "example.com", "domain", "active"),
-                    ("00000000-0000-0000-0000-0000000000a3", tenant_id, "1.2.3.4", "ip", "active"),
-                    ("00000000-0000-0000-0000-0000000000a4", tenant_id, "https://app.example.com", "web_app", "active"),
+                    (
+                        "00000000-0000-0000-0000-0000000000a1",
+                        tenant_id,
+                        "host-1",
+                        "host",
+                        "active",
+                    ),
+                    (
+                        "00000000-0000-0000-0000-0000000000a2",
+                        tenant_id,
+                        "example.com",
+                        "domain",
+                        "active",
+                    ),
+                    (
+                        "00000000-0000-0000-0000-0000000000a3",
+                        tenant_id,
+                        "1.2.3.4",
+                        "ip",
+                        "active",
+                    ),
+                    (
+                        "00000000-0000-0000-0000-0000000000a4",
+                        tenant_id,
+                        "https://app.example.com",
+                        "web_app",
+                        "active",
+                    ),
                 ]
                 for asset_id, tid, name, asset_type, status in rows:
                     await conn.execute(
                         "INSERT INTO assets (id, tenant_id, name, asset_type, status) "
                         "VALUES ($1, $2, $3, $4, $5)",
-                        asset_id, tid, name, asset_type, status,
+                        asset_id,
+                        tid,
+                        name,
+                        asset_type,
+                        status,
                     )
             finally:
                 await conn.close()
@@ -711,14 +763,22 @@ class TestUpgradePrecondition(_AssetsMigrationTestBase):
             "SELECT count(*) FROM information_schema.columns "
             "WHERE table_name = 'assets' AND column_name = 'value'",
         )
-        assert name_count == 0, f"name column must be renamed to value; name_count={name_count}"
-        assert hostname_count == 0, f"hostname column must be dropped; hostname_count={hostname_count}"
-        assert value_count == 1, f"value column must exist after upgrade; value_count={value_count}"
+        assert (
+            name_count == 0
+        ), f"name column must be renamed to value; name_count={name_count}"
+        assert (
+            hostname_count == 0
+        ), f"hostname column must be dropped; hostname_count={hostname_count}"
+        assert (
+            value_count == 1
+        ), f"value column must exist after upgrade; value_count={value_count}"
 
         # Existing rows preserved with values populated.
         rows = asyncio.run(_fetch_all_assets(ISOLATED_DB_URL))
         by_value = {row["value"]: row for row in rows}
-        assert "host-1" in by_value, "Row previously named 'host-1' must be in 'value' column."
+        assert (
+            "host-1" in by_value
+        ), "Row previously named 'host-1' must be in 'value' column."
         # The 'host' asset_type was renamed to 'hostname'.
         assert by_value["host-1"]["asset_type"] == "hostname", (
             f"asset_type 'host' must be remapped to 'hostname' on upgrade; "
@@ -731,20 +791,32 @@ class TestUpgradePrecondition(_AssetsMigrationTestBase):
             "JOIN pg_class t ON t.oid = c.conrelid "
             "WHERE t.relname = 'assets' AND c.conname = 'uq_assets_tenant_type_value'"
         )
-        assert _check_value_count(ISOLATED_DB_URL, uq_sql) == 1, (
-            "uq_assets_tenant_type_value must exist after successful upgrade."
-        )
+        assert (
+            _check_value_count(ISOLATED_DB_URL, uq_sql) == 1
+        ), "uq_assets_tenant_type_value must exist after successful upgrade."
 
         # Six-value check present.
-        chk_def = _fetch_scalar(
-            ISOLATED_DB_URL,
-            "SELECT pg_get_constraintdef(c.oid) "
-            "FROM pg_constraint c "
-            "JOIN pg_class t ON t.oid = c.conrelid "
-            "WHERE t.relname = 'assets' AND c.conname = 'chk_assets_asset_type'",
-        ) or ""
-        for token in ("hostname", "domain", "ip", "web_app", "subnet", "cloud_resource"):
-            assert token in chk_def, f"chk_assets_asset_type missing {token!r}: {chk_def!r}"
+        chk_def = (
+            _fetch_scalar(
+                ISOLATED_DB_URL,
+                "SELECT pg_get_constraintdef(c.oid) "
+                "FROM pg_constraint c "
+                "JOIN pg_class t ON t.oid = c.conrelid "
+                "WHERE t.relname = 'assets' AND c.conname = 'chk_assets_asset_type'",
+            )
+            or ""
+        )
+        for token in (
+            "hostname",
+            "domain",
+            "ip",
+            "web_app",
+            "subnet",
+            "cloud_resource",
+        ):
+            assert (
+                token in chk_def
+            ), f"chk_assets_asset_type missing {token!r}: {chk_def!r}"
 
 
 class TestDowngradePrecondition(_AssetsMigrationTestBase):
@@ -768,7 +840,9 @@ class TestDowngradePrecondition(_AssetsMigrationTestBase):
             conn = await asyncpg.connect(
                 user="soc360_migration",
                 password="***REMOVED***",
-                host="localhost", port=5432, database=ISOLATED_DB,
+                host="localhost",
+                port=5432,
+                database=ISOLATED_DB,
             )
             try:
                 tenant_id = "11111111-1111-1111-1111-111111111111"
@@ -798,18 +872,20 @@ class TestDowngradePrecondition(_AssetsMigrationTestBase):
         )
         msg = _runtime_error_message(result)
         assert "subnet" in msg.lower() or "cloud_resource" in msg.lower(), (
-            f"RuntimeError message must mention subnet/cloud_resource. "
-            f"Got: {msg!r}"
+            f"RuntimeError message must mention subnet/cloud_resource. " f"Got: {msg!r}"
         )
 
         # Schema must remain in post-upgrade state.
-        chk_def = _fetch_scalar(
-            ISOLATED_DB_URL,
-            "SELECT pg_get_constraintdef(c.oid) "
-            "FROM pg_constraint c "
-            "JOIN pg_class t ON t.oid = c.conrelid "
-            "WHERE t.relname = 'assets' AND c.conname = 'chk_assets_asset_type'",
-        ) or ""
+        chk_def = (
+            _fetch_scalar(
+                ISOLATED_DB_URL,
+                "SELECT pg_get_constraintdef(c.oid) "
+                "FROM pg_constraint c "
+                "JOIN pg_class t ON t.oid = c.conrelid "
+                "WHERE t.relname = 'assets' AND c.conname = 'chk_assets_asset_type'",
+            )
+            or ""
+        )
         for token in ("hostname", "subnet", "cloud_resource"):
             assert token in chk_def, (
                 f"After failed downgrade, chk must still include {token!r}; "
@@ -842,9 +918,15 @@ class TestDowngradePrecondition(_AssetsMigrationTestBase):
             "SELECT count(*) FROM information_schema.columns "
             "WHERE table_name = 'assets' AND column_name = 'hostname'",
         )
-        assert name_count == 0, f"name must NOT exist (still 'value'); got count={name_count}"
-        assert value_count == 1, f"value column must still exist; got count={value_count}"
-        assert hostname_count == 0, f"hostname must NOT exist after failed downgrade; got count={hostname_count}"
+        assert (
+            name_count == 0
+        ), f"name must NOT exist (still 'value'); got count={name_count}"
+        assert (
+            value_count == 1
+        ), f"value column must still exist; got count={value_count}"
+        assert (
+            hostname_count == 0
+        ), f"hostname must NOT exist after failed downgrade; got count={hostname_count}"
 
     def test_downgrade_with_only_old_types_succeeds(
         self, migration_chain: tuple[str, str]
@@ -864,9 +946,9 @@ class TestDowngradePrecondition(_AssetsMigrationTestBase):
             ISOLATED_DB_URL,
             "SELECT count(*) FROM assets WHERE asset_type IN ('subnet','cloud_resource')",
         )
-        assert new_types_count == 0, (
-            f"Setup: no subnet/cloud_resource rows expected; got {new_types_count}."
-        )
+        assert (
+            new_types_count == 0
+        ), f"Setup: no subnet/cloud_resource rows expected; got {new_types_count}."
 
         # Downgrade -1 should succeed.
         result = _run_alembic_in_isolated("downgrade", "-1")
@@ -876,13 +958,16 @@ class TestDowngradePrecondition(_AssetsMigrationTestBase):
         )
 
         # Verify post-downgrade shape.
-        chk_def = _fetch_scalar(
-            ISOLATED_DB_URL,
-            "SELECT pg_get_constraintdef(c.oid) "
-            "FROM pg_constraint c "
-            "JOIN pg_class t ON t.oid = c.conrelid "
-            "WHERE t.relname = 'assets' AND c.conname = 'chk_assets_asset_type'",
-        ) or ""
+        chk_def = (
+            _fetch_scalar(
+                ISOLATED_DB_URL,
+                "SELECT pg_get_constraintdef(c.oid) "
+                "FROM pg_constraint c "
+                "JOIN pg_class t ON t.oid = c.conrelid "
+                "WHERE t.relname = 'assets' AND c.conname = 'chk_assets_asset_type'",
+            )
+            or ""
+        )
         for token in ("host", "domain", "ip", "web_app"):
             assert token in chk_def, (
                 f"After successful downgrade, chk must include {token!r}; "
@@ -910,9 +995,15 @@ class TestDowngradePrecondition(_AssetsMigrationTestBase):
             "SELECT count(*) FROM information_schema.columns "
             "WHERE table_name = 'assets' AND column_name = 'hostname'",
         )
-        assert name_count == 1, f"After downgrade, 'name' must be back; got count={name_count}"
-        assert value_count == 0, f"After downgrade, 'value' must be gone; got count={value_count}"
-        assert hostname_count == 1, f"After downgrade, 'hostname' must be back; got count={hostname_count}"
+        assert (
+            name_count == 1
+        ), f"After downgrade, 'name' must be back; got count={name_count}"
+        assert (
+            value_count == 0
+        ), f"After downgrade, 'value' must be gone; got count={value_count}"
+        assert (
+            hostname_count == 1
+        ), f"After downgrade, 'hostname' must be back; got count={hostname_count}"
 
         # - uq_assets_tenant_type_value gone
         uq_count = _check_value_count(
@@ -948,8 +1039,11 @@ async def _fetch_all_assets(db_url: str) -> list[dict]:
 
     async def _run() -> list[dict]:
         conn = await asyncpg.connect(
-            user=user, password=password,
-            host=host, port=int(port), database=dbname,
+            user=user,
+            password=password,
+            host=host,
+            port=int(port),
+            database=dbname,
         )
         try:
             await conn.execute("SET app.is_superadmin = 'true'")
@@ -1072,9 +1166,9 @@ class TestEventBusPublishStreamOverride:
             # Override stream holds the entry; default stream does not.
             override_len = await client.xlen("asset.events")
             default_len = await client.xlen("events:asset.created")
-            assert override_len == 1, (
-                f"stream= override MUST write to 'asset.events', got len={override_len}."
-            )
+            assert (
+                override_len == 1
+            ), f"stream= override MUST write to 'asset.events', got len={override_len}."
             assert default_len == 0, (
                 "Publishing with stream= override MUST NOT write to the default "
                 "F1 stream 'events:asset.created'."
@@ -1106,9 +1200,9 @@ class TestEventBusPublishStreamOverride:
                 f"Without stream= override, MUST use F1 default stream, "
                 f"got len={default_len}."
             )
-            assert override_len == 0, (
-                "Without stream= override, MUST NOT auto-publish to 'asset.events'."
-            )
+            assert (
+                override_len == 0
+            ), "Without stream= override, MUST NOT auto-publish to 'asset.events'."
         finally:
             await client.aclose()
 
@@ -1137,9 +1231,7 @@ class TestEventBusPublishStreamOverride:
             def _decode(value: object) -> str:
                 return value.decode() if isinstance(value, bytes) else value  # type: ignore[union-attr]
 
-            decoded = {
-                _decode(k): _decode(v) for k, v in fields.items()
-            }
+            decoded = {_decode(k): _decode(v) for k, v in fields.items()}
             assert decoded["event_type"] == "asset.created"
             assert decoded["type"] == "hostname"
             assert decoded["value"] == "app.example.com"
@@ -1212,9 +1304,7 @@ class TestAssetValidators:
     def test_validate_cloud_resource_happy_arn(self) -> None:
         from app.modules.assets.service import _validate_asset_value
 
-        result = _validate_asset_value(
-            "cloud_resource", "arn:aws:s3:::my-bucket"
-        )
+        result = _validate_asset_value("cloud_resource", "arn:aws:s3:::my-bucket")
         assert result == "arn:aws:s3:::my-bucket"
 
     def test_validate_cloud_resource_sad_missing_resource_segment(self) -> None:
@@ -1222,9 +1312,7 @@ class TestAssetValidators:
 
         # No ':resource' segment after the trailing ':' — ARN is incomplete.
         with pytest.raises(ValueError) as exc_info:
-            _validate_asset_value(
-                "cloud_resource", "arn:aws:s3::us-west-2"
-            )
+            _validate_asset_value("cloud_resource", "arn:aws:s3::us-west-2")
         assert str(exc_info.value) == "value must be a valid ARN"
 
 
@@ -1343,10 +1431,17 @@ class TestAssetSchemas:
         from app.modules.assets.schemas import AssetType
 
         asset_type_values = typing.get_args(AssetType)
-        for expected in ("ip", "domain", "hostname", "web_app", "subnet", "cloud_resource"):
-            assert expected in asset_type_values, (
-                f"AssetType MUST contain {expected!r}; got {asset_type_values!r}"
-            )
+        for expected in (
+            "ip",
+            "domain",
+            "hostname",
+            "web_app",
+            "subnet",
+            "cloud_resource",
+        ):
+            assert (
+                expected in asset_type_values
+            ), f"AssetType MUST contain {expected!r}; got {asset_type_values!r}"
         assert len(asset_type_values) == 6
 
         # Ensure AssetCreateRequest is iterable over the six branches.
@@ -1585,6 +1680,7 @@ class TestRequireAnyRole:
             await guard(current_user=user)
         assert exc_info.value.status_code == 403
 
+
 def test_require_any_role_is_re_exported_from_dependencies_package() -> None:
     """require_any_role MUST be importable from app.dependencies directly."""
     import app.dependencies as deps_pkg
@@ -1643,14 +1739,8 @@ class TestAssetValidatorsFullMatrix:
 
         # The validator MUST lowercase (case-insensitive acceptance) but
         # otherwise preserve the canonical hostname shape.
-        assert (
-            _validate_asset_value("hostname", "App.Example.COM")
-            == "app.example.com"
-        )
-        assert (
-            _validate_asset_value("hostname", "app.example.com")
-            == "app.example.com"
-        )
+        assert _validate_asset_value("hostname", "App.Example.COM") == "app.example.com"
+        assert _validate_asset_value("hostname", "app.example.com") == "app.example.com"
 
     def test_validate_hostname_sad_embedded_space_rejects(self) -> None:
         from app.modules.assets.service import _validate_asset_value
@@ -1665,9 +1755,7 @@ class TestAssetValidatorsFullMatrix:
     ) -> None:
         from app.modules.assets.service import _validate_asset_value
 
-        canonical = _validate_asset_value(
-            "web_app", "https://app.example.com/path?q=1"
-        )
+        canonical = _validate_asset_value("web_app", "https://app.example.com/path?q=1")
         # Pydantic HttpUrl canonicalizes the scheme + host; the slice does
         # not require the path/query to be preserved verbatim, only that the
         # input is accepted and returns a valid http(s) string.
@@ -1686,14 +1774,10 @@ class TestAssetValidatorsFullMatrix:
         from app.modules.assets.service import _validate_asset_value
 
         # '192.168.0.0/24' canonicalizes to itself.
-        assert (
-            _validate_asset_value("subnet", "192.168.0.0/24") == "192.168.0.0/24"
-        )
+        assert _validate_asset_value("subnet", "192.168.0.0/24") == "192.168.0.0/24"
         # '192.168.0.5/24' canonicalizes to the network address (host bits
         # dropped by ipaddress.ip_network(..., strict=False)).
-        assert (
-            _validate_asset_value("subnet", "192.168.0.5/24") == "192.168.0.0/24"
-        )
+        assert _validate_asset_value("subnet", "192.168.0.5/24") == "192.168.0.0/24"
 
     # ----- cloud_resource (additional ARN contract coverage) ----------------
     def test_validate_cloud_resource_happy_arn_with_region_account_resource(
@@ -1717,6 +1801,7 @@ class TestAssetValidatorsFullMatrix:
         with pytest.raises(ValueError) as exc_info:
             _validate_asset_value("cloud_resource", "arn:aws:s3:::")
         assert str(exc_info.value) == "value must be a valid ARN"
+
 
 # ---------------------------------------------------------------------------
 # T10.2 — SQLAlchemy uniqueness (live DB integration test)
@@ -1771,6 +1856,7 @@ class TestAssetUniquenessAtSQLAlchemyLayer:
         # constraint name appears in the message body.
         assert getattr(orig, "pgcode", None) == "23505"
         assert "uq_assets_tenant_type_value" in str(orig)
+
 
 # ---------------------------------------------------------------------------
 # T10.3 — Service purity (extended)
@@ -1838,9 +1924,11 @@ class TestAssetServiceFullContract:
             data=data, tenant_id=data.tenant_id, db=db, event_bus=event_bus
         )
 
-        assert call_log == ["flush", "commit", "publish"], (
-            f"Expected flush→commit→publish ordering; got {call_log!r}"
-        )
+        assert call_log == [
+            "flush",
+            "commit",
+            "publish",
+        ], f"Expected flush→commit→publish ordering; got {call_log!r}"
         # stream= override MUST be asset.events.
         assert event_bus.publish.await_args.kwargs["stream"] == "asset.events"
 
@@ -1913,9 +2001,9 @@ class TestAssetServiceFullContract:
         assert "ORDER BY" in str(compiled).upper()
         order_clause = str(compiled).upper().split("ORDER BY", 1)[1]
         # ``created_at`` appears before ``id`` (stable order).
-        assert order_clause.find("CREATED_AT") < order_clause.find("ID"), (
-            f"ORDER BY must list created_at DESC before id DESC; got {order_clause!r}"
-        )
+        assert order_clause.find("CREATED_AT") < order_clause.find(
+            "ID"
+        ), f"ORDER BY must list created_at DESC before id DESC; got {order_clause!r}"
 
     @pytest.mark.asyncio
     async def test_update_asset_changed_fields_lists_both_keys_in_stable_order(
@@ -1939,9 +2027,7 @@ class TestAssetServiceFullContract:
 
         db = MagicMock()
         db.execute = AsyncMock(
-            return_value=MagicMock(
-                scalar_one_or_none=MagicMock(return_value=orm)
-            )
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=orm))
         )
         db.add = MagicMock()
         db.flush = AsyncMock()
@@ -1960,9 +2046,10 @@ class TestAssetServiceFullContract:
         )
 
         evt = event_bus.publish.await_args.args[0]
-        assert evt.changed_fields == ["type", "value"], (
-            f"Expected changed_fields=['type','value']; got {evt.changed_fields!r}"
-        )
+        assert evt.changed_fields == [
+            "type",
+            "value",
+        ], f"Expected changed_fields=['type','value']; got {evt.changed_fields!r}"
 
     @pytest.mark.asyncio
     async def test_delete_asset_returns_false_when_asset_not_found(self) -> None:
@@ -1976,9 +2063,7 @@ class TestAssetServiceFullContract:
 
         db = MagicMock()
         db.execute = AsyncMock(
-            return_value=MagicMock(
-                scalar_one_or_none=MagicMock(return_value=None)
-            )
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
         )
         db.delete = AsyncMock()
         db.commit = AsyncMock()

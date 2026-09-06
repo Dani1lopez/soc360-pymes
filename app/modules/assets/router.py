@@ -14,6 +14,7 @@ Tenant scoping (D-007): non-superadmin users see only their tenant's
 assets; superadmin has no tenant predicate (RLS authorizes the cross-
 tenant read with ``app.is_superadmin='true'``).
 """
+
 from __future__ import annotations
 
 import csv
@@ -177,9 +178,7 @@ async def create_asset(
             event_bus=event_bus,
         )
     except service.AssetDuplicateError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
-        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     except ValueError as exc:
         # Contract messages from _validate_asset_value; router maps verbatim.
         raise HTTPException(
@@ -292,9 +291,7 @@ async def update_asset(
             event_bus=event_bus,
         )
     except service.AssetDuplicateError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
-        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

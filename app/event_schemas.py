@@ -2,6 +2,7 @@
 
 Defines Pydantic models for typed event contracts.
 """
+
 from __future__ import annotations
 
 import re
@@ -51,9 +52,17 @@ class BaseEvent(BaseModel):
     )
 
     event_id: Annotated[uuid.UUID, Field(description="Unique event identifier (UUID)")]
-    event_type: Annotated[str, Field(description="Dot-namespaced event type, e.g. auth.login")]
+    event_type: Annotated[
+        str, Field(description="Dot-namespaced event type, e.g. auth.login")
+    ]
     tenant_id: Annotated[uuid.UUID, Field(description="Tenant that owns this event")]
-    timestamp: Annotated[datetime, Field(default_factory=lambda: datetime.now(UTC), description="UTC timestamp of event emission")]
+    timestamp: Annotated[
+        datetime,
+        Field(
+            default_factory=lambda: datetime.now(UTC),
+            description="UTC timestamp of event emission",
+        ),
+    ]
 
 
 class AuthLoginEvent(BaseEvent):
@@ -68,11 +77,20 @@ class AuthLoginEvent(BaseEvent):
         str_strip_whitespace=True,
     )
 
-    event_type: Annotated[str, Field(default="auth.login", description="Event type discriminator")]
+    event_type: Annotated[
+        str, Field(default="auth.login", description="Event type discriminator")
+    ]
     user_id: Annotated[str, Field(min_length=1, description="Authenticated user ID")]
-    email_hash: Annotated[str, Field(min_length=1, description="SHA256[:32] of user email")]
-    ip_prefix: Annotated[str | None, Field(default=None, description="Masked IP /24 prefix, e.g. 192.168.1.0/24")]
-    user_agent: Annotated[str | None, Field(default=None, description="Client User-Agent if available")]
+    email_hash: Annotated[
+        str, Field(min_length=1, description="SHA256[:32] of user email")
+    ]
+    ip_prefix: Annotated[
+        str | None,
+        Field(default=None, description="Masked IP /24 prefix, e.g. 192.168.1.0/24"),
+    ]
+    user_agent: Annotated[
+        str | None, Field(default=None, description="Client User-Agent if available")
+    ]
 
 
 class TenantlessEvent(BaseEvent):
@@ -90,7 +108,10 @@ class TenantlessEvent(BaseEvent):
 
     tenant_id: Annotated[
         uuid.UUID | None,
-        Field(default=None, description="Tenant that owns this event (None for system events)"),
+        Field(
+            default=None,
+            description="Tenant that owns this event (None for system events)",
+        ),
     ]
 
 
@@ -107,12 +128,24 @@ class AuthSuperadminLoginEvent(TenantlessEvent):
         str_strip_whitespace=True,
     )
 
-    event_type: Annotated[str, Field(default="system.auth.login", description="Event type discriminator")]
+    event_type: Annotated[
+        str, Field(default="system.auth.login", description="Event type discriminator")
+    ]
     user_id: Annotated[str, Field(min_length=1, description="Authenticated user ID")]
-    email_hash: Annotated[str, Field(min_length=1, description="SHA256[:32] of user email")]
-    ip_prefix: Annotated[str | None, Field(default=None, description="Masked IP /24 prefix, e.g. 192.168.1.0/24")]
-    user_agent: Annotated[str | None, Field(default=None, description="Client User-Agent if available")]
-    is_superadmin: Annotated[bool, Field(default=True, description="Flag indicating superadmin authentication")]
+    email_hash: Annotated[
+        str, Field(min_length=1, description="SHA256[:32] of user email")
+    ]
+    ip_prefix: Annotated[
+        str | None,
+        Field(default=None, description="Masked IP /24 prefix, e.g. 192.168.1.0/24"),
+    ]
+    user_agent: Annotated[
+        str | None, Field(default=None, description="Client User-Agent if available")
+    ]
+    is_superadmin: Annotated[
+        bool,
+        Field(default=True, description="Flag indicating superadmin authentication"),
+    ]
 
 
 # ---------------------------------------------------------------------------

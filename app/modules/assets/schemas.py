@@ -15,6 +15,7 @@ Validators for the *semantic* value of each type live in
 ``app.modules.assets.service`` (D-004) so Pydantic only enforces shape,
 discriminator, and length.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -91,7 +92,12 @@ class CloudResourceAssetCreate(AssetCreateBase):
 # Union type used by the router — the Field(discriminator="type") is bound
 # onto this Annotated alias so Pydantic dispatches on the literal ``type``.
 AssetCreateRequest = Annotated[
-    IpAssetCreate | DomainAssetCreate | HostnameAssetCreate | WebAppAssetCreate | SubnetAssetCreate | CloudResourceAssetCreate,
+    IpAssetCreate
+    | DomainAssetCreate
+    | HostnameAssetCreate
+    | WebAppAssetCreate
+    | SubnetAssetCreate
+    | CloudResourceAssetCreate,
     Field(discriminator="type"),
 ]
 

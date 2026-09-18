@@ -248,6 +248,14 @@ Expected after re-verify: F-7..F-10 should now pass (singleton reset was applied
 - **JD-001 (decisión humana)**: se documenta la ruta canónica con barra final y el `307` en `specs/f2-assets/spec.md`. Cero cambios de código; se mantiene la convención project-wide de `app/modules/users/router.py`.
 - **JD-002 (TDD)**: `app/modules/assets/service.py::update_asset` canonicaliza el valor ANTES de comparar y persiste el retorno del validador; si solo se patchea `type`, recalcula el canónico del par efectivo y lo refleja en `changed_fields`. 2 tests de regresión nuevos en `tests/unit/test_assets.py`.
 - **Hallazgos de revisión previa**: `except AssertionError: raise` en el test de commit fallido (`tests/api/test_assets.py`); la fixture `client` restaura `_auth_service.get_event_bus` en `finally` (`tests/conftest.py`).
-- **Candidato**: 5 archivos tracked modificados (`router.py`, `service.py`, `tests/api/test_assets.py`, `tests/conftest.py`, `specs/f2-assets/spec.md`).
+- **Candidato**: 7 archivos tracked modificados (`router.py`, `service.py`, `tests/api/test_assets.py`, `tests/conftest.py`, `tests/unit/test_assets.py`, `specs/f2-assets/spec.md`, `apply-progress.md`).
 - **Verificación**: 127 passed (`tests/integration/test_index_health.py` + `tests/unit/test_assets.py` + `tests/api/test_assets.py`).
 - **Sigue abierto (follow-up declarado)**: JD-003 evento fantasma de PATCH no-op, JD-004 fuga del mensaje interno en 422, JD-005 pool fijado durante el stream CSV, JD-006 precondición de migración no biyectiva.
+
+## Limpieza de lint (2026-09-18, tras el review de Slice 1)
+
+- Cerrados los 7 hallazgos de Ruff del slice con `ruff 0.8.4`: imports muertos y duplicados (`sqlalchemy.text`, `event_deps`, `_FakeEventBus`), variables muertas (`a_id`, `body`), sombreado de `text` y anotación indefinida `EventBus` (ahora `_FakeEventBus`).
+- `ruff check` sobre `app/modules/assets/` + los tres archivos de suite -> **All checks passed**. Suite de Assets -> **127 passed**.
+- Review nativo del fix: lineage `review-a7ddb462148a8c2b`, 4/4 lentes, `approved` + acknowledgement ejecutado (authority burned); 2 hallazgos asesorados no bloqueantes sobre el alias del bus falso (`tests/conftest.py:435,438`).
+- Corregido el conteo de archivos del candidato de Slice 1: eran 7 tracked, no 5 (hallazgo `R2-inaccurate-progress-file-count` del review anterior).
+- Fuera de alcance: el repo conserva 39 hallazgos de Ruff preexistentes en otros archivos de test.

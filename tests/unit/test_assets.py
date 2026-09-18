@@ -2052,6 +2052,96 @@ class TestAssetServiceFullContract:
         ], f"Expected changed_fields=['type','value']; got {evt.changed_fields!r}"
 
     @pytest.mark.asyncio
+    async def test_update_asset_persists_canonical_value(
+        self, db_session, seed_data
+    ) -> None:
+        """A PATCH with a non-canonical value MUST store the canonical form.
+
+        Regression for JD-002: ``update_asset`` discarded the return value of
+        ``_validate_asset_value`` and persisted the raw input, so
+        ``"2001:0DB8:0:0:0:0:0:1"`` could live next to the already-stored
+        canonical ``"2001:db8::1"``. Both rows are the same asset logically,
+        but ``uq_assets_tenant_type_value`` compares raw strings, so the
+        uniqueness guarantee leaked.
+        """
+        from app.modules.assets import service
+        from app.modules.assets.models import Asset
+        from app.modules.assets.schemas import AssetUpdate
+
+        tenant_a = seed_data["tenant_a"]
+        asset = Asset(
+            tenant_id=tenant_a.id,
+            asset_type="ip",
+            value="192.0.2.10",
+        )
+        db_session.add(asset)
+        await db_session.flush()
+        await db_session.commit()
+
+        event_bus = MagicMock()
+        event_bus.publish = AsyncMock(return_value=b"stream-id")
+
+        updated = await service.update_asset(
+            asset_id=asset.id,
+            tenant_id=tenant_a.id,
+            data=AssetUpdate(value="2001:0DB8:0:0:0:0:0:1"),
+            db=db_session,
+            event_bus=event_bus,
+        )
+
+        assert updated is not None
+        assert updated.value == "2001:db8::1", (
+            "PATCH MUST persist the canonical value; " f"got {updated.value!r}"
+        )
+        evt = event_bus.publish.await_args.args[0]
+        assert evt.changed_fields == ["value"], (
+            "a real value change MUST still be reported exactly once; "
+            f"got {evt.changed_fields!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_asset_canonical_equivalent_is_a_noop(
+        self, db_session, seed_data
+    ) -> None:
+        """A PATCH that only re-spells the same value MUST NOT report a change.
+
+        Companion of JD-002: canonicalizing BEFORE the comparison keeps
+        ``changed_fields`` truthful for logically identical values.
+        """
+        from app.modules.assets import service
+        from app.modules.assets.models import Asset
+        from app.modules.assets.schemas import AssetUpdate
+
+        tenant_a = seed_data["tenant_a"]
+        asset = Asset(
+            tenant_id=tenant_a.id,
+            asset_type="ip",
+            value="2001:db8::1",
+        )
+        db_session.add(asset)
+        await db_session.flush()
+        await db_session.commit()
+
+        event_bus = MagicMock()
+        event_bus.publish = AsyncMock(return_value=b"stream-id")
+
+        updated = await service.update_asset(
+            asset_id=asset.id,
+            tenant_id=tenant_a.id,
+            data=AssetUpdate(value="2001:0db8:0:0:0:0:0:1"),
+            db=db_session,
+            event_bus=event_bus,
+        )
+
+        assert updated is not None
+        assert updated.value == "2001:db8::1"
+        evt = event_bus.publish.await_args.args[0]
+        assert evt.changed_fields == [], (
+            "a logically identical value MUST NOT be reported as changed; "
+            f"got {evt.changed_fields!r}"
+        )
+
+    @pytest.mark.asyncio
     async def test_delete_asset_returns_false_when_asset_not_found(self) -> None:
         """delete_asset MUST return ``False`` when no row matches the scope.
 

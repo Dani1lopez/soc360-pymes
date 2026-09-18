@@ -331,13 +331,25 @@ async def update_asset(
                 asset.asset_type = new_value
                 changed_fields.append("type")
         elif public_name == "value":
-            if new_value != asset.value:
-                asset.value = new_value
+            # Canonicalize BEFORE comparing: the validator's return value is
+            # authoritative (``create_asset`` already stores it). Comparing and
+            # persisting the raw input here made a non-canonical spelling of the
+            # stored value look like a change, and let logically identical assets
+            # coexist, because ``uq_assets_tenant_type_value`` compares raw
+            # strings ('2001:0DB8::1' vs '2001:db8::1').
+            candidate_value = _validate_asset_value(asset.asset_type, new_value)
+            if candidate_value != asset.value:
+                asset.value = candidate_value
                 changed_fields.append("value")
 
     # Validate the effective pair so we catch semantically invalid
-    # combinations (e.g. "192.168.0.0/40" passed as a "subnet" value).
-    _validate_asset_value(asset.asset_type, asset.value)
+    # combinations (e.g. "192.168.0.0/40" passed as a "subnet" value), and
+    # keep the stored value canonical when only ``type`` was patched.
+    canonical_value = _validate_asset_value(asset.asset_type, asset.value)
+    if canonical_value != asset.value:
+        asset.value = canonical_value
+        if "value" not in changed_fields:
+            changed_fields.append("value")
 
     try:
         await db.flush()

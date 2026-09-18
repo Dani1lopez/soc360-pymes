@@ -241,3 +241,13 @@ Expected after re-verify: F-7..F-10 should now pass (singleton reset was applied
 - Local Postgres@16 started on `localhost:5434` (Docker daemon down). Roles `soc360_admin`, `soc360_migration`, `soc360_app` created with `.env` passwords. DBs `soc360` and `soc360_test` created. `alembic upgrade head` applied (last rev `e0eafdf389fc`).
 - Local Redis on `localhost:6379` (no AUTH) running. Tests use `db=14` to isolate from F1's `db=15` and prod's `db=0`.
 - `.env` has `SECRET_KEY` of 67 chars; Settings requires >=128 (PR3 #260). Tests use env-var override (`secrets.token_urlsafe(96)` -> 128 chars); production .env remains untouched.
+
+
+## Continuación 2026-09-18 — JD-001/JD-002 + hallazgos de revisión
+
+- **JD-001 (decisión humana)**: se documenta la ruta canónica con barra final y el `307` en `specs/f2-assets/spec.md`. Cero cambios de código; se mantiene la convención project-wide de `app/modules/users/router.py`.
+- **JD-002 (TDD)**: `app/modules/assets/service.py::update_asset` canonicaliza el valor ANTES de comparar y persiste el retorno del validador; si solo se patchea `type`, recalcula el canónico del par efectivo y lo refleja en `changed_fields`. 2 tests de regresión nuevos en `tests/unit/test_assets.py`.
+- **Hallazgos de revisión previa**: `except AssertionError: raise` en el test de commit fallido (`tests/api/test_assets.py`); la fixture `client` restaura `_auth_service.get_event_bus` en `finally` (`tests/conftest.py`).
+- **Candidato**: 5 archivos tracked modificados (`router.py`, `service.py`, `tests/api/test_assets.py`, `tests/conftest.py`, `specs/f2-assets/spec.md`).
+- **Verificación**: 127 passed (`tests/integration/test_index_health.py` + `tests/unit/test_assets.py` + `tests/api/test_assets.py`).
+- **Sigue abierto (follow-up declarado)**: JD-003 evento fantasma de PATCH no-op, JD-004 fuga del mensaje interno en 422, JD-005 pool fijado durante el stream CSV, JD-006 precondición de migración no biyectiva.

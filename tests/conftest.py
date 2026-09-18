@@ -414,9 +414,6 @@ async def client(db_session: AsyncSession):
     # pins the bus to the same FakeRedis the fixture already uses,
     # which supports the basic rate-limit / incr / expire calls the
     # auth flow actually issues.
-    from app.dependencies import event_deps
-    from app.event_bus import EventBus as _FakeEventBus
-
     async def override_get_event_bus():
         if _event_deps._event_bus is None:
             _event_deps._event_bus = _FakeEventBus(fake_redis)
@@ -438,7 +435,7 @@ async def client(db_session: AsyncSession):
     # later fixture that resolves the real ``get_event_bus``.
     _original_auth_get_event_bus = _auth_service.get_event_bus
 
-    async def _auth_get_event_bus() -> "EventBus":  # type: ignore[name-defined]
+    async def _auth_get_event_bus() -> _FakeEventBus:
         return await override_get_event_bus()
 
     _auth_service.get_event_bus = _auth_get_event_bus

@@ -42,7 +42,7 @@ from uuid import UUID, uuid4
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, text
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal, get_session_with_tenant
@@ -972,7 +972,6 @@ class TestUniqueness409:
             },
         )
         assert a.status_code == 201, a.text
-        a_id = a.json()["id"]
 
         # Asset B = (ip, 192.0.2.92)
         b = await tenant_client.post(
@@ -1056,8 +1055,9 @@ class TestPagination:
         ), f"limit=500 MUST be 422; got {resp.status_code}: {resp.text}"
         body = resp.json()
         # FastAPI surfaces the offending query parameter in the error detail.
-        text = resp.text.lower()
-        assert "limit" in text, f"422 message MUST mention 'limit'; got {resp.text}"
+        assert (
+            "limit" in str(body).lower()
+        ), f"422 message MUST mention 'limit'; got {resp.text}"
 
 
 # ---------------------------------------------------------------------------

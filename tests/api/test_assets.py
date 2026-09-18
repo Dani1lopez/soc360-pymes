@@ -25,18 +25,31 @@ Test groups:
 * ``TestResponseHygiene`` — exactly six public fields (T11.8).
 * ``TestSemanticValidation422`` — type-specific error messages
   (T11.9).
+  * ``TestCSVStreamingLifecycle`` — the CSV generator owns a DB
+    session/transaction with the correct RLS context for its full
+    consumption (production lifecycle regression).
 """
 
 from __future__ import annotations
 
 import csv
 import io
-from typing import Any
+from collections.abc import AsyncGenerator
+from types import SimpleNamespace
+from typing import Any, cast
+from uuid import UUID, uuid4
 
 import pytest
-from httpx import AsyncClient
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import AsyncSessionLocal, get_session_with_tenant
+from app.dependencies import get_db
+from app.dependencies.auth import get_current_user
+from app.modules.assets.models import Asset
+from app.modules.tenants.models import Tenant
 from tests.conftest import (
     TENANT_A_ID,
     TENANT_B_ID,
@@ -337,8 +350,18 @@ async def _seed_rbac_assets(
     db_session: AsyncSession,
     tenant_a_id: str,
     tenant_b_id: str,
-) -> tuple[str, str, str, str]:
-    """Seed minimal assets; return (own_a_id, cross_b_id, own_a_2, own_b_2)."""
+) -> tuple[str, str, str, str, str]:
+    """Seed minimal assets; return (own_a, cross_for_a, own_a_2, own_b_2, cross_for_b).
+
+    The matrix exercises ``GET /{id}`` for cross-tenant lookups from
+    BOTH directions (admin_a/analyst_a looking up tenant_b AND admin_b
+    looking up tenant_a), so the fixture MUST expose a cross-tenant
+    asset in each tenant. The previous single ``cross_b`` placed the
+    asset in tenant_b, which made admin_b's cross-tenant test
+    accidentally resolve to admin_b's own tenant (the router returned
+    200 instead of 404). The two cross-tenant ids are swapped by the
+    caller based on the requesting role.
+    """
     from app.modules.assets.models import Asset
 
     own_a = Asset(
@@ -346,7 +369,7 @@ async def _seed_rbac_assets(
         asset_type="ip",
         value="192.0.2.50",  # canonical IPv4
     )
-    cross_b = Asset(
+    cross_for_a = Asset(
         tenant_id=tenant_b_id,
         asset_type="ip",
         value="192.0.2.51",
@@ -361,15 +384,21 @@ async def _seed_rbac_assets(
         asset_type="ip",
         value="192.0.2.53",
     )
-    for obj in (own_a, cross_b, own_a_2, own_b_2):
+    cross_for_b = Asset(
+        tenant_id=tenant_a_id,
+        asset_type="ip",
+        value="192.0.2.54",
+    )
+    for obj in (own_a, cross_for_a, own_a_2, own_b_2, cross_for_b):
         db_session.add(obj)
     await db_session.flush()
     await db_session.commit()
     return (
         str(own_a.id),
-        str(cross_b.id),
+        str(cross_for_a.id),
         str(own_a_2.id),
         str(own_b_2.id),
+        str(cross_for_b.id),
     )
 
 
@@ -404,8 +433,14 @@ class TestRBACMatrix:
         expected: int,
         extra: dict[str, Any],
     ) -> None:
-        # Seed the two assets this parametrized test depends on.
-        own_a_id, cross_b_id, _own_a_2, _own_b_2 = await _seed_rbac_assets(
+        # Seed the assets this parametrized test depends on.
+        (
+            own_a_id,
+            cross_for_a_id,
+            _own_a_2,
+            _own_b_2,
+            cross_for_b_id,
+        ) = await _seed_rbac_assets(
             db_session, TENANT_A_ID, TENANT_B_ID
         )
 
@@ -416,7 +451,12 @@ class TestRBACMatrix:
         if "__OWN__" in url:
             url = url.replace("__OWN__", own_a_id)
         if "__CROSS__" in url:
-            url = url.replace("__CROSS__", cross_b_id)
+            # ``admin_b`` is in tenant_b so its cross-tenant asset lives
+            # in tenant_a; all other roles are in tenant_a so their
+            # cross-tenant asset lives in tenant_b. superadmin sees both
+            # but the test asserts 200 either way.
+            cross_id = cross_for_b_id if role == "admin_b" else cross_for_a_id
+            url = url.replace("__CROSS__", cross_id)
 
         # Resolve the headers fixture by role name.
         headers_fixture = {
@@ -657,28 +697,228 @@ class TestSuperadminCrossTenant:
     async def test_superadmin_csv_export_returns_text_csv(
         self, tenant_client: AsyncClient, superadmin_headers, db_session, seed_data
     ) -> None:
-        from app.modules.assets.models import Asset
+        # The CSV generator owns its own DB session (see
+        # ``TestCSVStreamingLifecycle``), so the rows it exports MUST be
+        # committed for a dedicated connection to see them. Seed dedicated
+        # tenants/assets (the canonical fixture tenants are rolled back with
+        # the fixture transaction) and clean them up afterwards.
+        tenant_x = uuid4()
+        tenant_y = uuid4()
+        rows = [
+            (tenant_x, "203.0.113.86"),
+            (tenant_y, "203.0.113.87"),
+        ]
+        await _csv_lifecycle_seed_rows(rows)
+        try:
+            resp = await tenant_client.get(
+                "/api/v1/assets/?export=csv", headers=superadmin_headers
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.headers["content-type"].startswith(
+                "text/csv"
+            ), f"CSV MUST advertise text/csv; got {resp.headers.get('content-type')!r}"
+            assert (
+                resp.text.splitlines()[0]
+                == "id,type,value,tenant_id,created_at,updated_at"
+            ), "CSV header MUST keep the exact six-column contract"
+            text = resp.text
+            reader = csv.DictReader(io.StringIO(text))
+            csv_rows = list(reader)
+            assert len(csv_rows) >= 2
+            values = {row["value"] for row in csv_rows}
+            assert {"203.0.113.86", "203.0.113.87"} <= values, (
+                "superadmin CSV MUST contain the committed cross-tenant rows; "
+                f"got values={values!r}"
+            )
+        finally:
+            await _csv_lifecycle_cleanup_rows(rows)
 
-        # Seed at least one row per tenant to confirm CSV cross-tenant scope.
-        a = Asset(tenant_id=TENANT_A_ID, asset_type="ip", value="192.0.2.86")
-        b = Asset(tenant_id=TENANT_B_ID, asset_type="ip", value="192.0.2.87")
-        db_session.add_all([a, b])
-        await db_session.flush()
-        await db_session.commit()
 
-        resp = await tenant_client.get(
-            "/api/v1/assets/?export=csv", headers=superadmin_headers
+# ---------------------------------------------------------------------------
+# CSV streaming DB/RLS lifecycle helpers (production-faithful)
+# ---------------------------------------------------------------------------
+# Production bug this section guards against: ``list_assets`` used to hand
+# the request-scoped ``get_db`` session to ``_stream_csv``. FastAPI closes
+# yield-dependencies (``routing.app``'s ``async_exit_stack``) BEFORE the
+# StreamingResponse body is consumed, so at streaming time the request
+# transaction had committed (killing the transaction-local
+# ``app.current_tenant`` / ``app.is_superadmin`` GUCs) and the session was
+# closed. The generator then re-engaged a pooled connection with no RLS
+# context and the ``rls_assets`` policy filtered every row: the endpoint
+# answered 200 with a header-only CSV. The conftest ``tenant_client``
+# override masks the bug because the shared ``db_session`` keeps one outer
+# transaction (with its GUCs) alive across the whole test.
+#
+# The regression below reproduces the production lifecycle faithfully:
+# * the REAL ``get_db`` is restored on the app (own session + transaction,
+#   ending at dependency teardown);
+# * auth is stubbed with a role-satisfying identity because a
+#   production-faithful session cannot see the fixture-seeded (uncommitted)
+#   users — isolating the DB/RLS lifecycle from auth resolution;
+# * the exported rows are COMMITTED with dedicated tenant UUIDs and cleaned
+#   up afterwards, so a dedicated connection can actually see them without
+#   leaking state into other tests.
+_CSV_LIFECYCLE_HEADER = "id,type,value,tenant_id,created_at,updated_at"
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _dispose_app_db_engine_pool():
+    """Dispose the production engine pool after each test in this module.
+
+    The production engine pools connections and asyncpg connections are
+    bound to the event loop that created them, while pytest-asyncio gives
+    every test its own loop. Disposing in the current test's loop closes
+    the pooled connections cleanly and forces the next test's loop to
+    check out fresh connections instead of failing with "attached to a
+    different loop".
+    """
+    from app.core.database import engine as _app_engine
+
+    yield
+    await _app_engine.dispose()
+
+
+def _csv_lifecycle_identity(
+    role: str, tenant_id: UUID | None, is_superadmin: bool
+) -> SimpleNamespace:
+    """Minimal identity satisfying ``require_any_role`` and the router scope."""
+    return SimpleNamespace(role=role, tenant_id=tenant_id, is_superadmin=is_superadmin)
+
+
+def _install_production_like_db_lifecycle(app: Any, identity: SimpleNamespace) -> None:
+    """Restore the production DB lifecycle on the test app.
+
+    ``get_db`` is overridden with itself so the route uses the REAL
+    production session/transaction shape (closed at dependency teardown,
+    before the streaming body is consumed) instead of the shared test
+    session. ``get_current_user`` is stubbed because the production-faithful
+    session cannot see the fixture-seeded (uncommitted) users.
+    """
+
+    async def _production_get_db() -> AsyncGenerator[AsyncSession, None]:
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                yield session
+
+    async def _stub_current_user() -> SimpleNamespace:
+        return identity
+
+    app.dependency_overrides[get_db] = _production_get_db
+    app.dependency_overrides[get_current_user] = _stub_current_user
+
+
+async def _csv_lifecycle_seed_rows(rows: list[tuple[UUID, str]]) -> None:
+    """Commit dedicated tenants + assets via a production-shaped superadmin session."""
+    tenant_ids = {tenant_id for tenant_id, _ in rows}
+    async with get_session_with_tenant(None, True) as session:
+        for tenant_id in sorted(tenant_ids, key=str):
+            session.add(
+                Tenant(
+                    id=tenant_id,
+                    name=f"CSV lifecycle {tenant_id.hex[:8]}",
+                    slug=f"csv-lifecycle-{tenant_id.hex[:12]}",
+                    plan="starter",
+                    is_active=True,
+                    max_assets=50,
+                )
+            )
+        # Flush tenants first: Asset.tenant_id FK has no ORM relationship,
+        # so the unit of work would otherwise flush assets before tenants.
+        await session.flush()
+        for tenant_id, value in rows:
+            session.add(Asset(tenant_id=tenant_id, asset_type="ip", value=value))
+        await session.commit()
+
+
+async def _csv_lifecycle_cleanup_rows(rows: list[tuple[UUID, str]]) -> None:
+    """Delete the committed rows this test created (assets first, then tenants)."""
+    values = [value for _, value in rows]
+    tenant_ids = list({tenant_id for tenant_id, _ in rows})
+    async with get_session_with_tenant(None, True) as session:
+        await session.execute(delete(Asset).where(Asset.value.in_(values)))
+        await session.execute(delete(Tenant).where(Tenant.id.in_(tenant_ids)))
+        await session.commit()
+
+
+class TestCSVStreamingLifecycle:
+    """The CSV generator must own its DB session/transaction + RLS context.
+
+    D-012 scope semantics are preserved: an admin's export contains only
+    their tenant's rows; a superadmin's export is cross-tenant (only possible
+    if the generator itself set ``app.is_superadmin='true'`` — the superadmin
+    branch of ``_scope_query`` adds NO app-level tenant predicate, so RLS
+    alone authorizes those rows).
+    """
+
+    @pytest.mark.asyncio
+    async def test_admin_csv_streams_rows_after_request_db_dependency_ends(
+        self, tenant_client: AsyncClient
+    ) -> None:
+        # No public accessor for the ASGI app on httpx.AsyncClient.
+        app = cast(ASGITransport, tenant_client._transport).app  # noqa: SLF001
+        tenant_a = uuid4()
+        tenant_b = uuid4()
+        rows = [
+            (tenant_a, "203.0.113.10"),
+            (tenant_a, "203.0.113.11"),
+            (tenant_b, "203.0.113.20"),
+        ]
+        await _csv_lifecycle_seed_rows(rows)
+        _install_production_like_db_lifecycle(
+            app, _csv_lifecycle_identity("admin", tenant_a, False)
         )
-        assert resp.status_code == 200, resp.text
-        assert resp.headers["content-type"].startswith(
-            "text/csv"
-        ), f"CSV MUST advertise text/csv; got {resp.headers.get('content-type')!r}"
-        text = resp.text
-        reader = csv.DictReader(io.StringIO(text))
-        rows = list(reader)
-        assert len(rows) >= 2
-        seen_tenants = {row["tenant_id"] for row in rows}
-        assert TENANT_A_ID in seen_tenants and TENANT_B_ID in seen_tenants
+        try:
+            resp = await tenant_client.get("/api/v1/assets/?export=csv")
+            assert resp.status_code == 200, resp.text
+            assert resp.headers["content-type"].startswith(
+                "text/csv"
+            ), f"CSV MUST advertise text/csv; got {resp.headers.get('content-type')!r}"
+            assert (
+                resp.text.splitlines()[0] == _CSV_LIFECYCLE_HEADER
+            ), "CSV header MUST keep the exact six-column contract"
+            parsed = list(csv.DictReader(io.StringIO(resp.text)))
+            values = {row["value"] for row in parsed}
+            assert {"203.0.113.10", "203.0.113.11"} <= values, (
+                "CSV stream MUST contain the committed tenant rows: the export "
+                "query MUST run while the generator still owns a live session "
+                f"with the requester's RLS context; got values={values!r}"
+            )
+            assert "203.0.113.20" not in values, "admin CSV MUST stay tenant-scoped"
+        finally:
+            await _csv_lifecycle_cleanup_rows(rows)
+
+    @pytest.mark.asyncio
+    async def test_superadmin_csv_streams_cross_tenant_rows_after_request_db_dependency_ends(
+        self, tenant_client: AsyncClient
+    ) -> None:
+        app = cast(ASGITransport, tenant_client._transport).app  # noqa: SLF001
+        tenant_x = uuid4()
+        tenant_y = uuid4()
+        rows = [
+            (tenant_x, "203.0.113.30"),
+            (tenant_y, "203.0.113.31"),
+        ]
+        await _csv_lifecycle_seed_rows(rows)
+        _install_production_like_db_lifecycle(
+            app, _csv_lifecycle_identity("superadmin", None, True)
+        )
+        try:
+            resp = await tenant_client.get("/api/v1/assets/?export=csv")
+            assert resp.status_code == 200, resp.text
+            assert resp.headers["content-type"].startswith(
+                "text/csv"
+            ), f"CSV MUST advertise text/csv; got {resp.headers.get('content-type')!r}"
+            parsed = list(csv.DictReader(io.StringIO(resp.text)))
+            values = {row["value"] for row in parsed}
+            # The superadmin branch of _scope_query adds NO app-level tenant
+            # predicate: these rows are visible ONLY if the generator set
+            # app.is_superadmin='true' on its own transaction.
+            assert {"203.0.113.30", "203.0.113.31"} <= values, (
+                "superadmin CSV MUST be cross-tenant: the generator MUST own a "
+                f"session with the superadmin RLS context; got values={values!r}"
+            )
+        finally:
+            await _csv_lifecycle_cleanup_rows(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -849,7 +1089,7 @@ class TestEventsSpy:
                     "event_type": getattr(event, "event_type", None),
                     "stream": kwargs.get("stream"),
                     "changed_fields": getattr(event, "changed_fields", None),
-                    "asset_id": getattr(event, "asset_id", None),
+                    "asset_id": str(getattr(event, "asset_id", None)),
                     "value": getattr(event, "value", None),
                     "type": getattr(event, "type", None),
                 }
@@ -1019,15 +1259,25 @@ class TestEventsSpy:
             assert (
                 resp.status_code >= 500
             ), f"commit failure MUST yield 5xx; got {resp.status_code}: {resp.text}"
-            assert (
-                calls == []
-            ), f"NO event MUST be published on commit failure; got {calls!r}"
+        except AssertionError:
+            # A failed assertion above is a TEST failure, not the expected
+            # ``ServerErrorMiddleware`` re-raise: never swallow it.
+            raise
+        except Exception:
+            # Starlette's ``ServerErrorMiddleware`` re-raises after sending
+            # the 500 debug response when ``debug=True``. The 5xx was
+            # already written to the wire; only the spy assertion matters
+            # from this side of the call.
+            pass
         finally:
             monkeypatch.setattr(AsyncSession, "commit", original_commit, raising=True)
 
+        # Outside the try/except: the publish-after-commit invariant.
+        assert (
+            calls == []
+        ), f"NO event MUST be published on commit failure; got {calls!r}"
 
-# ---------------------------------------------------------------------------
-# T11.8 — Response hygiene
+
 # ---------------------------------------------------------------------------
 class TestResponseHygiene:
     """T11.8 — ``AssetResponse`` exposes exactly six public fields."""

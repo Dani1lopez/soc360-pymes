@@ -26,8 +26,8 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_session_with_tenant
 from app.dependencies import DBDep
 from app.dependencies.auth import require_any_role
 from app.dependencies.event_deps import get_event_bus
@@ -94,7 +94,6 @@ def _row_to_csv_dict(asset: AssetResponse) -> dict[str, Any]:
 
 
 async def _stream_csv(
-    db: AsyncSession,
     current_user: User,
 ) -> AsyncGenerator[bytes, None]:
     """Stream an unpaginated CSV over assets visible to ``current_user``.
@@ -103,24 +102,44 @@ async def _stream_csv(
     row. Columns are exactly the six public fields. The yielded buffers
     are line-oriented so callers can stream them straight into a
     :class:`StreamingResponse`.
+
+    The generator OWNS its DB session/transaction for its full
+    consumption: FastAPI closes request-scoped yield dependencies
+    (``routing.app``'s ``async_exit_stack``) BEFORE a StreamingResponse
+    body is consumed, so borrowing the request session would run the
+    export query after commit/close with no RLS context (fresh pooled
+    connection without ``app.current_tenant`` / ``app.is_superadmin``)
+    and silently stream a header-only CSV. A dedicated session opened
+    here keeps the transaction — and its transaction-local RLS GUCs —
+    alive until the last row is yielded.
     """
-    stmt = select(Asset).order_by(Asset.created_at.desc(), Asset.id.desc())
-    stmt = _scope_query(stmt, current_user)
+    async with get_session_with_tenant(
+        tenant_id=current_user.tenant_id,
+        is_superadmin=current_user.is_superadmin,
+    ) as db:
+        stmt = select(Asset).order_by(Asset.created_at.desc(), Asset.id.desc())
+        stmt = _scope_query(stmt, current_user)
 
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=_CSV_COLUMNS)
-    writer.writeheader()
-    yield buffer.getvalue().encode("utf-8")
-    buffer.seek(0)
-    buffer.truncate(0)
-
-    result = await db.stream(stmt)
-    async for asset in result:
-        response = AssetResponse.from_orm_instance(asset)
-        writer.writerow(_row_to_csv_dict(response))
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=_CSV_COLUMNS)
+        writer.writeheader()
         yield buffer.getvalue().encode("utf-8")
         buffer.seek(0)
         buffer.truncate(0)
+
+        # ``stream_scalars`` yields ORM :class:`Asset` instances directly.
+        # The plain ``db.stream(stmt)`` API yields :class:`sqlalchemy.Row`
+        # tuples, which raises ``AttributeError: id`` inside
+        # ``AssetResponse.from_orm_instance`` because a Row does not expose
+        # column attributes on the outer tuple. ``stream_scalars`` is the
+        # scalar-streaming equivalent of ``db.scalars(stmt)``.
+        result = await db.stream_scalars(stmt)
+        async for asset in result:
+            response = AssetResponse.from_orm_instance(asset)
+            writer.writerow(_row_to_csv_dict(response))
+            yield buffer.getvalue().encode("utf-8")
+            buffer.seek(0)
+            buffer.truncate(0)
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +232,7 @@ async def list_assets(
     """
     if export == "csv":
         return StreamingResponse(
-            _stream_csv(db, current_user),
+            _stream_csv(current_user),
             media_type="text/csv",
             headers={
                 "Content-Disposition": "attachment; filename=assets.csv",

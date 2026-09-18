@@ -386,6 +386,10 @@ class _LuaCapableFakeRedis(FakeRedis):
 
 @pytest_asyncio.fixture
 async def client(db_session: AsyncSession):
+    from app.dependencies import event_deps as _event_deps
+    from app.dependencies.event_deps import get_event_bus
+    from app.event_bus import EventBus as _FakeEventBus
+
     app = create_app()
     fake_redis = _LuaCapableFakeRedis(
         decode_responses=True
@@ -400,15 +404,58 @@ async def client(db_session: AsyncSession):
     async def override_get_redis():
         yield fake_redis
 
+    # The auth login flow publishes ``auth.login`` events on
+    # ``get_event_bus``. Without an override, the default
+    # ``app.dependencies.event_deps.get_event_bus`` materialises a
+    # singleton against the settings pool (db=15 + password). On the
+    # local dev Redis that AUTH-fails and caches a poisoned bus that
+    # leaks into ``tenant_client``'s test body, crashing asset
+    # publishes with ``RedisUnreachableError`` -> 503. The override
+    # pins the bus to the same FakeRedis the fixture already uses,
+    # which supports the basic rate-limit / incr / expire calls the
+    # auth flow actually issues.
+    from app.dependencies import event_deps
+    from app.event_bus import EventBus as _FakeEventBus
+
+    async def override_get_event_bus():
+        if _event_deps._event_bus is None:
+            _event_deps._event_bus = _FakeEventBus(fake_redis)
+        return _event_deps._event_bus
+
+    # The auth service does NOT route ``get_event_bus`` through FastAPI
+    # DI — ``app.modules.auth.service.login`` calls its own local
+    # ``get_event_bus`` wrapper directly. Patch that wrapper in-place so
+    # the auth login publishes to the FakeRedis-backed bus instead of
+    # materialising a singleton against the default settings pool
+    # (db=15 + password). Otherwise the auth login caches a poisoned
+    # bus on ``app.dependencies.event_deps._event_bus`` that leaks into
+    # ``tenant_client``'s test body and crashes asset publishes with
+    # ``RedisUnreachableError`` -> 503.
+    import app.modules.auth.service as _auth_service
+
+    # Capture the pristine wrapper so the in-place patch below can be undone
+    # at teardown: leaving it patched leaks a FakeRedis-backed bus into every
+    # later fixture that resolves the real ``get_event_bus``.
+    _original_auth_get_event_bus = _auth_service.get_event_bus
+
+    async def _auth_get_event_bus() -> "EventBus":  # type: ignore[name-defined]
+        return await override_get_event_bus()
+
+    _auth_service.get_event_bus = _auth_get_event_bus
+
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_db_with_tenant] = override_get_db_with_tenant
     app.dependency_overrides[get_redis] = override_get_redis
+    app.dependency_overrides[get_event_bus] = override_get_event_bus
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-    ) as ac:
-        yield ac
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as ac:
+            yield ac
+    finally:
+        _auth_service.get_event_bus = _original_auth_get_event_bus
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +481,23 @@ async def tenant_client(db_session: AsyncSession):
     from app.dependencies.event_deps import get_event_bus
     from app.event_bus import EventBus as _TestEventBus
     from app.modules.users.models import User as _User
+
+    # Force a fresh EventBus singleton for THIS test. The autouse
+    # ``_reset_event_bus_singleton`` resets the singleton to ``None``
+    # before the test, but if the test transitively pulled in the
+    # ``client`` fixture (e.g. ``admin_a_headers`` -> token ->
+    # ``client.post('/api/v1/auth/login')``) the auth login already
+    # resolved ``get_event_bus`` once and cached a bus pointing at the
+    # default settings pool (db=15 + password). On local Redis that bus
+    # AUTH-fails, and the cached singleton is then reused by the asset
+    # route handlers, which publish ``asset.created/updated/deleted``
+    # events on it and crash with ``RedisUnreachableError`` -> 503.
+    # Clearing it here lets the override below materialise a fresh bus
+    # bound to ``test_redis`` (db=14, no AUTH) before the first asset
+    # request runs.
+    from app.dependencies import event_deps
+
+    event_deps._event_bus = None
 
     app = create_app()
     # Slice 1 (F2) requires a real Redis: fakeredis 2.34 does not
@@ -489,18 +553,42 @@ is_superadmin=user.is_superadmin,
     # module-level singleton to point at test_redis. This keeps a
     # SINGLE bus instance across the request lifecycle so the spy in
     # TestEventsSpy (which obtains the same singleton via
-    ``event_deps.get_event_bus()``) patches the exact instance
-    the asset route uses.
+    # event_deps.get_event_bus()) patches the exact instance
+    # the asset route uses.
     async def override_get_event_bus():
         from app.dependencies import event_deps
-        bus = _TestEventBus(test_redis)
-        event_deps._event_bus = bus
-        return bus
+
+        # Reuse the existing singleton if one is already cached; only
+        # build a fresh bus when nothing has been resolved yet. The
+        # spy in TestEventsSpy calls ``event_deps.get_event_bus()``
+        # which materialises the singleton, then monkeypatches
+        # ``bus.publish``. Subsequent invocations from the request
+        # handler must hit the SAME instance so the spy observes the
+        # publish. Constructing a new bus here would silently bypass
+        # the patch (the test sees ``Expected 1 publish; got []``).
+        if event_deps._event_bus is None:
+            event_deps._event_bus = _TestEventBus(test_redis)
+        return event_deps._event_bus
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_db_with_tenant] = override_get_db_with_tenant
     app.dependency_overrides[get_redis] = override_get_redis
     app.dependency_overrides[get_event_bus] = override_get_event_bus
+
+    # ``tenant_client`` is resolved BEFORE ``admin_a_token`` (pytest
+    # resolves fixtures top-down through the dependency graph). The
+    # auth login inside ``admin_a_token`` therefore resolves
+    # ``get_event_bus`` AFTER this reset, materialising a bus against
+    # the default settings pool (db=15 + password). On local Redis
+    # that bus AUTH-fails, and the cached singleton is then reused by
+    # the asset route handlers, which publish
+    # ``asset.created/updated/deleted`` events on it and crash with
+    # ``RedisUnreachableError`` -> 503. Re-clear the singleton here
+    # so the very first request through this client materialises a
+    # bus bound to ``test_redis`` (db=14, no AUTH).
+    from app.dependencies import event_deps
+
+    event_deps._event_bus = None
 
     try:
         async with AsyncClient(

@@ -79,6 +79,11 @@ openspec/project/session-handoff-next-steps.md
 # Skills de agentes locales — no subir al remoto
 skills/
 
+# Estado local del harness y worktrees — no subir al remoto
+.worktrees/
+.sdd/
+.commandcode/
+
 # Proceso SDD local — no subir al remoto
 openspec/changes/archive/**/apply-progress.md
 openspec/changes/archive/**/verify-report.md

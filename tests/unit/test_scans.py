@@ -13,9 +13,20 @@ extract it into a shared helper instead of copying it again.
 from __future__ import annotations
 
 import importlib.util
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+from pydantic import ValidationError
+
+from app.event_schemas import (
+    BaseEvent,
+    ScanCreatedEvent,
+    ScanDeletedEvent,
+    ScanUpdatedEvent,
+)
 from app.modules.scans.models import Scan
 
 # Name of the index that enforces the business rule: one open definition per
@@ -96,3 +107,210 @@ class TestOpenNamePreconditionDecision:
         assert "nightly" in message
         assert "pending" in message
         assert "uq_scans_tenant_asset_name_pending" in message
+
+
+class TestScanEventSchemas:
+    """The three Scans CRUD events, on the shared BaseEvent envelope."""
+
+    @staticmethod
+    def _envelope() -> dict[str, object]:
+        return {"event_id": uuid.uuid4(), "tenant_id": uuid.uuid4()}
+
+    def test_scan_events_inherit_the_base_envelope(self) -> None:
+        for event_cls in (ScanCreatedEvent, ScanUpdatedEvent, ScanDeletedEvent):
+            assert issubclass(event_cls, BaseEvent)
+
+    def test_scan_created_event_carries_the_definition_payload(self) -> None:
+        event = ScanCreatedEvent(
+            **self._envelope(),
+            scan_id=uuid.uuid4(),
+            asset_id=uuid.uuid4(),
+            name="weekly",
+            type="discovery",
+            status="pending",
+            config={"host_discovery": True},
+            created_at=datetime.now(UTC),
+        )
+
+        assert event.event_type == "scan.created"
+        assert event.type == "discovery"
+        assert event.status == "pending"
+        assert event.config == {"host_discovery": True}
+
+    def test_scan_updated_event_carries_changed_fields(self) -> None:
+        event = ScanUpdatedEvent(
+            **self._envelope(),
+            scan_id=uuid.uuid4(),
+            changed_fields=["name", "config"],
+        )
+
+        assert event.event_type == "scan.updated"
+        assert event.changed_fields == ["name", "config"]
+
+    def test_scan_deleted_event_carries_scan_id(self) -> None:
+        scan_id = uuid.uuid4()
+
+        event = ScanDeletedEvent(**self._envelope(), scan_id=scan_id)
+
+        assert event.event_type == "scan.deleted"
+        assert event.scan_id == scan_id
+
+    def test_scan_created_event_rejects_an_unknown_scan_type(self) -> None:
+        with pytest.raises(ValidationError):
+            ScanCreatedEvent(
+                **self._envelope(),
+                scan_id=uuid.uuid4(),
+                asset_id=uuid.uuid4(),
+                name="weekly",
+                type="not-a-scan-type",
+                status="pending",
+                config=None,
+                created_at=datetime.now(UTC),
+            )
+
+
+class TestScanSchemas:
+    """The public Scans API contract: discriminated create, partial update, whitelist."""
+
+    @staticmethod
+    def _body() -> dict[str, object]:
+        return {
+            "tenant_id": uuid.uuid4(),
+            "asset_id": uuid.uuid4(),
+            "name": "weekly",
+        }
+
+    @pytest.mark.parametrize(
+        ("scan_type", "config"),
+        [
+            ("discovery", {"host_discovery": True}),
+            ("vulnerability", {"checks": ["baseline"]}),
+            ("web", {"paths": ["/"]}),
+            ("full", {"host_discovery": True, "checks": ["baseline"], "paths": ["/"]}),
+        ],
+    )
+    def test_scan_create_accepts_each_of_the_four_types(
+        self, scan_type: str, config: dict[str, object]
+    ) -> None:
+        from pydantic import TypeAdapter
+
+        from app.modules.scans.schemas import ScanCreateRequest
+
+        request = TypeAdapter(ScanCreateRequest).validate_python(
+            {**self._body(), "type": scan_type, "config": config}
+        )
+
+        assert request.type == scan_type
+
+    def test_scan_create_rejects_an_unknown_type(self) -> None:
+        from pydantic import TypeAdapter, ValidationError
+
+        from app.modules.scans.schemas import ScanCreateRequest
+
+        with pytest.raises(ValidationError):
+            TypeAdapter(ScanCreateRequest).validate_python(
+                {**self._body(), "type": "not-a-scan-type", "config": {}}
+            )
+
+    def test_scan_create_body_rejects_unknown_keys(self) -> None:
+        from pydantic import TypeAdapter, ValidationError
+
+        from app.modules.scans.schemas import ScanCreateRequest
+
+        with pytest.raises(ValidationError):
+            TypeAdapter(ScanCreateRequest).validate_python(
+                {
+                    **self._body(),
+                    "type": "discovery",
+                    "config": {"host_discovery": True},
+                    "status": "pending",
+                }
+            )
+
+    def test_scan_create_config_rejects_unknown_keys(self) -> None:
+        from pydantic import TypeAdapter, ValidationError
+
+        from app.modules.scans.schemas import ScanCreateRequest
+
+        with pytest.raises(ValidationError):
+            TypeAdapter(ScanCreateRequest).validate_python(
+                {
+                    **self._body(),
+                    "type": "discovery",
+                    "config": {"host_discovery": True, "ports": [80]},
+                }
+            )
+
+    def test_scan_create_rejects_a_config_missing_a_required_key(self) -> None:
+        from pydantic import TypeAdapter, ValidationError
+
+        from app.modules.scans.schemas import ScanCreateRequest
+
+        with pytest.raises(ValidationError):
+            TypeAdapter(ScanCreateRequest).validate_python(
+                {**self._body(), "type": "discovery", "config": {}}
+            )
+
+    def test_scan_update_rejects_identity_and_lifecycle_fields(self) -> None:
+        from pydantic import ValidationError
+
+        from app.modules.scans.schemas import ScanUpdate
+
+        for forbidden in (
+            "tenant_id",
+            "asset_id",
+            "status",
+            "started_at",
+            "completed_at",
+        ):
+            with pytest.raises(ValidationError):
+                ScanUpdate.model_validate({forbidden: "anything"})
+
+    def test_scan_update_accepts_a_partial_body(self) -> None:
+        from app.modules.scans.schemas import ScanUpdate
+
+        update = ScanUpdate.model_validate({"name": "renamed"})
+
+        assert update.name == "renamed"
+        assert update.type is None
+        assert update.config is None
+
+    def test_scan_response_exposes_exactly_the_eleven_public_fields(self) -> None:
+        from app.modules.scans.schemas import ScanResponse
+
+        assert set(ScanResponse.model_fields) == {
+            "id",
+            "tenant_id",
+            "asset_id",
+            "name",
+            "type",
+            "status",
+            "config",
+            "started_at",
+            "completed_at",
+            "created_at",
+            "updated_at",
+        }
+
+    def test_scan_response_renames_orm_scan_type_to_public_type(self) -> None:
+        from app.modules.scans.schemas import ScanResponse
+
+        orm = Scan(
+            id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            asset_id=uuid.uuid4(),
+            name="weekly",
+            scan_type="discovery",
+            status="pending",
+            config={"host_discovery": True},
+        )
+        # Bypass DB defaults for the test: these are populated on INSERT.
+        orm.created_at = datetime.now(UTC)
+        orm.updated_at = datetime.now(UTC)
+
+        response = ScanResponse.from_orm_instance(orm)
+        dumped = response.model_dump(mode="json")
+
+        assert dumped["type"] == "discovery"
+        assert dumped["status"] == "pending"
+        assert "scan_type" not in dumped

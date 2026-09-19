@@ -165,6 +165,19 @@ AssetType = Literal[
 ]
 
 
+# ScanType — the four canonical scan types used by the Scans domain. Like
+# AssetType, it lives here so every event payload references the same source
+# of truth without coupling to app/modules/scans/schemas.py.
+ScanType = Literal[
+    "discovery",
+    "vulnerability",
+    "web",
+    "full",
+]
+
+ScanStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
+
+
 class AssetCreatedEvent(BaseEvent):
     """asset.created event emitted after a successful POST /assets.
 
@@ -213,3 +226,63 @@ class AssetDeletedEvent(BaseEvent):
 
     event_type: Literal["asset.deleted"] = "asset.deleted"
     asset_id: uuid.UUID
+
+
+# ---------------------------------------------------------------------------
+# F2 — Scans domain events (Slice 2)
+# ---------------------------------------------------------------------------
+
+
+class ScanCreatedEvent(BaseEvent):
+    """scan.created event emitted after a successful POST /scans.
+
+    Emitted by: app/modules/scans/service.py, only after the commit succeeds.
+    Consumed by: slices that react to a new scan definition being persisted
+    (execution scheduling, dashboards). Payload shape:
+        {event_id, event_type, timestamp, scan_id, tenant_id, asset_id, name,
+         type, status, config, created_at}
+    """
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
+
+    event_type: Literal["scan.created"] = "scan.created"
+    scan_id: uuid.UUID
+    asset_id: uuid.UUID
+    name: str
+    type: ScanType
+    status: ScanStatus
+    config: dict | None
+    created_at: datetime
+
+
+class ScanUpdatedEvent(BaseEvent):
+    """scan.updated event emitted after a successful PATCH /scans/{id}.
+
+    ``changed_fields`` is the ordered list of public field names that actually
+    changed in this mutation (e.g. ``["name"]`` or ``["type", "config"]``).
+    Consumers must NOT infer change sets from comparing snapshots.
+    """
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
+
+    event_type: Literal["scan.updated"] = "scan.updated"
+    scan_id: uuid.UUID
+    changed_fields: list[str]
+
+
+class ScanDeletedEvent(BaseEvent):
+    """scan.deleted event emitted after a successful DELETE /scans/{id}."""
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
+
+    event_type: Literal["scan.deleted"] = "scan.deleted"
+    scan_id: uuid.UUID

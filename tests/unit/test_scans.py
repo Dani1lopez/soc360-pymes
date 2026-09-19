@@ -17,6 +17,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
@@ -314,3 +315,528 @@ class TestScanSchemas:
         assert dumped["type"] == "discovery"
         assert dumped["status"] == "pending"
         assert "scan_type" not in dumped
+
+
+VALID_SCAN_CONFIGS = [
+    ("discovery", {"host_discovery": True}),
+    ("vulnerability", {"checks": ["baseline"]}),
+    ("web", {"paths": ["/"]}),
+    ("full", {"host_discovery": True, "checks": ["baseline"], "paths": ["/"]}),
+]
+
+INVALID_SCAN_CONFIGS = [
+    ("not-a-scan-type", {}, "unknown scan_type 'not-a-scan-type'"),
+    ("discovery", "not-an-object", "config must be an object for scan_type 'discovery'"),
+    (
+        "discovery",
+        {"host_discovery": True, "ports": [80]},
+        "config.ports is not allowed for scan_type 'discovery'",
+    ),
+    ("discovery", {}, "config.host_discovery is required for scan_type 'discovery'"),
+    (
+        "discovery",
+        {"host_discovery": "yes"},
+        "config.host_discovery must be a boolean for scan_type 'discovery'",
+    ),
+    ("vulnerability", {}, "config.checks is required for scan_type 'vulnerability'"),
+    (
+        "vulnerability",
+        {"checks": []},
+        "config.checks must be a non-empty list of non-empty strings "
+        "for scan_type 'vulnerability'",
+    ),
+    (
+        "vulnerability",
+        {"checks": ["baseline", ""]},
+        "config.checks must be a non-empty list of non-empty strings "
+        "for scan_type 'vulnerability'",
+    ),
+    ("web", {}, "config.paths is required for scan_type 'web'"),
+    (
+        "web",
+        {"paths": []},
+        "config.paths must be a non-empty list of paths beginning with '/' "
+        "for scan_type 'web'",
+    ),
+    (
+        "web",
+        {"paths": ["/ok", "missing-slash"]},
+        "config.paths must be a non-empty list of paths beginning with '/' "
+        "for scan_type 'web'",
+    ),
+    (
+        "full",
+        {"host_discovery": True, "checks": ["baseline"]},
+        "config.paths is required for scan_type 'full'",
+    ),
+]
+
+
+class TestValidateScanConfig:
+    """The semantic frontier for scan config, shared by POST and PATCH."""
+
+    @pytest.mark.parametrize(("scan_type", "config"), VALID_SCAN_CONFIGS)
+    def test_valid_config_is_accepted_and_returned(
+        self, scan_type: str, config: dict[str, object]
+    ) -> None:
+        from app.modules.scans.service import _validate_scan_config
+
+        assert _validate_scan_config(scan_type, config) == config
+
+    @pytest.mark.parametrize(("scan_type", "config", "message"), INVALID_SCAN_CONFIGS)
+    def test_invalid_config_raises_the_contract_message(
+        self, scan_type: str, config: object, message: str
+    ) -> None:
+        from app.modules.scans.service import _validate_scan_config
+
+        with pytest.raises(ValueError) as excinfo:
+            _validate_scan_config(scan_type, config)
+
+        assert str(excinfo.value) == message
+
+    def test_returned_lists_are_copies_not_the_caller_list(self) -> None:
+        from app.modules.scans.service import _validate_scan_config
+
+        original = ["baseline"]
+        result = _validate_scan_config("vulnerability", {"checks": original})
+        original.append("mutated")
+
+        assert result["checks"] == ["baseline"]
+
+
+# ---------------------------------------------------------------------------
+# PR2 part 2 — service unit tests: mocked session + bus, no database.
+# ---------------------------------------------------------------------------
+
+
+def _db_returning(*, scalar_one_or_none=None, scalars_all=None, total=0) -> AsyncMock:
+    """An AsyncSession double whose ``execute`` always returns one result."""
+    db = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = scalar_one_or_none
+    result.scalars.return_value.all.return_value = (
+        scalars_all if scalars_all is not None else []
+    )
+    result.scalar_one.return_value = total
+    db.execute.return_value = result
+    return db
+
+
+def _sequenced_db() -> tuple[AsyncMock, list[str]]:
+    """``_db_returning`` whose flush/commit append to a shared call-order list."""
+    calls: list[str] = []
+
+    async def _flush() -> None:
+        calls.append("flush")
+
+    async def _commit() -> None:
+        calls.append("commit")
+
+    db = _db_returning()
+    db.flush.side_effect = _flush
+    db.commit.side_effect = _commit
+    return db, calls
+
+
+def _spy_bus(calls: list[str]) -> AsyncMock:
+    async def _publish(*_args: object, **_kwargs: object) -> None:
+        calls.append("publish")
+
+    bus = AsyncMock()
+    bus.publish.side_effect = _publish
+    return bus
+
+
+def _predicate_columns(stmt: object) -> set[str]:
+    """Column names compared in the statement's WHERE clause.
+
+    ``str(stmt)`` is unusable for this: a plain ``select(Scan)`` renders every
+    column name in the SELECT list, including the predicate columns.
+    """
+    clause = getattr(stmt, "whereclause", None)
+    if clause is None:
+        return set()
+    clauses = getattr(clause, "clauses", [clause])
+    return {expr.left.name for expr in clauses}
+
+
+def _db_recording_statements(db: AsyncMock) -> list[object]:
+    """Record every statement passed to ``db.execute``."""
+    result = db.execute.return_value
+    captured: list[object] = []
+
+    def _record(stmt: object, *_args: object, **_kwargs: object) -> object:
+        captured.append(stmt)
+        return result
+
+    db.execute.side_effect = _record
+    return captured
+
+
+def _sequenced_fetch_db(scan: Scan) -> tuple[AsyncMock, list[str]]:
+    """``_db_returning`` returning ``scan`` from fetches, with flush/commit recorded."""
+    db = _db_returning(scalar_one_or_none=scan)
+    calls: list[str] = []
+
+    async def _flush() -> None:
+        calls.append("flush")
+
+    async def _commit() -> None:
+        calls.append("commit")
+
+    db.flush.side_effect = _flush
+    db.commit.side_effect = _commit
+    return db, calls
+
+
+def _sequenced_create_db() -> tuple[AsyncMock, list[str], list[Scan]]:
+    """``_sequenced_db`` whose flush simulates INSERT populating id/created_at."""
+    db, calls = _sequenced_db()
+    added: list[Scan] = []
+    db.add = MagicMock(side_effect=added.append)
+    base_flush = db.flush.side_effect
+
+    async def _flush_with_defaults() -> None:
+        if base_flush is not None:
+            await base_flush()
+        for obj in added:
+            if getattr(obj, "id", None) is None:
+                obj.id = uuid.uuid4()
+            if getattr(obj, "created_at", None) is None:
+                obj.created_at = datetime.now(UTC)
+
+    db.flush.side_effect = _flush_with_defaults
+    return db, calls, added
+
+
+def _scan(scan_type: str, config: dict[str, object] | None) -> Scan:
+    """A persisted-shaped Scan instance without touching a database."""
+    scan = Scan(
+        id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        asset_id=uuid.uuid4(),
+        name="weekly",
+        scan_type=scan_type,
+        status="pending",
+        config=config,
+    )
+    # Bypass DB defaults for the test: these are populated on INSERT.
+    scan.created_at = datetime.now(UTC)
+    scan.updated_at = datetime.now(UTC)
+    return scan
+
+
+class TestCreateScan:
+    """create_scan: forced lifecycle, call order, validation frontier, duplicates."""
+
+    @pytest.mark.asyncio
+    async def test_create_scan_forces_pending_and_clears_operational_timestamps(
+        self,
+    ) -> None:
+        from app.modules.scans.schemas import DiscoveryScanCreate
+        from app.modules.scans.service import create_scan
+
+        tenant_id = uuid.uuid4()
+        db, calls, _added = _sequenced_create_db()
+        bus = _spy_bus(calls)
+        data = DiscoveryScanCreate(
+            tenant_id=tenant_id,
+            asset_id=uuid.uuid4(),
+            name="weekly",
+            config={"host_discovery": True},
+        )
+
+        scan = await create_scan(data, tenant_id, db, bus)
+
+        assert scan.status == "pending"
+        assert scan.started_at is None
+        assert scan.completed_at is None
+        assert scan.tenant_id == tenant_id
+        assert scan.scan_type == "discovery"
+        assert scan.config == {"host_discovery": True}
+
+    @pytest.mark.asyncio
+    async def test_create_scan_flushes_then_commits_then_publishes_to_scan_events(
+        self,
+    ) -> None:
+        from app.modules.scans.schemas import DiscoveryScanCreate
+        from app.modules.scans.service import create_scan
+
+        tenant_id = uuid.uuid4()
+        db, calls, _added = _sequenced_create_db()
+        bus = _spy_bus(calls)
+        data = DiscoveryScanCreate(
+            tenant_id=tenant_id,
+            asset_id=uuid.uuid4(),
+            name="weekly",
+            config={"host_discovery": True},
+        )
+
+        scan = await create_scan(data, tenant_id, db, bus)
+
+        assert calls == ["flush", "commit", "publish"]
+        assert bus.publish.await_args.kwargs["stream"] == "scan.events"
+        event = bus.publish.await_args.args[0]
+        assert event.event_type == "scan.created"
+        assert event.scan_id == scan.id
+        assert event.status == "pending"
+        assert event.created_at == scan.created_at
+
+    @pytest.mark.asyncio
+    async def test_create_scan_validates_config_before_touching_the_session(self) -> None:
+        from app.modules.scans.schemas import VulnerabilityScanCreate
+        from app.modules.scans.service import create_scan
+
+        db, calls, added = _sequenced_create_db()
+        bus = _spy_bus(calls)
+        # Schema-valid (a non-empty list of strings) but service-invalid: an
+        # empty check identifier. This is exactly the gap the service owns.
+        data = VulnerabilityScanCreate(
+            tenant_id=uuid.uuid4(),
+            asset_id=uuid.uuid4(),
+            name="weekly",
+            config={"checks": [""]},
+        )
+
+        with pytest.raises(ValueError):
+            await create_scan(data, data.tenant_id, db, bus)
+
+        assert calls == []
+        assert added == []
+
+    @pytest.mark.asyncio
+    async def test_create_scan_maps_the_open_name_index_violation_to_scan_duplicate_error(
+        self,
+    ) -> None:
+        from sqlalchemy.exc import IntegrityError
+
+        from app.modules.scans.schemas import DiscoveryScanCreate
+        from app.modules.scans.service import ScanDuplicateError, create_scan
+
+        tenant_id = uuid.uuid4()
+        db, calls, _added = _sequenced_create_db()
+        bus = _spy_bus(calls)
+        err = IntegrityError("INSERT", {}, Exception("duplicate key value"))
+        err.orig = MagicMock(constraint_name=OPEN_NAME_INDEX)
+        db.flush.side_effect = err
+        data = DiscoveryScanCreate(
+            tenant_id=tenant_id,
+            asset_id=uuid.uuid4(),
+            name="weekly",
+            config={"host_discovery": True},
+        )
+
+        with pytest.raises(ScanDuplicateError) as excinfo:
+            await create_scan(data, tenant_id, db, bus)
+
+        assert isinstance(excinfo.value.__cause__, IntegrityError)
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_create_scan_reraises_an_unrecognised_integrity_error_unchanged(
+        self,
+    ) -> None:
+        from sqlalchemy.exc import IntegrityError
+
+        from app.modules.scans.schemas import DiscoveryScanCreate
+        from app.modules.scans.service import create_scan
+
+        tenant_id = uuid.uuid4()
+        db, calls, _added = _sequenced_create_db()
+        bus = _spy_bus(calls)
+        err = IntegrityError("INSERT", {}, Exception("violates chk_scans_status"))
+        db.flush.side_effect = err
+        data = DiscoveryScanCreate(
+            tenant_id=tenant_id,
+            asset_id=uuid.uuid4(),
+            name="weekly",
+            config={"host_discovery": True},
+        )
+
+        with pytest.raises(IntegrityError) as excinfo:
+            await create_scan(data, tenant_id, db, bus)
+
+        assert excinfo.value is err
+        assert calls == []
+
+
+class TestGetScan:
+    """get_scan: the tenant predicate is explicit, never implied by RLS."""
+
+    @pytest.mark.asyncio
+    async def test_get_scan_applies_the_tenant_predicate_when_tenant_id_is_given(
+        self,
+    ) -> None:
+        from app.modules.scans.service import get_scan
+
+        tenant_id = uuid.uuid4()
+        db = _db_returning(scalar_one_or_none=None)
+        captured = _db_recording_statements(db)
+
+        result = await get_scan(uuid.uuid4(), tenant_id, db)
+
+        assert result is None
+        assert len(captured) == 1
+        assert _predicate_columns(captured[0]) == {"id", "tenant_id"}
+
+    @pytest.mark.asyncio
+    async def test_get_scan_omits_the_tenant_predicate_for_the_global_path(self) -> None:
+        from app.modules.scans.service import get_scan
+
+        db = _db_returning(scalar_one_or_none=None)
+        captured = _db_recording_statements(db)
+
+        result = await get_scan(uuid.uuid4(), None, db)
+
+        assert result is None
+        assert len(captured) == 1
+        assert _predicate_columns(captured[0]) == {"id"}
+
+
+class TestListScans:
+    """list_scans: deterministic order, matching page metadata, optional filter."""
+
+    @pytest.mark.asyncio
+    async def test_list_scans_orders_desc_and_applies_offset_and_limit(self) -> None:
+        from app.modules.scans.service import list_scans
+
+        items = [MagicMock(), MagicMock()]
+        db = _db_returning(scalars_all=items, total=42)
+        captured = _db_recording_statements(db)
+
+        returned, total = await list_scans(uuid.uuid4(), db, limit=10, offset=25)
+
+        assert total == 42
+        assert list(returned) == items
+        assert len(captured) == 2
+        count_stmt, items_stmt = captured
+        assert "count(*)" in str(count_stmt)
+        compiled_items = str(items_stmt)
+        assert "created_at DESC" in compiled_items
+        assert "id DESC" in compiled_items
+        assert "LIMIT" in compiled_items
+        assert "OFFSET" in compiled_items
+
+    @pytest.mark.asyncio
+    async def test_list_scans_applies_the_asset_filter_to_both_queries(self) -> None:
+        from app.modules.scans.service import list_scans
+
+        tenant_id = uuid.uuid4()
+        asset_id = uuid.uuid4()
+        db = _db_returning(scalars_all=[MagicMock()], total=3)
+        captured = _db_recording_statements(db)
+
+        returned, total = await list_scans(
+            tenant_id, db, limit=10, offset=0, asset_id=asset_id
+        )
+
+        assert total == 3
+        assert len(captured) == 2
+        for stmt in captured:
+            assert "asset_id" in _predicate_columns(stmt)
+            assert "tenant_id" in _predicate_columns(stmt)
+
+    @pytest.mark.asyncio
+    async def test_list_scans_without_asset_id_adds_no_asset_predicate(self) -> None:
+        from app.modules.scans.service import list_scans
+
+        tenant_id = uuid.uuid4()
+        db = _db_returning(scalars_all=[], total=0)
+        captured = _db_recording_statements(db)
+
+        await list_scans(tenant_id, db, limit=10, offset=0)
+
+        assert len(captured) == 2
+        for stmt in captured:
+            assert "asset_id" not in _predicate_columns(stmt)
+            assert "tenant_id" in _predicate_columns(stmt)
+
+
+class TestUpdateScan:
+    """update_scan: ordered change report and effective-pair revalidation."""
+
+    @pytest.mark.asyncio
+    async def test_update_scan_reports_changed_fields_in_the_fixed_public_order(
+        self,
+    ) -> None:
+        from app.modules.scans.schemas import ScanUpdate
+        from app.modules.scans.service import update_scan
+
+        scan = _scan("discovery", {"host_discovery": True})
+        db, calls = _sequenced_fetch_db(scan)
+        bus = _spy_bus(calls)
+        # The name is sent but equals the stored one: it must be omitted,
+        # and the remaining two must appear in the fixed name/type/config order.
+        data = ScanUpdate(name="weekly", type="vulnerability", config={"checks": ["x"]})
+
+        result = await update_scan(scan.id, scan.tenant_id, data, db, bus)
+
+        assert result is scan
+        assert calls == ["flush", "commit", "publish"]
+        event = bus.publish.await_args.args[0]
+        assert event.changed_fields == ["type", "config"]
+        assert scan.name == "weekly"
+        assert scan.scan_type == "vulnerability"
+        assert scan.config == {"checks": ["x"]}
+
+    @pytest.mark.asyncio
+    async def test_update_scan_revalidates_the_effective_type_config_pair(self) -> None:
+        from app.modules.scans.schemas import ScanUpdate
+        from app.modules.scans.service import update_scan
+
+        scan = _scan("vulnerability", {"checks": ["baseline"]})
+        db, calls = _sequenced_fetch_db(scan)
+        bus = _spy_bus(calls)
+        # Only the type changes; the stored checks-config is incompatible with
+        # the new type, so the effective pair must be rejected before any write.
+        data = ScanUpdate(type="web")
+
+        with pytest.raises(ValueError):
+            await update_scan(scan.id, scan.tenant_id, data, db, bus)
+
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_update_scan_returns_none_when_the_scan_is_not_visible(self) -> None:
+        from app.modules.scans.schemas import ScanUpdate
+        from app.modules.scans.service import update_scan
+
+        db, calls = _sequenced_db()
+        bus = _spy_bus(calls)
+
+        result = await update_scan(
+            uuid.uuid4(), uuid.uuid4(), ScanUpdate(name="renamed"), db, bus
+        )
+
+        assert result is None
+        assert calls == []
+
+
+class TestDeleteScan:
+    """delete_scan: miss is silent, hit commits before publishing."""
+
+    @pytest.mark.asyncio
+    async def test_delete_scan_miss_is_silent_and_hit_commits_before_publishing(
+        self,
+    ) -> None:
+        from app.modules.scans.service import delete_scan
+
+        scan = _scan("discovery", {"host_discovery": True})
+        tenant_id = scan.tenant_id
+
+        # Miss: not visible, nothing recorded, nothing published.
+        db, calls = _sequenced_db()
+        bus = _spy_bus(calls)
+        assert await delete_scan(scan.id, tenant_id, db, bus) is False
+        assert calls == []
+
+        # Hit: commit strictly before publish, with the captured identity.
+        db, calls = _sequenced_fetch_db(scan)
+        bus = _spy_bus(calls)
+        assert await delete_scan(scan.id, tenant_id, db, bus) is True
+        assert calls == ["commit", "publish"]
+        event = bus.publish.await_args.args[0]
+        assert event.event_type == "scan.deleted"
+        assert event.scan_id == scan.id
+        assert event.tenant_id == tenant_id
+        assert bus.publish.await_args.kwargs["stream"] == "scan.events"

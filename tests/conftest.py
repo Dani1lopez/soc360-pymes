@@ -20,23 +20,53 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 os.environ.setdefault("ENVIRONMENT", "development")
-os.environ.setdefault(
+
+_ENV_FILE = Path(__file__).resolve().parent / ".env"
+
+
+def _load_env_file(path: Path) -> None:
+    """Load KEY=VALUE pairs from a dotenv-style file (dependency-free).
+
+    Blank lines and ``#`` comments are ignored; surrounding quotes are
+    stripped. Values are applied via ``os.environ.setdefault`` so variables
+    already present in the environment always win. Secret values are never
+    printed or logged.
+    """
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_env_file(_ENV_FILE)
+
+# Fail closed: secret-bearing settings are required to run the suite.
+_MISSING_SECRET_VARS = (
     "DATABASE_URL",
-    "postgresql+asyncpg://soc360_app:***REMOVED***@localhost:5434/soc360_test",
-)
-os.environ.setdefault(
     "DATABASE_URL_MIGRATION",
-    "postgresql+asyncpg://soc360_migration:***REMOVED***@localhost:5434/soc360_test",
-)
-os.environ.setdefault(
     "SECRET_KEY",
-    "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
-    "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
-    "abcdefghijklmnopqrstuvwx",
+    "GROQ_API_KEY",
+    "POSTGRES_PASSWORD",
 )
-os.environ.setdefault("GROQ_API_KEY", "***REMOVED***")
+_missing = [name for name in _MISSING_SECRET_VARS if not os.environ.get(name)]
+if _missing:
+    raise RuntimeError(
+        "Missing required test environment variables: "
+        + ", ".join(_missing)
+        + ". Copy tests/.env.example to tests/.env and fill in the real "
+        "values (tests/.env is gitignored; never commit real values)."
+    )
+
 os.environ.setdefault("POSTGRES_USER", "soc360_app")
-os.environ.setdefault("POSTGRES_PASSWORD", "***REMOVED***")
 os.environ.setdefault("POSTGRES_DB", "soc360_test")
 # Structured Redis settings (PR1 #260 — REDIS_URL is rejected)
 os.environ.setdefault("REDIS_HOST", "localhost")
@@ -152,7 +182,12 @@ def prepare_database():
         # Extract the password for soc360_app from the test DATABASE_URL
         # so _ensure_app_role and db_session use the same credential.
         app_parsed = make_url(TEST_DATABASE_URL)
-        app_password = app_parsed.password or "***REMOVED***"
+        app_password = app_parsed.password
+        if not app_password:
+            raise RuntimeError(
+                "TEST_DATABASE_URL is missing its password component; "
+                "set DATABASE_URL in tests/.env"
+            )
         try:
             role_exists = await conn.fetchval(
                 "SELECT 1 FROM pg_roles WHERE rolname = 'soc360_app'"

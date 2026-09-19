@@ -49,6 +49,16 @@ ISOLATED_DB_URL = (
 ISOLATED_DB_PASSWORD = make_url(os.environ["DATABASE_URL_MIGRATION"]).password
 
 
+# Slice 1's assets-alignment revision and its parent, pinned deliberately.
+# These tests exist to validate THAT migration, but the old harness detected
+# "the newest revision" dynamically via `alembic heads`. That silently broke as
+# soon as a later migration became the head: `new_revision_sql` then rendered
+# the newer migration and every assertion about the Slice 1 DDL failed. Pinning
+# the pair keeps these tests inspecting the migration they were written for.
+ASSETS_ALIGNMENT_PARENT = "a1b2c3d4e5f6"
+ASSETS_ALIGNMENT_REVISION = "e0eafdf389fc"
+
+
 def _alembic(
     *args: str,
     db_url: str | None = None,
@@ -67,49 +77,14 @@ def _alembic(
     )
 
 
-def _current_head() -> str:
-    """Return the current alembic head revision id."""
-    result = _alembic("heads")
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"alembic heads failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-    for line in result.stdout.splitlines():
-        # Lines look like: 'a1b2c3d4e5f6 (head)'
-        m = re.match(r"^([0-9a-f]+)\s+\(head\)", line)
-        if m:
-            return m.group(1)
-    raise RuntimeError(f"No head found in:\n{result.stdout}")
-
-
-def _previous_head(current_head: str) -> str:
-    """Return the parent of `current_head` via `alembic show`."""
-    result = _alembic("show", current_head)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"alembic show {current_head} failed:\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-    m = re.search(r"^Parent:\s*(\S+)\s*$", result.stdout, re.MULTILINE)
-    if m is None:
-        raise RuntimeError(
-            f"No 'Parent:' line in alembic show output for {current_head}:\n"
-            f"{result.stdout}"
-        )
-    parent = m.group(1).strip()
-    if parent.lower() in {"none", "(none)"}:
-        raise RuntimeError(
-            f"Revision {current_head} has no parent — cannot compute chain."
-        )
-    return parent
-
-
 @pytest.fixture(scope="module")
 def migration_chain() -> tuple[str, str]:
-    """Return (parent_head, current_head) of the migration chain."""
-    head = _current_head()
-    parent = _previous_head(head)
-    return parent, head
+    """Return (parent, revision) of the Slice 1 assets-alignment migration.
+
+    Deliberately pinned instead of auto-detected so a later Alembic migration
+    becoming the head cannot redirect these tests away from this revision.
+    """
+    return ASSETS_ALIGNMENT_PARENT, ASSETS_ALIGNMENT_REVISION
 
 
 @pytest.fixture(scope="module")

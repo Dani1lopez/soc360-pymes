@@ -91,3 +91,8 @@ openspec/changes/archive/**/exploration.md
 openspec/changes/archive/**/next-session.md
 openspec/changes/archive/**/branch-roadmap.md
 openspec/changes/archive/**/reconciliation-note.md
+
+# OpenSpec session artifacts with secret material
+openspec/changes/**/apply-progress.md
+openspec/changes/**/verify-report.md
+openspec/changes/**/*judgment-day*/*.diff

@@ -239,10 +239,10 @@ def test_scn_1_2_populated_upgrade_completes() -> None:
 
     # Insert at least one row in each F2 table to exercise the indexes.
     _sync_execute(
-        "INSERT INTO assets (id, tenant_id, name, hostname, asset_type, status) "
+        "INSERT INTO assets (id, tenant_id, value, asset_type, status) "
         "VALUES ('aaaaaaaa-0000-0000-0000-aaaaaaaaaaaa', "
-        "'11111111-1111-1111-1111-111111111111', 'AlphaAsset', 'alpha-host', "
-        "'host', 'active') ON CONFLICT (id) DO NOTHING"
+        "'11111111-1111-1111-1111-111111111111', 'AlphaAsset', "
+        "'hostname', 'active') ON CONFLICT (id) DO NOTHING"
     )
     _sync_execute(
         "INSERT INTO scans (id, tenant_id, asset_id, name, scan_type, status) "

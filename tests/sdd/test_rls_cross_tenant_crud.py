@@ -80,9 +80,9 @@ def _insert_b_row(table: str, seed: dict) -> str | None:
         )
     elif table == "assets":
         return (
-            f"INSERT INTO {table} (id, tenant_id, name, hostname, asset_type, status) "
+            f"INSERT INTO {table} (id, tenant_id, value, asset_type, status) "
             f"VALUES ('{UUID('55555555-5555-5555-5555-555555555555')}', "
-            f"'{TENANT_B_ID}', 'Intruder Asset', 'intruder-host', 'host', 'active')"
+            f"'{TENANT_B_ID}', 'Intruder Asset', 'hostname', 'active')"
         )
     elif table == "scans":
         return (
@@ -125,7 +125,7 @@ def _update_b_rows(table: str) -> str | None:
         )
     elif table == "assets":
         return (
-            f"UPDATE {table} SET name = 'hacked' " f"WHERE tenant_id = '{TENANT_B_ID}'"
+            f"UPDATE {table} SET value = 'hacked' " f"WHERE tenant_id = '{TENANT_B_ID}'"
         )
     elif table == "scans":
         return (

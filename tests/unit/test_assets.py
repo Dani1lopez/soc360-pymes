@@ -27,6 +27,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import asyncpg
 import pytest
+from sqlalchemy import make_url
+
 from fakeredis.aioredis import FakeRedis
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -35,10 +37,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # Created/dropped at module scope so we never disturb the shared test DB
 # brought to HEAD by the session-scoped `prepare_database` fixture.
 ISOLATED_DB = "soc360_test_assets_mig"
+# The password comes from tests/.env (gitignored); host/port stay literal
+# because the isolated DB deliberately targets the 5432 container, not the
+# 5434 one used by the shared test database.
 ISOLATED_DB_URL = (
-    "postgresql+asyncpg://soc360_migration:***REMOVED***"
+    "postgresql+asyncpg://soc360_migration:"
+    f"{make_url(os.environ['DATABASE_URL_MIGRATION']).password}"
     f"@localhost:5432/{ISOLATED_DB}"
 )
+# Reusable for direct asyncpg.connect calls (same source of truth as the URL).
+ISOLATED_DB_PASSWORD = make_url(os.environ["DATABASE_URL_MIGRATION"]).password
 
 
 def _alembic(
@@ -536,7 +544,7 @@ class _AssetsMigrationTestBase:
         async def _wipe() -> None:
             conn = await asyncpg.connect(
                 user="soc360_migration",
-                password="***REMOVED***",
+                password=ISOLATED_DB_PASSWORD,
                 host="localhost",
                 port=5432,
                 database=ISOLATED_DB,
@@ -569,7 +577,7 @@ class TestUpgradePrecondition(_AssetsMigrationTestBase):
         async def _seed_duplicate() -> None:
             conn = await asyncpg.connect(
                 user="soc360_migration",
-                password="***REMOVED***",
+                password=ISOLATED_DB_PASSWORD,
                 host="localhost",
                 port=5432,
                 database=ISOLATED_DB,
@@ -674,7 +682,7 @@ class TestUpgradePrecondition(_AssetsMigrationTestBase):
         async def _seed() -> None:
             conn = await asyncpg.connect(
                 user="soc360_migration",
-                password="***REMOVED***",
+                password=ISOLATED_DB_PASSWORD,
                 host="localhost",
                 port=5432,
                 database=ISOLATED_DB,
@@ -839,7 +847,7 @@ class TestDowngradePrecondition(_AssetsMigrationTestBase):
         async def _seed_subnet() -> None:
             conn = await asyncpg.connect(
                 user="soc360_migration",
-                password="***REMOVED***",
+                password=ISOLATED_DB_PASSWORD,
                 host="localhost",
                 port=5432,
                 database=ISOLATED_DB,

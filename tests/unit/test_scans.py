@@ -797,6 +797,34 @@ class TestUpdateScan:
         assert calls == []
 
     @pytest.mark.asyncio
+    async def test_update_scan_leaves_the_orm_object_untouched_when_the_pair_is_rejected(
+        self,
+    ) -> None:
+        """A rejected PATCH must leave the in-memory object exactly as it was.
+
+        The rejection happens before any write, so the identity-map state must stay
+        consistent with the database row. Asserting ``calls == []`` alone does NOT
+        prove this: it proves no I/O happened, not that the object is intact.
+        """
+        from app.modules.scans.schemas import ScanUpdate
+        from app.modules.scans.service import update_scan
+
+        scan = _scan("vulnerability", {"checks": ["baseline"]})
+        db, calls = _sequenced_fetch_db(scan)
+        bus = _spy_bus(calls)
+        data = ScanUpdate(type="web")
+
+        with pytest.raises(ValueError):
+            await update_scan(scan.id, scan.tenant_id, data, db, bus)
+
+        assert calls == []
+        assert scan.scan_type == "vulnerability", (
+            "the rejected type MUST NOT be applied to the ORM object"
+        )
+        assert scan.config == {"checks": ["baseline"]}
+        assert scan.name == "weekly"
+
+    @pytest.mark.asyncio
     async def test_update_scan_returns_none_when_the_scan_is_not_visible(self) -> None:
         from app.modules.scans.schemas import ScanUpdate
         from app.modules.scans.service import update_scan

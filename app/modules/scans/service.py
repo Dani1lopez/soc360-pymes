@@ -124,13 +124,6 @@ SCAN_EVENTS_STREAM: Literal["scan.events"] = "scan.events"
 # name is only used to recognise its violation.
 _OPEN_NAME_INDEX = "uq_scans_tenant_asset_name_pending"
 
-# Public mutable fields in the order reported by `changed_fields`.
-_PUBLIC_FIELD_NAMES: tuple[Literal["name", "type", "config"], ...] = (
-    "name",
-    "type",
-    "config",
-)
-
 
 class ScanDuplicateError(Exception):
     """Raised when a mutation violates the one-open-name-per-asset rule.
@@ -295,14 +288,15 @@ async def update_scan(
 ) -> Scan | None:
     """Apply a partial update; return the updated scan or None.
 
-    Ordering guarantee: the EFFECTIVE ``(type, config)`` pair is revalidated
-    BEFORE any write, so changing ``type`` alone can never persist a stored
-    config its new type forbids; then flush (the partial unique index fires
-    here), commit, and only after a successful commit is ``scan.updated``
-    published. Tenant-scoping rule: the row is fetched through the explicit
-    ``Scan.tenant_id == tenant_id`` predicate unless ``tenant_id`` is None
-    (superadmin path); an invisible scan yields ``None`` and publishes
-    nothing.
+    Ordering guarantee: the EFFECTIVE ``(type, config)`` pair is validated on
+    LOCAL values BEFORE any attribute of the ORM object is touched, so a
+    rejected PATCH leaves both the database row AND the in-memory object
+    (identity-map state) consistent; then flush (the partial unique index
+    fires here), commit, and only after a successful commit is
+    ``scan.updated`` published. Tenant-scoping rule: the row is fetched
+    through the explicit ``Scan.tenant_id == tenant_id`` predicate unless
+    ``tenant_id`` is None (superadmin path); an invisible scan yields
+    ``None`` and publishes nothing.
 
     ``changed_fields`` lists only public fields whose value actually changed,
     in the fixed order ``name``, ``type``, ``config``.
@@ -313,32 +307,26 @@ async def update_scan(
         return None
 
     update_data = data.model_dump(exclude_unset=True)
-    changed_fields: list[str] = []
-    for public_name in _PUBLIC_FIELD_NAMES:
-        if public_name not in update_data:
-            continue
-        new_value = update_data[public_name]
-        if public_name == "name":
-            if new_value != scan.name:
-                scan.name = new_value
-                changed_fields.append("name")
-        elif public_name == "type":
-            if new_value != scan.scan_type:
-                scan.scan_type = new_value
-                changed_fields.append("type")
-        elif public_name == "config":
-            candidate = _validate_scan_config(scan.scan_type, new_value)
-            if candidate != scan.config:
-                scan.config = candidate
-                changed_fields.append("config")
 
-    # Revalidate the effective pair: the PATCH above may have changed the type
-    # alone, and the stored config must still satisfy the NEW type.
-    normalised = _validate_scan_config(scan.scan_type, scan.config)
-    if normalised != scan.config:
-        scan.config = normalised
-        if "config" not in changed_fields:
-            changed_fields.append("config")
+    # Phase 1 - validate on locals. A rejection here raises before any
+    # attribute is touched, so the in-memory object stays consistent with
+    # the database row.
+    candidate_name = update_data.get("name", scan.name)
+    candidate_type = update_data.get("type", scan.scan_type)
+    candidate_config = update_data.get("config", scan.config)
+    normalised_config = _validate_scan_config(candidate_type, candidate_config)
+
+    # Phase 2 - apply. Nothing can raise from here.
+    changed_fields: list[str] = []
+    if candidate_name != scan.name:
+        scan.name = candidate_name
+        changed_fields.append("name")
+    if candidate_type != scan.scan_type:
+        scan.scan_type = candidate_type
+        changed_fields.append("type")
+    if normalised_config != scan.config:
+        scan.config = normalised_config
+        changed_fields.append("config")
 
     try:
         await db.flush()

@@ -59,6 +59,7 @@ jobs:
       REDIS_DB: 15
       REDIS_PASSWORD: ci_test_redis_password
       SECRET_KEY: abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwx
+      GROQ_API_KEY: gsk_${{ 'ci_placeholder_not_a_real_key' }}
       ACCESS_TOKEN_EXPIRE_MINUTES: 30
       REFRESH_TOKEN_EXPIRE_DAYS: 7
 

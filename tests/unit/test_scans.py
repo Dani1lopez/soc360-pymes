@@ -276,6 +276,97 @@ class TestScanSchemas:
         assert update.type is None
         assert update.config is None
 
+    def test_scan_create_strips_surrounding_whitespace_from_name(self) -> None:
+        from pydantic import TypeAdapter
+
+        from app.modules.scans.schemas import ScanCreateRequest
+
+        request = TypeAdapter(ScanCreateRequest).validate_python(
+            {
+                **self._body(),
+                "name": "  demo  ",
+                "type": "vulnerability",
+                "config": {"checks": ["baseline"]},
+            }
+        )
+
+        assert request.name == "demo"
+
+    def test_scan_create_rejects_a_whitespace_only_name(self) -> None:
+        from pydantic import TypeAdapter, ValidationError
+
+        from app.modules.scans.schemas import ScanCreateRequest
+
+        with pytest.raises(ValidationError):
+            TypeAdapter(ScanCreateRequest).validate_python(
+                {
+                    **self._body(),
+                    "name": "   ",
+                    "type": "vulnerability",
+                    "config": {"checks": ["baseline"]},
+                }
+            )
+
+    def test_scan_created_event_carries_the_name_the_schema_produced(self) -> None:
+        """Divergence guard (H4): the event must not normalise the name again.
+
+        Normalisation happens once, at the request boundary; the event must
+        faithfully reflect the value that was persisted.
+        """
+        from pydantic import TypeAdapter
+
+        from app.modules.scans.schemas import ScanCreateRequest
+
+        payload = TypeAdapter(ScanCreateRequest).validate_python(
+            {
+                **self._body(),
+                "name": "  demo  ",
+                "type": "vulnerability",
+                "config": {"checks": ["baseline"]},
+            }
+        )
+        event = ScanCreatedEvent(
+            event_id=uuid.uuid4(),
+            tenant_id=payload.tenant_id,
+            scan_id=uuid.uuid4(),
+            asset_id=payload.asset_id,
+            name=payload.name,
+            type=payload.type,
+            status="pending",
+            config=payload.config.model_dump(),
+            created_at=datetime.now(UTC),
+        )
+
+        assert event.name == payload.name == "demo"
+
+    def test_vulnerability_create_strips_check_entries_and_service_rejects_empty(
+        self,
+    ) -> None:
+        """H5: whitespace-only checks entries are stripped at the boundary;
+        the service (not the schema) still owns the emptiness rejection."""
+        from pydantic import TypeAdapter
+
+        from app.modules.scans.schemas import ScanCreateRequest
+        from app.modules.scans.service import _validate_scan_config
+
+        request = TypeAdapter(ScanCreateRequest).validate_python(
+            {
+                **self._body(),
+                "type": "vulnerability",
+                "config": {"checks": ["  "]},
+            }
+        )
+
+        assert request.config.checks == [""]
+
+        with pytest.raises(ValueError) as excinfo:
+            _validate_scan_config("vulnerability", request.config.model_dump())
+
+        assert str(excinfo.value) == (
+            "config.checks must be a non-empty list of non-empty strings "
+            "for scan_type 'vulnerability'"
+        )
+
     def test_scan_response_exposes_exactly_the_eleven_public_fields(self) -> None:
         from app.modules.scans.schemas import ScanResponse
 

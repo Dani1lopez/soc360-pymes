@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.event_schemas import ScanStatus, ScanType
 from app.modules.scans.models import Scan
@@ -50,6 +50,15 @@ __all__ = [
 # Per-type config models. Strict: an unknown key is rejected rather than
 # silently stored, so a typo cannot become persisted configuration.
 # ---------------------------------------------------------------------------
+# Each checks entry is stripped at the request boundary. A whitespace-only
+# entry becomes "" here; the service keeps ownership of rejecting it
+# (_validate_scan_config), so the error message keeps its single home.
+CheckList = Annotated[
+    list[Annotated[str, StringConstraints(strip_whitespace=True)]],
+    Field(min_length=1),
+]
+
+
 class DiscoveryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -59,7 +68,7 @@ class DiscoveryConfig(BaseModel):
 class VulnerabilityConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    checks: list[str] = Field(min_length=1)
+    checks: CheckList
 
 
 class WebConfig(BaseModel):
@@ -72,7 +81,7 @@ class FullConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     host_discovery: bool
-    checks: list[str] = Field(min_length=1)
+    checks: CheckList
     paths: list[str] = Field(min_length=1)
 
 
@@ -90,7 +99,7 @@ class ScanCreateBase(BaseModel):
 
     tenant_id: UUID
     asset_id: UUID
-    name: str = Field(min_length=1, max_length=255)
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
 
 
 class DiscoveryScanCreate(ScanCreateBase):
@@ -133,7 +142,7 @@ class ScanUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str | None = Field(default=None, min_length=1, max_length=255)
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)] | None = None
     type: ScanType | None = None
     config: dict | None = None
 

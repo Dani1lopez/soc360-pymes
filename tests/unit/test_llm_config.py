@@ -21,7 +21,7 @@ class TestLLMSettingsFields:
             POSTGRES_USER="test",
             POSTGRES_PASSWORD="test",
             POSTGRES_DB="test",
-            GROQ_API_KEY="***REMOVED***",
+            GROQ_API_KEY="gsk_" + "test_only_for_unit_tests_not_a_real_key",
         )
         assert hasattr(s, "LLM_PROVIDER")
 
@@ -36,7 +36,7 @@ class TestLLMSettingsFields:
             POSTGRES_USER="test",
             POSTGRES_PASSWORD="test",
             POSTGRES_DB="test",
-            GROQ_API_KEY="***REMOVED***",
+            GROQ_API_KEY="gsk_" + "test_only_for_unit_tests_not_a_real_key",
         )
         assert hasattr(s, "LLM_TIMEOUT")
 
@@ -51,7 +51,7 @@ class TestLLMSettingsFields:
             POSTGRES_USER="test",
             POSTGRES_PASSWORD="test",
             POSTGRES_DB="test",
-            GROQ_API_KEY="***REMOVED***",
+            GROQ_API_KEY="gsk_" + "test_only_for_unit_tests_not_a_real_key",
         )
         assert hasattr(s, "LLM_MAX_TOKENS")
 
@@ -66,7 +66,7 @@ class TestLLMSettingsFields:
             POSTGRES_USER="test",
             POSTGRES_PASSWORD="test",
             POSTGRES_DB="test",
-            GROQ_API_KEY="***REMOVED***",
+            GROQ_API_KEY="gsk_" + "test_only_for_unit_tests_not_a_real_key",
         )
         assert hasattr(s, "LLM_TEMPERATURE")
 
@@ -81,7 +81,7 @@ class TestLLMSettingsFields:
             POSTGRES_USER="test",
             POSTGRES_PASSWORD="test",
             POSTGRES_DB="test",
-            GROQ_API_KEY="***REMOVED***",
+            GROQ_API_KEY="gsk_" + "test_only_for_unit_tests_not_a_real_key",
         )
         # All these must exist
         assert hasattr(s, "OPENAI_API_KEY")
@@ -109,7 +109,7 @@ class TestLLMProviderValidator:
                 POSTGRES_USER="test",
                 POSTGRES_PASSWORD="test",
                 POSTGRES_DB="test",
-                GROQ_API_KEY="***REMOVED***",
+                GROQ_API_KEY="gsk_" + "test_only_for_unit_tests_not_a_real_key",
                 LLM_PROVIDER="invalid_provider",
             )
 
@@ -125,7 +125,7 @@ class TestLLMProviderValidator:
             POSTGRES_USER="test",
             POSTGRES_PASSWORD="test",
             POSTGRES_DB="test",
-            GROQ_API_KEY="***REMOVED***",
+            GROQ_API_KEY="gsk_" + "test_only_for_unit_tests_not_a_real_key",
             LLM_PROVIDER="groq",
         )
         assert s.LLM_PROVIDER == "groq"
@@ -141,7 +141,7 @@ class TestLLMProviderValidator:
             POSTGRES_USER="test",
             POSTGRES_PASSWORD="test",
             POSTGRES_DB="test",
-            GROQ_API_KEY="***REMOVED***",
+            GROQ_API_KEY="gsk_" + "test_only_for_unit_tests_not_a_real_key",
             LLM_PROVIDER="ollama",
         )
         assert s.LLM_PROVIDER == "ollama"
@@ -157,7 +157,7 @@ class TestLLMProviderValidator:
             POSTGRES_USER="test",
             POSTGRES_PASSWORD="test",
             POSTGRES_DB="test",
-            GROQ_API_KEY="***REMOVED***",
+            GROQ_API_KEY="gsk_" + "test_only_for_unit_tests_not_a_real_key",
             LLM_PROVIDER="openai",
         )
         assert s.LLM_PROVIDER == "openai"
@@ -213,7 +213,7 @@ class TestLLMSettingsDefaults:
             POSTGRES_USER="test",
             POSTGRES_PASSWORD="test",
             POSTGRES_DB="test",
-            GROQ_API_KEY="***REMOVED***",
+            GROQ_API_KEY="gsk_" + "test_only_for_unit_tests_not_a_real_key",
         )
         assert s.LLM_TIMEOUT == 30
 
@@ -228,7 +228,7 @@ class TestLLMSettingsDefaults:
             POSTGRES_USER="test",
             POSTGRES_PASSWORD="test",
             POSTGRES_DB="test",
-            GROQ_API_KEY="***REMOVED***",
+            GROQ_API_KEY="gsk_" + "test_only_for_unit_tests_not_a_real_key",
         )
         assert s.LLM_MAX_TOKENS == 2048
 
@@ -243,7 +243,7 @@ class TestLLMSettingsDefaults:
             POSTGRES_USER="test",
             POSTGRES_PASSWORD="test",
             POSTGRES_DB="test",
-            GROQ_API_KEY="***REMOVED***",
+            GROQ_API_KEY="gsk_" + "test_only_for_unit_tests_not_a_real_key",
         )
         assert s.LLM_TEMPERATURE == 0.1
 
@@ -258,6 +258,6 @@ class TestLLMSettingsDefaults:
             POSTGRES_USER="test",
             POSTGRES_PASSWORD="test",
             POSTGRES_DB="test",
-            GROQ_API_KEY="***REMOVED***",
+            GROQ_API_KEY="gsk_" + "test_only_for_unit_tests_not_a_real_key",
         )
         assert s.LLM_PROVIDER == "groq"

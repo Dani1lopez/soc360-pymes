@@ -8,8 +8,9 @@ mocks and avoids hidden globals.
 ``_validate_scan_config`` is the semantic frontier for scan configuration. It
 is called on POST and again on PATCH against the EFFECTIVE ``(type, config)``
 pair, so a partially edited scan can never be persisted in a combination its
-type does not allow. Its ``ValueError`` messages are a contract: the router
-copies them verbatim into the 422 ``detail``, so they must stay stable.
+type does not allow. It raises ``ScanConfigError`` (a ``ValueError``
+subclass) whose messages are a contract: the router copies them verbatim into
+the 422 ``detail``, so they must stay stable.
 """
 
 from __future__ import annotations
@@ -33,6 +34,8 @@ from app.modules.scans.schemas import ScanCreateRequest, ScanUpdate
 
 __all__ = [
     "SCAN_EVENTS_STREAM",
+    "ScanAssetNotFoundError",
+    "ScanConfigError",
     "ScanDuplicateError",
     "_validate_scan_config",
     "create_scan",
@@ -56,7 +59,7 @@ _PATHS_MESSAGE = "config.paths must be a non-empty list of paths beginning with 
 
 
 def _validate_scan_config(scan_type: str, config: object) -> dict[str, Any]:
-    """Return the normalised config for ``scan_type``, or raise ValueError.
+    """Return the normalised config for ``scan_type``, or raise ScanConfigError.
 
     Enforces the exact key set per type and the per-key value rules. Returns a
     new dict with fresh lists so a caller cannot mutate persisted state through
@@ -64,45 +67,45 @@ def _validate_scan_config(scan_type: str, config: object) -> dict[str, Any]:
     silent default.
     """
     if scan_type not in _CONFIG_KEYS:
-        raise ValueError(f"unknown scan_type {scan_type!r}")
+        raise ScanConfigError(f"unknown scan_type {scan_type!r}")
 
     if not isinstance(config, dict):
-        raise ValueError(f"config must be an object for scan_type {scan_type!r}")
+        raise ScanConfigError(f"config must be an object for scan_type {scan_type!r}")
 
     allowed = _CONFIG_KEYS[scan_type]
     for key in sorted(config):
         if key not in allowed:
-            raise ValueError(f"config.{key} is not allowed for scan_type {scan_type!r}")
+            raise ScanConfigError(f"config.{key} is not allowed for scan_type {scan_type!r}")
 
     normalised: dict[str, Any] = {}
 
     if "host_discovery" in allowed:
         if "host_discovery" not in config:
-            raise ValueError(
+            raise ScanConfigError(
                 f"config.host_discovery is required for scan_type {scan_type!r}"
             )
         value = config["host_discovery"]
         if not isinstance(value, bool):
-            raise ValueError(
+            raise ScanConfigError(
                 f"config.host_discovery must be a boolean for scan_type {scan_type!r}"
             )
         normalised["host_discovery"] = value
 
     if "checks" in allowed:
         if "checks" not in config:
-            raise ValueError(f"config.checks is required for scan_type {scan_type!r}")
+            raise ScanConfigError(f"config.checks is required for scan_type {scan_type!r}")
         checks = config["checks"]
         if (
             not isinstance(checks, list)
             or not checks
             or not all(isinstance(item, str) and item for item in checks)
         ):
-            raise ValueError(f"{_CHECKS_MESSAGE} for scan_type {scan_type!r}")
+            raise ScanConfigError(f"{_CHECKS_MESSAGE} for scan_type {scan_type!r}")
         normalised["checks"] = list(checks)
 
     if "paths" in allowed:
         if "paths" not in config:
-            raise ValueError(f"config.paths is required for scan_type {scan_type!r}")
+            raise ScanConfigError(f"config.paths is required for scan_type {scan_type!r}")
         paths = config["paths"]
         if (
             not isinstance(paths, list)
@@ -111,7 +114,7 @@ def _validate_scan_config(scan_type: str, config: object) -> dict[str, Any]:
                 isinstance(item, str) and item.startswith("/") for item in paths
             )
         ):
-            raise ValueError(f"{_PATHS_MESSAGE} for scan_type {scan_type!r}")
+            raise ScanConfigError(f"{_PATHS_MESSAGE} for scan_type {scan_type!r}")
         normalised["paths"] = list(paths)
 
     return normalised
@@ -124,6 +127,20 @@ SCAN_EVENTS_STREAM: Literal["scan.events"] = "scan.events"
 # name is only used to recognise its violation.
 _OPEN_NAME_INDEX = "uq_scans_tenant_asset_name_pending"
 
+# The composite FK guarding the scan/asset relationship; its flush-time
+# violation is the deleted-asset race.
+_ASSET_FK_CONSTRAINT = "fk_scans_asset_tenant"
+
+
+class ScanConfigError(ValueError):
+    """Raised when a scan type/config combination is not allowed.
+
+    The contract exception for ``_validate_scan_config``: the router catches
+    exactly this class (not every ``ValueError``) and copies its message
+    verbatim into the 422 ``detail``. Subclassing ``ValueError`` keeps the
+    historical ``pytest.raises(ValueError)`` contract working.
+    """
+
 
 class ScanDuplicateError(Exception):
     """Raised when a mutation violates the one-open-name-per-asset rule.
@@ -132,6 +149,19 @@ class ScanDuplicateError(Exception):
     enforced by the database index ``uq_scans_tenant_asset_name_pending``. The
     router maps this to HTTP 409.
     """
+
+
+class ScanAssetNotFoundError(Exception):
+    """Raised when the scan's asset disappeared between resolution and INSERT.
+
+    The deleted-asset race: ``_resolve_scan_asset`` validated the asset moments
+    before the INSERT, but ``fk_scans_asset_tenant`` fires at flush time. The
+    router maps this to HTTP 404 with the same ``scan asset not found`` detail
+    as the pre-INSERT path, so the two 404s are indistinguishable to the caller.
+    """
+
+    def __init__(self, message: str = "scan asset not found") -> None:
+        super().__init__(message)
 
 
 def _add_tenant_predicate(stmt: Any, tenant_id: uuid.UUID | None) -> Any:
@@ -146,8 +176,8 @@ def _add_tenant_predicate(stmt: Any, tenant_id: uuid.UUID | None) -> Any:
     return stmt
 
 
-def _is_open_name_violation(exc: IntegrityError) -> bool:
-    """Detect a uq_scans_tenant_asset_name_pending violation across drivers.
+def _violates_constraint(exc: IntegrityError, constraint_name: str) -> bool:
+    """Detect a named-constraint violation across drivers.
 
     Inspects the driver's constraint name first (asyncpg exposes it on the
     exception, psycopg on ``diag``) and falls back to the driver message.
@@ -160,10 +190,20 @@ def _is_open_name_violation(exc: IntegrityError) -> bool:
     if not name:
         diag = getattr(orig, "diag", None)
         name = getattr(diag, "constraint_name", None)
-    if name and _OPEN_NAME_INDEX in str(name):
+    if name and constraint_name in str(name):
         return True
 
-    return _OPEN_NAME_INDEX in str(orig)
+    return constraint_name in str(orig)
+
+
+def _is_open_name_violation(exc: IntegrityError) -> bool:
+    """Detect a uq_scans_tenant_asset_name_pending violation across drivers."""
+    return _violates_constraint(exc, _OPEN_NAME_INDEX)
+
+
+def _is_asset_fk_violation(exc: IntegrityError) -> bool:
+    """Detect an fk_scans_asset_tenant violation across drivers."""
+    return _violates_constraint(exc, _ASSET_FK_CONSTRAINT)
 
 
 async def create_scan(
@@ -198,10 +238,14 @@ async def create_scan(
     try:
         await db.flush()
     except IntegrityError as exc:
+        # 409 precedence: the open-name rule is the business rule, so it wins
+        # even when a driver message names both constraints.
         if _is_open_name_violation(exc):
             raise ScanDuplicateError(
                 f"a pending scan named {data.name!r} already exists for this asset"
             ) from exc
+        if _is_asset_fk_violation(exc):
+            raise ScanAssetNotFoundError("scan asset not found") from exc
         raise
 
     await db.commit()
@@ -299,7 +343,10 @@ async def update_scan(
     ``None`` and publishes nothing.
 
     ``changed_fields`` lists only public fields whose value actually changed,
-    in the fixed order ``name``, ``type``, ``config``.
+    in the fixed order ``name``, ``type``, ``config``. When it is empty — every
+    sent value already matches the row — the flush and commit still run, but
+    nothing is published: a PATCH that changed nothing is not an update, so no
+    ``scan.updated`` event is emitted.
     """
     stmt = _add_tenant_predicate(select(Scan).where(Scan.id == scan_id), tenant_id)
     scan = (await db.execute(stmt)).scalar_one_or_none()
@@ -339,6 +386,12 @@ async def update_scan(
         raise
 
     await db.commit()
+
+    # Nothing public changed: no event. The flush and commit still ran, but a
+    # PATCH whose values already match the row is not an update, so publishing
+    # an empty ``scan.updated`` would be noise for consumers.
+    if not changed_fields:
+        return scan
 
     event = ScanUpdatedEvent(
         event_id=uuid.uuid4(),

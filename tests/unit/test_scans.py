@@ -403,6 +403,19 @@ class TestValidateScanConfig:
 
         assert result["checks"] == ["baseline"]
 
+    def test_validate_scan_config_raises_scan_config_error(self) -> None:
+        from app.modules.scans.service import ScanConfigError, _validate_scan_config
+
+        with pytest.raises(ScanConfigError) as excinfo:
+            _validate_scan_config("not-a-scan-type", {})
+
+        assert str(excinfo.value) == "unknown scan_type 'not-a-scan-type'"
+
+    def test_scan_config_error_is_a_value_error_subclass(self) -> None:
+        from app.modules.scans.service import ScanConfigError
+
+        assert issubclass(ScanConfigError, ValueError)
+
 
 # ---------------------------------------------------------------------------
 # PR2 part 2 — service unit tests: mocked session + bus, no database.
@@ -633,6 +646,80 @@ class TestCreateScan:
         assert calls == []
 
     @pytest.mark.asyncio
+    async def test_create_scan_maps_the_asset_fk_violation_to_scan_asset_not_found(
+        self,
+    ) -> None:
+        """A flush-time fk_scans_asset_tenant violation is the deleted-asset race.
+
+        The asset was resolved moments before the INSERT; if it disappears in
+        that window the composite FK fires here and the caller deserves the
+        same 404 the pre-INSERT resolution produces.
+        """
+        from sqlalchemy.exc import IntegrityError
+
+        from app.modules.scans.schemas import DiscoveryScanCreate
+        from app.modules.scans.service import ScanAssetNotFoundError, create_scan
+
+        tenant_id = uuid.uuid4()
+        db, calls, _added = _sequenced_create_db()
+        bus = _spy_bus(calls)
+        err = IntegrityError("INSERT", {}, Exception("violates foreign key constraint"))
+        err.orig = MagicMock(constraint_name="fk_scans_asset_tenant")
+        db.flush.side_effect = err
+        data = DiscoveryScanCreate(
+            tenant_id=tenant_id,
+            asset_id=uuid.uuid4(),
+            name="weekly",
+            config={"host_discovery": True},
+        )
+
+        with pytest.raises(ScanAssetNotFoundError) as excinfo:
+            await create_scan(data, tenant_id, db, bus)
+
+        assert str(excinfo.value) == "scan asset not found"
+        assert isinstance(excinfo.value.__cause__, IntegrityError)
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_create_scan_open_name_violation_wins_over_the_asset_fk(
+        self,
+    ) -> None:
+        """When the driver message could match both constraints, 409 wins.
+
+        The open-name rule is the business rule: its violation must keep
+        mapping to ``ScanDuplicateError`` even when the same message also
+        names the asset FK.
+        """
+        from sqlalchemy.exc import IntegrityError
+
+        from app.modules.scans.schemas import DiscoveryScanCreate
+        from app.modules.scans.service import ScanDuplicateError, create_scan
+
+        tenant_id = uuid.uuid4()
+        db, calls, _added = _sequenced_create_db()
+        bus = _spy_bus(calls)
+        # No structured constraint_name available: detection must fall back to
+        # the message, which names BOTH constraints.
+        err = IntegrityError(
+            "INSERT",
+            {},
+            Exception(f"violates {OPEN_NAME_INDEX} and fk_scans_asset_tenant"),
+        )
+        db.flush.side_effect = err
+        data = DiscoveryScanCreate(
+            tenant_id=tenant_id,
+            asset_id=uuid.uuid4(),
+            name="weekly",
+            config={"host_discovery": True},
+        )
+
+        with pytest.raises(ScanDuplicateError) as excinfo:
+            await create_scan(data, tenant_id, db, bus)
+
+        assert "already exists" in str(excinfo.value)
+        assert calls == []
+
+    @pytest.mark.asyncio
     async def test_create_scan_reraises_an_unrecognised_integrity_error_unchanged(
         self,
     ) -> None:
@@ -823,6 +910,26 @@ class TestUpdateScan:
         )
         assert scan.config == {"checks": ["baseline"]}
         assert scan.name == "weekly"
+
+    @pytest.mark.asyncio
+    async def test_update_scan_publishes_nothing_when_no_public_field_changed(
+        self,
+    ) -> None:
+        """A PATCH whose values already match the row is not an update."""
+        from app.modules.scans.schemas import ScanUpdate
+        from app.modules.scans.service import update_scan
+
+        scan = _scan("discovery", {"host_discovery": True})  # name is "weekly"
+        db, calls = _sequenced_fetch_db(scan)
+        bus = _spy_bus(calls)
+        data = ScanUpdate(name="weekly")
+
+        result = await update_scan(scan.id, scan.tenant_id, data, db, bus)
+
+        assert result is scan
+        assert calls == ["flush", "commit"], (
+            "an unchanged PATCH MUST NOT emit scan.updated"
+        )
 
     @pytest.mark.asyncio
     async def test_update_scan_returns_none_when_the_scan_is_not_visible(self) -> None:

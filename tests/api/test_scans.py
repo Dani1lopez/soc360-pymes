@@ -1424,3 +1424,84 @@ class TestEvents:
         assert calls == [], (
             f"NO event MUST be published when the commit fails, got {calls!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Service-error translation — the router must only translate contract errors
+# ---------------------------------------------------------------------------
+class TestServiceErrorTranslation:
+    """The router translates ONLY the documented service contracts.
+
+    The ``tenant_client`` fixture builds its ``AsyncClient`` WITHOUT
+    ``raise_server_exceptions=False``, so the default is ``True``: an
+    unhandled app exception is re-raised out of the request by
+    ``ASGITransport``. That is the option this suite supports, so these tests
+    assert on the raised exception instead of a 500 status.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_non_contractual_value_error_is_not_translated_into_a_422(
+        self,
+        tenant_client: AsyncClient,
+        admin_a_headers: dict,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An unrelated ``ValueError`` from deeper code must NOT become a 422.
+
+        The router must catch only ``service.ScanConfigError`` — the contract
+        exception — not every ``ValueError``, whose internal message would
+        otherwise be copied verbatim into the client-visible ``detail``.
+        """
+        import app.modules.scans.router as scans_router
+        from unittest.mock import AsyncMock
+
+        asset_id = await _seed_asset(db_session, "192.0.2.110")
+        monkeypatch.setattr(
+            scans_router.service,
+            "create_scan",
+            AsyncMock(side_effect=ValueError("boom")),
+        )
+
+        with pytest.raises(ValueError, match="boom"):
+            await tenant_client.post(
+                "/api/v1/scans/",
+                headers=admin_a_headers,
+                json=_scan_payload(TENANT_A_ID, asset_id=asset_id),
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_scan_asset_not_found_error_from_the_service_is_a_404(
+        self,
+        tenant_client: AsyncClient,
+        admin_a_headers: dict,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The deleted-asset race (service-side FK violation) maps to 404.
+
+        The detail message MUST stay identical to ``_resolve_scan_asset``'s
+        pre-INSERT 404, so the two paths are indistinguishable to the caller.
+        """
+        import app.modules.scans.router as scans_router
+        from unittest.mock import AsyncMock
+        from app.modules.scans.service import ScanAssetNotFoundError
+
+        asset_id = await _seed_asset(db_session, "192.0.2.111")
+        monkeypatch.setattr(
+            scans_router.service,
+            "create_scan",
+            AsyncMock(side_effect=ScanAssetNotFoundError("scan asset not found")),
+        )
+
+        resp = await tenant_client.post(
+            "/api/v1/scans/",
+            headers=admin_a_headers,
+            json=_scan_payload(TENANT_A_ID, asset_id=asset_id),
+        )
+
+        assert resp.status_code == 404, (
+            f"the deleted-asset race MUST be 404, got {resp.status_code}: "
+            f"{resp.text[:300]}"
+        )
+        assert resp.json()["detail"] == "scan asset not found"

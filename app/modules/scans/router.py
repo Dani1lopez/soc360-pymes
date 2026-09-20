@@ -140,7 +140,11 @@ async def create_scan(
         )
     except service.ScanDuplicateError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
-    except ValueError as exc:
+    except service.ScanAssetNotFoundError as exc:
+        # Deleted-asset race: flush-time FK violation -> same 404 detail as the
+        # pre-INSERT _resolve_scan_asset path.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except service.ScanConfigError as exc:
         # Contract messages from _validate_scan_config; router maps verbatim.
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -244,7 +248,7 @@ async def update_scan(
         )
     except service.ScanDuplicateError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
-    except ValueError as exc:
+    except service.ScanConfigError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),

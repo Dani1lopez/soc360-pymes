@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.event_schemas import AssetType
 from app.modules.assets.models import Asset
@@ -62,7 +62,7 @@ class AssetCreateBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tenant_id: UUID
-    value: str = Field(min_length=1, max_length=255)
+    value: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
 
 
 class IpAssetCreate(AssetCreateBase):
@@ -116,7 +116,7 @@ class AssetUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: AssetType | None = None
-    value: str | None = Field(default=None, min_length=1, max_length=255)
+    value: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)] | None = None
 
 
 # ---------------------------------------------------------------------------

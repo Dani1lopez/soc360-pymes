@@ -1369,6 +1369,26 @@ class TestAssetSchemas:
                 bogus_field="reject me",
             )
 
+    def test_asset_create_strips_surrounding_whitespace_from_value(self) -> None:
+        from app.modules.assets.schemas import AssetUpdate, IpAssetCreate
+
+        asset = IpAssetCreate(tenant_id=uuid.uuid4(), value="  host  ")
+        assert asset.value == "host"
+
+        update = AssetUpdate.model_validate({"value": "  host  "})
+        assert update.value == "host"
+
+    def test_asset_create_rejects_a_whitespace_only_value(self) -> None:
+        from pydantic import ValidationError
+
+        from app.modules.assets.schemas import AssetUpdate, IpAssetCreate
+
+        with pytest.raises(ValidationError):
+            IpAssetCreate(tenant_id=uuid.uuid4(), value="   ")
+
+        with pytest.raises(ValidationError):
+            AssetUpdate.model_validate({"value": "   "})
+
     def test_asset_update_uses_partial_pattern(self) -> None:
         from pydantic import ValidationError
 

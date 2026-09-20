@@ -19,7 +19,7 @@ jobs:
         env:
           POSTGRES_DB: soc360_pymes_test
           POSTGRES_USER: soc360_migration
-          POSTGRES_PASSWORD: ***REMOVED***
+          POSTGRES_PASSWORD: soc360_test_password
         ports:
           - 5432:5432
         options: >-
@@ -50,15 +50,15 @@ jobs:
     env:
       ENVIRONMENT: development
       POSTGRES_USER: soc360_migration
-      POSTGRES_PASSWORD: ***REMOVED***
+      POSTGRES_PASSWORD: soc360_test_password
       POSTGRES_DB: soc360_pymes_test
-      DATABASE_URL: postgresql+asyncpg://soc360_app:***REMOVED***@localhost:5432/soc360_pymes_test
-      DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_migration:***REMOVED***@localhost:5432/soc360_pymes_test
+      DATABASE_URL: postgresql+asyncpg://soc360_app:soc360_test_password@localhost:5432/soc360_pymes_test
+      DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_migration:soc360_test_password@localhost:5432/soc360_pymes_test
       REDIS_HOST: localhost
       REDIS_PORT: 6379
       REDIS_DB: 15
       REDIS_PASSWORD: ci_test_redis_password
-      SECRET_KEY: ***REMOVED***
+      SECRET_KEY: abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwx
       ACCESS_TOKEN_EXPIRE_MINUTES: 30
       REFRESH_TOKEN_EXPIRE_DAYS: 7
 
@@ -85,13 +85,13 @@ jobs:
 
       - name: Setup app role
         env:
-          PGPASSWORD: ***REMOVED***
+          PGPASSWORD: soc360_test_password
         run: |
           psql -U soc360_migration -d soc360_pymes_test -h localhost <<'SQL'
           DO $$
           BEGIN
             IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='soc360_app') THEN
-              CREATE ROLE soc360_app WITH LOGIN PASSWORD '***REMOVED***' NOSUPERUSER NOBYPASSRLS;
+              CREATE ROLE soc360_app WITH LOGIN PASSWORD 'soc360_test_password' NOSUPERUSER NOBYPASSRLS;
             END IF;
           END
           $$;

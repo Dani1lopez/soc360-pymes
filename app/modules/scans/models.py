@@ -76,6 +76,19 @@ class Scan(Base):
             name="fk_scans_asset_tenant",
         ),
         Index("ix_scans_asset_tenant", "asset_id", "tenant_id"),
+        # Slice 2 business rule: at most one OPEN definition per
+        # (tenant_id, asset_id, name). The index is partial on purpose — the
+        # name is released as soon as the scan leaves ``pending``, so an asset
+        # can be re-scanned under the same name after a run finishes. A plain
+        # unique constraint would reserve the name forever instead.
+        Index(
+            "uq_scans_tenant_asset_name_pending",
+            "tenant_id",
+            "asset_id",
+            "name",
+            unique=True,
+            postgresql_where="status = 'pending'",
+        ),
     )
 
     def __repr__(self) -> str:

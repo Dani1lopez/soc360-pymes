@@ -7,8 +7,7 @@ import prometheus_client
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from prometheus_client import CollectorRegistry
-from prometheus_client import multiprocess
+from prometheus_client import CollectorRegistry, multiprocess
 from redis.asyncio import Redis
 from sqlalchemy import text
 
@@ -19,16 +18,17 @@ from app.core.exceptions import (
     ServiceUnavailableError,
     TemporaryUnavailableError,
 )
-from app.core.logging import setup_logging, get_logger
+from app.core.llm import get_llm_provider
+from app.core.logging import get_logger, setup_logging
 from app.core.metrics_auth import (
     _extract_header,
     _unauthorized_response,
     verify_metrics_token,
 )
 from app.core.middleware import HTTPSRedirectMiddleware, SecurityHeadersMiddleware
-from app.core.redis import ping_redis_with_retry, close_pool, get_redis_client
-from app.core.llm import get_llm_provider
-from app.event_bus import EventConsumer, EventBus, drain_dlq_tasks
+from app.core.redis import close_pool, get_redis_client, ping_redis_with_retry
+from app.event_bus import EventBus, EventConsumer, drain_dlq_tasks
+from app.modules.assets.router import router as assets_router
 from app.modules.auth.router import router as auth_router
 from app.modules.tenants.router import router as tenants_router
 from app.modules.users.router import router as users_router
@@ -165,7 +165,7 @@ async def lifespan(app: FastAPI):
     stop_event.set()
     try:
         await asyncio.wait_for(task, timeout=5.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         task.cancel()
     # Drain any in-flight DLQ write tasks before closing the Redis pool
     # (issue #126). A bounded timeout prevents a slow write from blocking
@@ -261,6 +261,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(tenants_router, prefix="/api/v1")
     app.include_router(users_router, prefix="/api/v1")
+    app.include_router(assets_router, prefix="/api/v1")
 
     # PR4 #260 — inline ``/metrics`` route (matches /health pattern).
     # Auth runs BEFORE any Prometheus rendering so unauthenticated scrapers cannot

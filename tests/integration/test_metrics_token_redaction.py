@@ -14,7 +14,7 @@ held in module-level settings).
 
 The module-level env-var priming is required because the file is run with
 ``--noconftest`` (which skips ``tests/conftest.py`` and its
-``os.environ.setdefault(...)`` block). Without these, the
+env-var priming block). Without these, the
 ``from app.main import create_app`` import below would fail because
 ``app.core.config.settings = Settings()`` runs at module load.
 """
@@ -23,26 +23,39 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 
 # Env-var priming (must precede the app.main import below).
 os.environ.setdefault("ENVIRONMENT", "development")
-os.environ.setdefault(
-    "DATABASE_URL",
-    "postgresql+asyncpg://soc360_app:***REMOVED***@localhost:5434/soc360_test",
-)
-os.environ.setdefault(
-    "DATABASE_URL_MIGRATION",
-    "postgresql+asyncpg://soc360_migration:***REMOVED***@localhost:5434/soc360_test",
-)
-os.environ.setdefault(
-    "SECRET_KEY",
-    "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
-    "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
-    "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwx",
-)
-os.environ.setdefault("GROQ_API_KEY", "***REMOVED***")
+
+_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+
+
+def _load_env_file(path: Path) -> None:
+    """Load KEY=VALUE pairs from tests/.env (dependency-free).
+
+    This module is also run with ``--noconftest``, so it cannot rely on
+    ``tests/conftest.py`` priming the environment. Blank lines and ``#``
+    comments are ignored; surrounding quotes are stripped; real environment
+    variables always win via ``os.environ.setdefault``.
+    """
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_env_file(_ENV_FILE)
 os.environ.setdefault("POSTGRES_USER", "soc360_app")
-os.environ.setdefault("POSTGRES_PASSWORD", "***REMOVED***")
 os.environ.setdefault("POSTGRES_DB", "soc360_test")
 os.environ.setdefault("REDIS_HOST", "localhost")
 os.environ.setdefault("REDIS_PORT", "6379")

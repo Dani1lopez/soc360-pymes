@@ -58,7 +58,7 @@ PR1_INDENT_IMPORT_ALLOWLIST: set[tuple[str, int, str]] = {
     # module`. PR4 design rev 17 (section "Candidate encoding timing") documents
     # this as the explicit trade-off; the eager priming surfaces encoding
     # failures at app boot rather than on the first scrape.
-    ("app/main.py", 289, "_current_bytes"),
+    ("app/main.py", 290, "_current_bytes"),
 }
 
 

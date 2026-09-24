@@ -1,4 +1,5 @@
 """Authentication dependencies: OAuth2 scheme, current user, role guards."""
+
 from __future__ import annotations
 
 from uuid import UUID
@@ -100,7 +101,9 @@ async def get_current_user(
 
     if not user.is_superadmin:
         if not row.Tenant or not row.Tenant.is_active:
-            logger.warning("auth_failed", reason="tenant_inactive", tenant_id=str(user.tenant_id))
+            logger.warning(
+                "auth_failed", reason="tenant_inactive", tenant_id=str(user.tenant_id)
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Tenant inactivo o no encontrado",
@@ -109,7 +112,9 @@ async def get_current_user(
     if user.is_superadmin:
         await set_tenant_context(db, user.tenant_id, True)
     elif user.tenant_id is None:
-        logger.warning("auth_failed", reason="missing_tenant_id", user_id=str(user_uuid))
+        logger.warning(
+            "auth_failed", reason="missing_tenant_id", user_id=str(user_uuid)
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Usuario no encontrado o inactivo",
@@ -134,10 +139,45 @@ def require_role(minimum_role: str):
                 actual=current_user.role,
             )
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Permisos insuficientes"
+                status_code=status.HTTP_403_FORBIDDEN, detail="Permisos insuficientes"
             )
         return current_user
+
+    return _check
+
+
+def require_any_role(*roles: str):
+    """Authorize any user whose role matches one of ``roles`` exactly.
+
+    This guard is RBAC-FLAVOR 2 (allowlist exact match) per design.md
+    D-006: it does NOT consult any hierarchical role relationship. It is
+    the right primitive when an endpoint needs to admit a fixed set of
+    roles (e.g. ``admin`` + ``superadmin`` for write endpoints, the four
+    canonical reader roles for read endpoints).
+
+    ``superadmin`` is NOT implicitly included — callers MUST pass it
+    explicitly when they want to admit superadmins. The five canonical F1
+    roles are ``viewer``, ``analyst``, ``ingestor``, ``admin`` and
+    ``superadmin`` (see ``app.modules.users.models.User``).
+    """
+
+    async def _check(
+        current_user: User = Depends(get_current_user),
+    ) -> User:
+        if current_user.role not in roles:
+            logger.warning(
+                "auth_failed",
+                reason="role_not_in_allowlist",
+                user_id=str(current_user.id),
+                actual=current_user.role,
+                allowlist=list(roles),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Permisos insuficientes",
+            )
+        return current_user
+
     return _check
 
 

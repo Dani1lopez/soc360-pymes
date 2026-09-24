@@ -51,12 +51,23 @@ class EventBus:
         """
         return f"{settings.EVENT_STREAM_PREFIX}:{event_type}"
 
-    async def publish(self, event: BaseEvent, *, flow: str | None = None) -> bytes:
+    async def publish(
+            self,
+            event: BaseEvent,
+            *,
+            flow: str | None = None,
+            stream: str | None = None,
+) -> bytes:
         """Publish a typed event to its corresponding stream.
 
         Args:
             event: A BaseEvent subclass (e.g. AuthLoginEvent).
             flow: Optional canonical FlowId used for observability labels.
+            stream: Optional explicit Redis stream key. When provided, the
+                event is XADD'd to this stream directly, bypassing the
+                default ``stream_name(event.event_type)`` derivation.
+                F1 callers omit ``stream`` to keep the historical default
+                of ``{EVENT_STREAM_PREFIX}:{event_type}``.
 
         Returns:
             The Redis XADD message ID (bytes), e.g. b"1734567890123-0".
@@ -64,7 +75,9 @@ class EventBus:
         Raises:
             RedisError: If the Redis write fails.
         """
-        stream = self.stream_name(event.event_type)
+        stream_key = (
+            stream if stream is not None else self.stream_name(event.event_type)
+        )
         # Serialize event to dict, converting UUID and datetime to strings
         # so Redis can handle them as string values.
         raw = event.model_dump()
@@ -76,7 +89,7 @@ class EventBus:
         # XADD with bounded stream length (approximate)
         try:
             msg_id = await self._redis.xadd(
-                stream,
+                stream_key,
                 payload,
                 maxlen=settings.EVENT_STREAM_MAXLEN,
                 approximate=True,
@@ -289,10 +302,10 @@ class EventBus:
                   ip_prefix, user_agent, timestamp.
         """
         user_id = data.get("user_id", "unknown")
-        email_hash = data.get("email_hash", None)
-        ip_prefix = data.get("ip_prefix", None)
-        user_agent = data.get("user_agent", None)
-        tenant_id = data.get("tenant_id", None)
+        email_hash = data.get("email_hash")
+        ip_prefix = data.get("ip_prefix")
+        user_agent = data.get("user_agent")
+        tenant_id = data.get("tenant_id")
 
         user_agent_short = user_agent[:64] if user_agent else user_agent
 

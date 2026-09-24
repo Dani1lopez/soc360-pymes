@@ -28,7 +28,7 @@ services:
     # Only starts with: docker compose --profile test up -d
     environment:
       POSTGRES_USER: soc360_migration
-      POSTGRES_PASSWORD: ***REMOVED***
+      POSTGRES_PASSWORD: "${POSTGRES_TEST_PASSWORD:?set POSTGRES_TEST_PASSWORD in your environment or tests/.env}"
       POSTGRES_DB: soc360_test
     ports:
       - "5434:5432"

@@ -9,7 +9,6 @@ Provides:
 from uuid import UUID
 
 import pytest_asyncio
-from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,9 +64,8 @@ async def seed_two_tenants(
         .values(
             id=asset_a_id,
             tenant_id=UUID(TENANT_A_ID),
-            name="Alpha Asset",
-            hostname="alpha-host-1",
-            asset_type="host",
+            value="Alpha Asset",
+            asset_type="hostname",
             status="active",
         )
         .on_conflict_do_nothing(index_elements=["id"])
@@ -77,9 +75,8 @@ async def seed_two_tenants(
         .values(
             id=asset_b_id,
             tenant_id=UUID(TENANT_B_ID),
-            name="Beta Asset",
-            hostname="beta-host-1",
-            asset_type="host",
+            value="Beta Asset",
+            asset_type="hostname",
             status="active",
         )
         .on_conflict_do_nothing(index_elements=["id"])

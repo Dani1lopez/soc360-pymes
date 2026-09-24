@@ -78,7 +78,7 @@ class TestAssetModel:
         nn = _non_nullable_columns(Asset)
         assert "id" in nn
         assert "tenant_id" in nn
-        assert "name" in nn
+        assert "value" in nn
         assert "asset_type" in nn
         assert "status" in nn
         assert "created_at" in nn
@@ -86,7 +86,6 @@ class TestAssetModel:
 
     def test_nullable_columns(self) -> None:
         n = _nullable_columns(Asset)
-        assert "hostname" in n
         assert "asset_metadata" in n
 
     def test_column_defaults(self) -> None:
@@ -115,8 +114,8 @@ class TestAssetModel:
         asset = Asset(
             id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
-            name="server-01",
-            asset_type="host",
+            value="server-01",
+            asset_type="hostname",
         )
         result = repr(asset)
         assert "Asset" in result

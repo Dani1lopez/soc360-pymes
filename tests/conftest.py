@@ -538,19 +538,37 @@ async def tenant_client(db_session: AsyncSession):
     # Use db=14 to isolate from F1's db=15 fixtures and from any
     # ad-hoc dev traffic on db=0. Password comes from the same
     # settings that the production app uses.
-    test_redis = _RealAsyncRedis(
-        host=_settings.REDIS_HOST,
-        port=_settings.REDIS_PORT,
-        db=14,
-        # Local test Redis on :6379 runs without AUTH (the daemonized
-        # redis-server in this dev env didn't accept --requirepass because
-        # the port was already bound). Production-like settings still carry
-        # REDIS_PASSWORD; the test client intentionally drops it to match.
-        password=None,
-        decode_responses=True,
-    )
+    from redis.exceptions import AuthenticationError as _RedisAuthenticationError
+
+    def _build_test_redis(password: str | None) -> _RealAsyncRedis:
+        return _RealAsyncRedis(
+            host=_settings.REDIS_HOST,
+            port=_settings.REDIS_PORT,
+            db=14,
+            password=password,
+            decode_responses=True,
+        )
+
+    # CI's redis:7-alpine service is started with --requirepass and expects
+    # settings.REDIS_PASSWORD; a bare local Redis (no --requirepass) rejects
+    # AUTH entirely. Try authenticated first (matches app.core.redis), then
+    # fall back to no password so local dev keeps working unauthenticated.
+    redis_password = _settings.REDIS_PASSWORD.get_secret_value() or None
+    test_redis = _build_test_redis(redis_password)
     try:
         await test_redis.ping()
+    except _RedisAuthenticationError:
+        await test_redis.aclose()
+        test_redis = _build_test_redis(None)
+        try:
+            await test_redis.ping()
+        except Exception as exc:  # pragma: no cover - env guard
+            await test_redis.aclose()
+            raise RuntimeError(
+"tenant_client fixture requires a reachable Redis on "
+f"{_settings.REDIS_HOST}:{_settings.REDIS_PORT} db=14. "
+f"Original error: {exc!r}"
+            ) from exc
     except Exception as exc:  # pragma: no cover - env guard
         await test_redis.aclose()
         raise RuntimeError(

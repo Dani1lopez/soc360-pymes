@@ -116,6 +116,8 @@ jobs:
       - name: Run direct tests
         env:
           SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
+          PG_SUPERUSER: soc360_migration
+          PG_SUPERUSER_PASSWORD: soc360_test_password
         run: uv run pytest -m "not toxiproxy and not redis_pressure"
 
       - name: Wait for Toxiproxy readiness

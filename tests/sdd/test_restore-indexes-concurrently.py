@@ -239,10 +239,10 @@ def test_scn_1_2_populated_upgrade_completes() -> None:
 
     # Insert at least one row in each F2 table to exercise the indexes.
     _sync_execute(
-        "INSERT INTO assets (id, tenant_id, name, hostname, asset_type, status) "
+        "INSERT INTO assets (id, tenant_id, value, asset_type, status) "
         "VALUES ('aaaaaaaa-0000-0000-0000-aaaaaaaaaaaa', "
-        "'11111111-1111-1111-1111-111111111111', 'AlphaAsset', 'alpha-host', "
-        "'host', 'active') ON CONFLICT (id) DO NOTHING"
+        "'11111111-1111-1111-1111-111111111111', 'AlphaAsset', "
+        "'hostname', 'active') ON CONFLICT (id) DO NOTHING"
     )
     _sync_execute(
         "INSERT INTO scans (id, tenant_id, asset_id, name, scan_type, status) "
@@ -591,26 +591,30 @@ def test_scn_3_4_auto_recovery_drops_invalid_index_and_rebuilds() -> None:
 
 
 def test_scn_5_1_concurrent_downgrade_drops_all_four() -> None:
-    """`alembic downgrade -1` removes the four indexes (DROP CONCURRENTLY)."""
+    """Downgrade to the restore-indexes parent removes the four indexes
+    (DROP CONCURRENTLY)."""
     _assert_safe_test_database()
     _run_alembic("upgrade", "head")
-    # Sanity: confirm all four exist before the downgrade.
-    pre = _list_target_indexes()
-    assert FOUR_INDEX_NAMES.issubset(pre.keys()), (
-        f"Precondition failed — missing before downgrade: "
-        f"{FOUR_INDEX_NAMES - pre.keys()}"
-    )
+    try:
+        # Sanity: confirm all four exist before the downgrade.
+        pre = _list_target_indexes()
+        assert FOUR_INDEX_NAMES.issubset(pre.keys()), (
+            f"Precondition failed — missing before downgrade: "
+            f"{FOUR_INDEX_NAMES - pre.keys()}"
+        )
 
-    _run_alembic("downgrade", "-1")
+        # Downgrade explicitly across the restore-indexes migration
+        # (head e0eafdf389fc -> c1d2e3f4a5b6) instead of a relative -1.
+        _run_alembic("downgrade", "c1d2e3f4a5b6")
 
-    post = _list_target_indexes()
-    leftover = FOUR_INDEX_NAMES & post.keys()
-    assert (
-        not leftover
-    ), f"SCN-5.1 failed — indexes still present after downgrade: {leftover}"
-
-    # Restore head for the rest of the session.
-    _run_alembic("upgrade", "head")
+        post = _list_target_indexes()
+        leftover = FOUR_INDEX_NAMES & post.keys()
+        assert (
+            not leftover
+        ), f"SCN-5.1 failed — indexes still present after downgrade: {leftover}"
+    finally:
+        # Restore head for the rest of the session.
+        _run_alembic("upgrade", "head")
 
 
 # ---------------------------------------------------------------------------

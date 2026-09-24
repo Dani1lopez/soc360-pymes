@@ -29,7 +29,7 @@ async def test_vulnerability_rejects_cross_tenant_scan(
     tenant_b = UUID(TENANT_B_ID)
 
     asset_b = Asset(
-        id=uuid.uuid4(), tenant_id=tenant_b, name="asset-b", asset_type="host"
+        id=uuid.uuid4(), tenant_id=tenant_b, value="asset-b", asset_type="hostname"
     )
     db_session.add(asset_b)
     await db_session.flush()
@@ -70,7 +70,7 @@ async def test_report_rejects_cross_tenant_asset(
     tenant_b = UUID(TENANT_B_ID)
 
     asset_b = Asset(
-        id=uuid.uuid4(), tenant_id=tenant_b, name="asset-b", asset_type="host"
+        id=uuid.uuid4(), tenant_id=tenant_b, value="asset-b", asset_type="hostname"
     )
     db_session.add(asset_b)
     await db_session.flush()
@@ -96,7 +96,7 @@ async def test_scan_rejects_cross_tenant_asset(db_session, seed_data):
     tenant_a = UUID(TENANT_A_ID)
     tenant_b = UUID(TENANT_B_ID)
     asset_b = Asset(
-        id=uuid.uuid4(), tenant_id=tenant_b, name="asset-b", asset_type="host"
+        id=uuid.uuid4(), tenant_id=tenant_b, value="asset-b", asset_type="hostname"
     )
     db_session.add(asset_b)
     await db_session.flush()
@@ -120,10 +120,10 @@ async def test_scan_rejects_cross_tenant_asset_reassignment(db_session, seed_dat
     tenant_a = UUID(TENANT_A_ID)
     tenant_b = UUID(TENANT_B_ID)
     asset_a = Asset(
-        id=uuid.uuid4(), tenant_id=tenant_a, name="asset-a", asset_type="host"
+        id=uuid.uuid4(), tenant_id=tenant_a, value="asset-a", asset_type="hostname"
     )
     asset_b = Asset(
-        id=uuid.uuid4(), tenant_id=tenant_b, name="asset-b", asset_type="host"
+        id=uuid.uuid4(), tenant_id=tenant_b, value="asset-b", asset_type="hostname"
     )
     scan = Scan(
         id=uuid.uuid4(),
@@ -145,7 +145,7 @@ async def test_scan_same_tenant_asset_and_cascade(db_session, seed_data):
     await _enable_superadmin(db_session)
     tenant_a = UUID(TENANT_A_ID)
     asset = Asset(
-        id=uuid.uuid4(), tenant_id=tenant_a, name="asset-a", asset_type="host"
+        id=uuid.uuid4(), tenant_id=tenant_a, value="asset-a", asset_type="hostname"
     )
     scan = Scan(
         id=uuid.uuid4(),

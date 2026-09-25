@@ -85,6 +85,8 @@ skills/
 .commandcode/
 
 # Proceso SDD local — no subir al remoto
+odd/
+openspec/changes/**/judgment-day/
 openspec/changes/archive/**/apply-progress.md
 openspec/changes/archive/**/verify-report.md
 openspec/changes/archive/**/exploration.md

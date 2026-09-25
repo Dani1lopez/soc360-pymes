@@ -286,3 +286,72 @@ class ScanDeletedEvent(BaseEvent):
 
     event_type: Literal["scan.deleted"] = "scan.deleted"
     scan_id: uuid.UUID
+
+
+# ---------------------------------------------------------------------------
+# F2 — Vulnerabilities domain events (Slice 3)
+# ---------------------------------------------------------------------------
+
+# VulnerabilitySeverity — the five canonical severity values used by the
+# Vulnerabilities domain. Like ScanType, it lives here so every event payload
+# references the same source of truth without coupling to
+# app/modules/vulnerabilities/schemas.py.
+VulnerabilitySeverity = Literal["critical", "high", "medium", "low", "info"]
+
+VulnerabilityStatus = Literal["open", "fixed", "accepted_risk", "false_positive"]
+
+
+class VulnerabilityCreatedEvent(BaseEvent):
+    """vulnerability.created event emitted after a successful POST /vulnerabilities.
+
+    Emitted by: app/modules/vulnerabilities/service.py, only after the commit
+    succeeds. Consumed by: slices that react to a new vulnerability being
+    persisted (dashboards, reports). Payload shape:
+        {event_id, event_type, timestamp, vulnerability_id, tenant_id, scan_id,
+         title, severity, status, cve_id, cvss_score, created_at}
+    """
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
+
+    event_type: Literal["vulnerability.created"] = "vulnerability.created"
+    vulnerability_id: uuid.UUID
+    scan_id: uuid.UUID
+    title: str
+    severity: VulnerabilitySeverity
+    status: VulnerabilityStatus
+    cve_id: str | None
+    cvss_score: float | None
+    created_at: datetime
+
+
+class VulnerabilityUpdatedEvent(BaseEvent):
+    """vulnerability.updated event emitted after a successful PATCH /vulnerabilities/{id}.
+
+    ``changed_fields`` is the ordered list of public field names that actually
+    changed in this mutation (e.g. ``["status"]`` or ``["status", "description"]``).
+    Consumers must NOT infer change sets from comparing snapshots.
+    """
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
+
+    event_type: Literal["vulnerability.updated"] = "vulnerability.updated"
+    vulnerability_id: uuid.UUID
+    changed_fields: list[str]
+
+
+class VulnerabilityDeletedEvent(BaseEvent):
+    """vulnerability.deleted event emitted after a successful DELETE /vulnerabilities/{id}."""
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
+
+    event_type: Literal["vulnerability.deleted"] = "vulnerability.deleted"
+    vulnerability_id: uuid.UUID

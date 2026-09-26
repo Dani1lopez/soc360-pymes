@@ -33,6 +33,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.scans.router import router as scans_router
 from app.modules.tenants.router import router as tenants_router
 from app.modules.users.router import router as users_router
+from app.modules.vulnerabilities.router import router as vulnerabilities_router
 
 setup_logging()
 logger = get_logger(__name__)
@@ -264,6 +265,7 @@ def create_app() -> FastAPI:
     app.include_router(users_router, prefix="/api/v1")
     app.include_router(assets_router, prefix="/api/v1")
     app.include_router(scans_router, prefix="/api/v1")
+    app.include_router(vulnerabilities_router, prefix="/api/v1")
 
     # PR4 #260 — inline ``/metrics`` route (matches /health pattern).
     # Auth runs BEFORE any Prometheus rendering so unauthenticated scrapers cannot

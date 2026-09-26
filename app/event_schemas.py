@@ -355,3 +355,69 @@ class VulnerabilityDeletedEvent(BaseEvent):
 
     event_type: Literal["vulnerability.deleted"] = "vulnerability.deleted"
     vulnerability_id: uuid.UUID
+
+
+# ---------------------------------------------------------------------------
+# F2 — Reports domain events (Slice 4)
+# ---------------------------------------------------------------------------
+
+# ReportType / ReportStatus — the canonical values allowed by the
+# ``chk_reports_report_type`` / ``chk_reports_status`` constraints. Like
+# VulnerabilitySeverity, they live here so every event payload references the
+# same source of truth without coupling to app/modules/reports/schemas.py.
+ReportType = Literal["vulnerability", "executive", "technical", "compliance"]
+
+ReportStatus = Literal["pending", "generating", "completed", "failed"]
+
+
+class ReportCreatedEvent(BaseEvent):
+    """report.created event emitted after a successful POST /reports.
+
+    Emitted by: app/modules/reports/service.py, only after the commit
+    succeeds. Payload shape:
+        {event_id, event_type, timestamp, report_id, tenant_id, asset_id,
+         name, report_type, status, created_at}
+    """
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
+
+    event_type: Literal["report.created"] = "report.created"
+    report_id: uuid.UUID
+    asset_id: uuid.UUID
+    name: str
+    report_type: ReportType
+    status: ReportStatus
+    created_at: datetime
+
+
+class ReportUpdatedEvent(BaseEvent):
+    """report.updated event emitted after a successful PATCH /reports/{id}.
+
+    ``changed_fields`` is the ordered list of public field names that actually
+    changed in this mutation (e.g. ``["status", "generated_at"]``).
+    Consumers must NOT infer change sets from comparing snapshots.
+    """
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
+
+    event_type: Literal["report.updated"] = "report.updated"
+    report_id: uuid.UUID
+    changed_fields: list[str]
+
+
+class ReportDeletedEvent(BaseEvent):
+    """report.deleted event emitted after a successful DELETE /reports/{id}."""
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
+
+    event_type: Literal["report.deleted"] = "report.deleted"
+    report_id: uuid.UUID

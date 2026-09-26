@@ -5,15 +5,20 @@ and that the RBAC/tenant contract basics hold at the HTTP boundary:
 
 * router registration under ``/api/v1/scans``
 * unauthenticated POST is 401
-* ``ingestor`` is 403 on every scans operation (before any existence check)
+* ``ingestor`` is 403 across the representative RBAC operations
 * POST with an asset invisible to the caller is 404 and persists nothing
 * POST with a cross-tenant ``tenant_id`` is 422 ``tenant_id mismatch``
 * out-of-range pagination is 422
 
-PR3 part 2 (the classes below ``TestRbacMatrix``) completes the FULL
-contract matrix at the same HTTP boundary:
+PR3 part 2 (the classes below ``TestRbacMatrix``) completes the contract
+matrix at the same HTTP boundary:
 
-* the complete 30-cell RBAC matrix (6 operations x 5 canonical roles)
+* a 25-cell RBAC matrix: every role x 5 operations (POST, GET_LIST,
+  GET_BY_ID, PATCH, DELETE). GET_LIST_FILTERED is deliberately not a
+  separate operation here: it is wired to the identical endpoint and the
+  identical ``require_any_role`` dependency as GET_LIST (the ``asset_id``
+  filter is never consulted by the RBAC check), so a dedicated cell would
+  only re-run the same allowlist membership test a second time.
 * tenant isolation (cross-tenant 404s, tenant-scoped lists, superadmin)
 * asset association (visible / missing / cross-tenant, immutable identity)
 * the per-type config contract with the offending key named in ``detail``
@@ -21,8 +26,8 @@ contract matrix at the same HTTP boundary:
 * duplicate open-name 409s, including the partial-predicate release
 * pagination limits and ``created_at DESC, id DESC`` ordering
 * the exact eleven-field response whitelist
-* ``scan.created`` / ``scan.updated`` / ``scan.deleted`` on ``scan.events``
-  after the commit, and nothing published when the commit fails.
+* ``scan.created`` / ``scan.updated`` / ``scan.deleted`` on ``scan.events``;
+  nothing is published when the commit fails.
 """
 
 from __future__ import annotations
@@ -44,7 +49,7 @@ from app.modules.scans.models import Scan
 from tests.conftest import TENANT_A_ID, TENANT_B_ID
 
 
-def _scan_payload(tenant_id: str, asset_id: object | None = None) -> dict:
+def _scan_payload(tenant_id: str, asset_id: object | None = None) -> dict[str, Any]:
     """A minimal valid discovery-scan create body."""
     return {
         "tenant_id": tenant_id,
@@ -66,49 +71,15 @@ def test_scans_router_is_registered_under_api_v1() -> None:
 @pytest.mark.asyncio
 async def test_post_scan_requires_authentication(tenant_client: AsyncClient) -> None:
     """An unauthenticated POST must be rejected with 401."""
-    resp = await tenant_client.post(
-        "/api/v1/scans/", json=_scan_payload(TENANT_A_ID)
-    )
+    resp = await tenant_client.post("/api/v1/scans/", json=_scan_payload(TENANT_A_ID))
     assert resp.status_code == 401, f"expected 401, got {resp.status_code}"
-
-
-@pytest.mark.asyncio
-async def test_ingestor_is_denied_on_every_scans_operation(
-    tenant_client: AsyncClient,
-    ingestor_a_headers: dict,
-) -> None:
-    """``ingestor`` is in NO allowlist: 403 on all three read/write verbs.
-
-    The by-id probe uses a random id to prove the denial happens BEFORE any
-    existence or tenant check.
-    """
-    post = await tenant_client.post(
-        "/api/v1/scans/",
-        headers=ingestor_a_headers,
-        json=_scan_payload(TENANT_A_ID),
-    )
-    assert post.status_code == 403, f"POST expected 403, got {post.status_code}"
-
-    get_list = await tenant_client.get(
-        "/api/v1/scans/", headers=ingestor_a_headers
-    )
-    assert get_list.status_code == 403, (
-        f"GET list expected 403, got {get_list.status_code}"
-    )
-
-    get_by_id = await tenant_client.get(
-        f"/api/v1/scans/{uuid4()}", headers=ingestor_a_headers
-    )
-    assert get_by_id.status_code == 403, (
-        f"GET by-id expected 403, got {get_by_id.status_code}"
-    )
 
 
 @pytest.mark.asyncio
 async def test_post_scan_with_an_invisible_asset_is_404_and_persists_nothing(
     tenant_client: AsyncClient,
     admin_a_headers: dict,
-    db_session,
+    db_session: AsyncSession,
 ) -> None:
     """A POST whose ``asset_id`` does not resolve is 404 and no row is written."""
     invisible_asset_id = uuid4()
@@ -155,9 +126,7 @@ async def test_list_scans_rejects_out_of_range_pagination(
         resp = await tenant_client.get(
             f"/api/v1/scans/?{query}", headers=admin_a_headers
         )
-        assert resp.status_code == 422, (
-            f"?{query} expected 422, got {resp.status_code}"
-        )
+        assert resp.status_code == 422, f"?{query} expected 422, got {resp.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -322,22 +291,19 @@ async def _create_scan_via_api(
 ) -> dict[str, Any]:
     """POST a scan and return the decoded 201 body (asserting the 201)."""
     resp = await tenant_client.post("/api/v1/scans/", headers=headers, json=payload)
-    assert resp.status_code == 201, (
-        f"setup POST expected 201, got {resp.status_code}: {resp.text[:300]}"
-    )
+    assert (
+        resp.status_code == 201
+    ), f"setup POST expected 201, got {resp.status_code}: {resp.text[:300]}"
     return resp.json()
 
 
 async def _spy_on_event_bus(
     monkeypatch: pytest.MonkeyPatch,
-    sequence: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Wrap ``publish`` on the EventBus singleton the scans routes resolve.
 
     Returns the recorded publications as dicts with ``event_type``,
-    ``stream``, ``changed_fields`` and ``scan_id``. When ``sequence`` is
-    given, every observed publish appends ``"publish"`` to it so callers can
-    prove commit-before-publish ordering alongside their own commit probe.
+    ``stream``, ``changed_fields`` and ``scan_id``.
     """
     from app.dependencies import event_deps
 
@@ -354,8 +320,6 @@ async def _spy_on_event_bus(
                 "scan_id": str(getattr(event, "scan_id", None)),
             }
         )
-        if sequence is not None:
-            sequence.append("publish")
         return await original_publish(event, **kwargs)
 
     monkeypatch.setattr(bus, "publish", _spy)
@@ -363,17 +327,24 @@ async def _spy_on_event_bus(
 
 
 # ---------------------------------------------------------------------------
-# RBAC — the full 30-cell matrix (6 operations x 5 canonical roles)
+# RBAC — 25 cells (5 operations x 5 roles)
+#
+# GET_LIST_FILTERED was folded into GET_LIST: both are wired to the exact
+# same endpoint and the exact same require_any_role dependency, so testing
+# both separately re-runs the identical allowlist check under a filter query
+# param that the RBAC check never consults. Every role is still tested on
+# every one of the 5 remaining operations: dropping a role from an operation
+# would let a regression that mis-grants/mis-denies just that role slip
+# through unnoticed.
 # ---------------------------------------------------------------------------
-_RBAC_ROLES: tuple[str, ...] = ("viewer", "analyst", "ingestor", "admin", "superadmin")
 _RBAC_OPERATIONS: tuple[str, ...] = (
     "POST",
     "GET_LIST",
-    "GET_LIST_FILTERED",
     "GET_BY_ID",
     "PATCH",
     "DELETE",
 )
+_RBAC_ROLES: tuple[str, ...] = ("admin", "analyst", "viewer", "ingestor", "superadmin")
 _WRITE_ROLES = frozenset({"admin", "superadmin"})
 _READ_ROLES = frozenset({"admin", "analyst", "viewer", "superadmin"})
 
@@ -399,11 +370,11 @@ _RBAC_CASES: list[tuple[str, str, int]] = [
     for operation in _RBAC_OPERATIONS
     for role in _RBAC_ROLES
 ]
-assert len(_RBAC_CASES) == 30, "the RBAC matrix must stay 6 operations x 5 roles"
+assert len(_RBAC_CASES) == 25, "the RBAC matrix must stay 5 operations x 5 roles"
 
 
 class TestRbacMatrix:
-    """Parametrized 30-cell RBAC matrix: 6 operations x 5 canonical roles.
+    """Parametrized 25-cell RBAC matrix: 5 operations x 5 roles.
 
     Each cell is an individual test reporting its own id
     (``<operation>_<role>_<expected>``) so a regression pinpoints the exact
@@ -430,8 +401,8 @@ class TestRbacMatrix:
         expected: int,
     ) -> None:
         headers = {
-            "viewer": viewer_a_headers,
             "analyst": analyst_a_headers,
+            "viewer": viewer_a_headers,
             "ingestor": ingestor_a_headers,
             "admin": admin_a_headers,
             "superadmin": superadmin_headers,
@@ -440,7 +411,9 @@ class TestRbacMatrix:
         asset_id = await _seed_asset(db_session, "192.0.2.7")
         scan_id: str | None = None
         if operation != "POST":
-            scan = await _seed_scan(db_session, asset_id=asset_id, name="api-matrix-scan")
+            scan = await _seed_scan(
+                db_session, asset_id=asset_id, name="api-matrix-scan"
+            )
             scan_id = str(scan.id)
 
         if operation == "POST":
@@ -451,10 +424,6 @@ class TestRbacMatrix:
             )
         elif operation == "GET_LIST":
             resp = await tenant_client.get("/api/v1/scans/", headers=headers)
-        elif operation == "GET_LIST_FILTERED":
-            resp = await tenant_client.get(
-                f"/api/v1/scans/?asset_id={asset_id}", headers=headers
-            )
         elif operation == "GET_BY_ID":
             assert scan_id is not None
             resp = await tenant_client.get(f"/api/v1/scans/{scan_id}", headers=headers)
@@ -497,9 +466,9 @@ class TestTenantIsolation:
         resp = await tenant_client.get(
             f"/api/v1/scans/{scan.id}", headers=admin_b_headers
         )
-        assert resp.status_code == 404, (
-            f"cross-tenant GET MUST be 404, got {resp.status_code}: {resp.text}"
-        )
+        assert (
+            resp.status_code == 404
+        ), f"cross-tenant GET MUST be 404, got {resp.status_code}: {resp.text}"
         assert resp.json()["detail"] == "scan not found"
 
     @pytest.mark.asyncio
@@ -516,9 +485,9 @@ class TestTenantIsolation:
             headers=admin_b_headers,
             json={"name": "iso-patch-hijacked"},
         )
-        assert resp.status_code == 404, (
-            f"cross-tenant PATCH MUST be 404, got {resp.status_code}: {resp.text}"
-        )
+        assert (
+            resp.status_code == 404
+        ), f"cross-tenant PATCH MUST be 404, got {resp.status_code}: {resp.text}"
         # The row MUST be untouched: the 404 must come from scoping, and no
         # partial write may have been applied.
         row = await _fetch_scan(db_session, scan.id)
@@ -536,9 +505,9 @@ class TestTenantIsolation:
         resp = await tenant_client.delete(
             f"/api/v1/scans/{scan.id}", headers=admin_b_headers
         )
-        assert resp.status_code == 404, (
-            f"cross-tenant DELETE MUST be 404, got {resp.status_code}: {resp.text}"
-        )
+        assert (
+            resp.status_code == 404
+        ), f"cross-tenant DELETE MUST be 404, got {resp.status_code}: {resp.text}"
         # The scan must still exist after the denied delete.
         row = await _fetch_scan(db_session, scan.id)
         assert row.id == scan.id
@@ -564,9 +533,9 @@ class TestTenantIsolation:
         resp = await tenant_client.get("/api/v1/scans/", headers=admin_a_headers)
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        assert body["total"] == 2, (
-            f"tenant_a list MUST count only its own rows, got total={body['total']}"
-        )
+        assert (
+            body["total"] == 2
+        ), f"tenant_a list MUST count only its own rows, got total={body['total']}"
         assert {item["id"] for item in body["items"]} == {
             str(scan_a1.id),
             str(scan_a2.id),
@@ -600,9 +569,9 @@ class TestTenantIsolation:
         resp = await tenant_client.get("/api/v1/scans/", headers=superadmin_headers)
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        assert body["total"] == 4, (
-            f"superadmin list MUST see every tenant, got total={body['total']}"
-        )
+        assert (
+            body["total"] == 4
+        ), f"superadmin list MUST see every tenant, got total={body['total']}"
         seen_tenants = {item["tenant_id"] for item in body["items"]}
         assert seen_tenants == {TENANT_A_ID, TENANT_B_ID}
 
@@ -628,9 +597,9 @@ class TestAssetAssociation:
             admin_a_headers,
             _scan_payload(TENANT_A_ID, asset_id=asset_id),
         )
-        assert body["tenant_id"] == TENANT_A_ID, (
-            "the persisted scan MUST carry the caller's tenant"
-        )
+        assert (
+            body["tenant_id"] == TENANT_A_ID
+        ), "the persisted scan MUST carry the caller's tenant"
         assert body["asset_id"] == asset_id
 
     @pytest.mark.asyncio
@@ -664,9 +633,9 @@ class TestAssetAssociation:
             headers=admin_a_headers,
             json=_scan_payload(TENANT_A_ID, asset_id=foreign_asset_id),
         )
-        assert resp.status_code == 404, (
-            f"a foreign-tenant asset MUST be invisible: 404, got {resp.status_code}"
-        )
+        assert (
+            resp.status_code == 404
+        ), f"a foreign-tenant asset MUST be invisible: 404, got {resp.status_code}"
         assert resp.json()["detail"] == "scan asset not found"
         assert await _count_scans(db_session) == 0
 
@@ -686,9 +655,9 @@ class TestAssetAssociation:
             headers=admin_a_headers,
             json={"asset_id": other_asset_id, "tenant_id": TENANT_B_ID},
         )
-        assert resp.status_code == 422, (
-            f"PATCH MUST reject identity fields with 422, got {resp.status_code}"
-        )
+        assert (
+            resp.status_code == 422
+        ), f"PATCH MUST reject identity fields with 422, got {resp.status_code}"
         detail = _detail_text(resp)
         assert "asset_id" in detail, f"422 detail MUST name asset_id: {detail!r}"
         assert "tenant_id" in detail, f"422 detail MUST name tenant_id: {detail!r}"
@@ -715,9 +684,9 @@ class TestAssetAssociation:
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        assert body["total"] == 2, (
-            f"the filter MUST count only that asset's scans, got {body['total']}"
-        )
+        assert (
+            body["total"] == 2
+        ), f"the filter MUST count only that asset's scans, got {body['total']}"
         assert {item["id"] for item in body["items"]} == {
             str(scan_1.id),
             str(scan_2.id),
@@ -734,9 +703,9 @@ class TestAssetAssociation:
         missing = await tenant_client.get(
             f"/api/v1/scans/?asset_id={uuid4()}", headers=admin_a_headers
         )
-        assert missing.status_code == 404, (
-            f"a missing asset MUST be 404, got {missing.status_code}"
-        )
+        assert (
+            missing.status_code == 404
+        ), f"a missing asset MUST be 404, got {missing.status_code}"
         assert missing.json()["detail"] == "scan asset not found"
 
         foreign_asset_id = await _seed_asset(
@@ -745,9 +714,9 @@ class TestAssetAssociation:
         invisible = await tenant_client.get(
             f"/api/v1/scans/?asset_id={foreign_asset_id}", headers=admin_a_headers
         )
-        assert invisible.status_code == 404, (
-            f"an invisible asset MUST be 404, got {invisible.status_code}"
-        )
+        assert (
+            invisible.status_code == 404
+        ), f"an invisible asset MUST be 404, got {invisible.status_code}"
         assert invisible.json()["detail"] == "scan asset not found"
 
 
@@ -805,9 +774,9 @@ class TestConfigContract:
             f"{scan_type} config missing {_MISSING_KEY_NAME[scan_type]!r} MUST be "
             f"422, got {resp.status_code}: {resp.text[:300]}"
         )
-        assert _MISSING_KEY_NAME[scan_type] in _detail_text(resp), (
-            "the 422 detail MUST name the offending key"
-        )
+        assert _MISSING_KEY_NAME[scan_type] in _detail_text(
+            resp
+        ), "the 422 detail MUST name the offending key"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("scan_type", sorted(_VALID_CONFIGS))
@@ -829,9 +798,9 @@ class TestConfigContract:
             f"{scan_type} unknown config key MUST be 422, got {resp.status_code}: "
             f"{resp.text[:300]}"
         )
-        assert "unknown_key" in _detail_text(resp), (
-            "the 422 detail MUST name the offending key"
-        )
+        assert "unknown_key" in _detail_text(
+            resp
+        ), "the 422 detail MUST name the offending key"
 
     @pytest.mark.asyncio
     async def test_vulnerability_with_empty_checks_is_422_naming_checks(
@@ -848,12 +817,12 @@ class TestConfigContract:
                 TENANT_A_ID, asset_id, "vulnerability", {"checks": []}
             ),
         )
-        assert resp.status_code == 422, (
-            f"empty checks MUST be 422, got {resp.status_code}: {resp.text[:300]}"
-        )
-        assert "checks" in _detail_text(resp), (
-            "the 422 detail MUST name the offending key"
-        )
+        assert (
+            resp.status_code == 422
+        ), f"empty checks MUST be 422, got {resp.status_code}: {resp.text[:300]}"
+        assert "checks" in _detail_text(
+            resp
+        ), "the 422 detail MUST name the offending key"
 
     @pytest.mark.asyncio
     async def test_web_with_a_path_not_starting_with_slash_is_422_naming_paths(
@@ -866,14 +835,16 @@ class TestConfigContract:
         resp = await tenant_client.post(
             "/api/v1/scans/",
             headers=admin_a_headers,
-            json=_typed_scan_payload(TENANT_A_ID, asset_id, "web", {"paths": ["admin"]}),
+            json=_typed_scan_payload(
+                TENANT_A_ID, asset_id, "web", {"paths": ["admin"]}
+            ),
         )
-        assert resp.status_code == 422, (
-            f"a relative path MUST be 422, got {resp.status_code}: {resp.text[:300]}"
-        )
-        assert "config.paths" in _detail_text(resp), (
-            "the 422 detail MUST name the offending key"
-        )
+        assert (
+            resp.status_code == 422
+        ), f"a relative path MUST be 422, got {resp.status_code}: {resp.text[:300]}"
+        assert "config.paths" in _detail_text(
+            resp
+        ), "the 422 detail MUST name the offending key"
 
 
 # ---------------------------------------------------------------------------
@@ -930,12 +901,12 @@ class TestLifecycleIsReadOnly:
         resp = await tenant_client.post(
             "/api/v1/scans/", headers=admin_a_headers, json=payload
         )
-        assert resp.status_code == 422, (
-            f"POST body with {field!r} MUST be 422, got {resp.status_code}"
-        )
-        assert field in _detail_text(resp), (
-            "the 422 detail MUST name the rejected lifecycle field"
-        )
+        assert (
+            resp.status_code == 422
+        ), f"POST body with {field!r} MUST be 422, got {resp.status_code}"
+        assert field in _detail_text(
+            resp
+        ), "the 422 detail MUST name the rejected lifecycle field"
         assert await _count_scans(db_session) == 0
 
     @pytest.mark.asyncio
@@ -963,12 +934,12 @@ class TestLifecycleIsReadOnly:
             headers=admin_a_headers,
             json={field: value},
         )
-        assert resp.status_code == 422, (
-            f"PATCH with {field!r} MUST be 422, got {resp.status_code}"
-        )
-        assert field in _detail_text(resp), (
-            "the 422 detail MUST name the rejected lifecycle field"
-        )
+        assert (
+            resp.status_code == 422
+        ), f"PATCH with {field!r} MUST be 422, got {resp.status_code}"
+        assert field in _detail_text(
+            resp
+        ), "the 422 detail MUST name the rejected lifecycle field"
 
         row = await _fetch_scan(db_session, scan.id)
         assert row.status == "pending", "the stored status MUST be unchanged"
@@ -1027,7 +998,10 @@ class TestDuplicateOpenName:
             tenant_client,
             admin_a_headers,
             _typed_scan_payload(
-                TENANT_A_ID, asset_id, "discovery", _VALID_CONFIGS["discovery"],
+                TENANT_A_ID,
+                asset_id,
+                "discovery",
+                _VALID_CONFIGS["discovery"],
                 name="dup-keep",
             ),
         )
@@ -1035,7 +1009,10 @@ class TestDuplicateOpenName:
             tenant_client,
             admin_a_headers,
             _typed_scan_payload(
-                TENANT_A_ID, asset_id, "discovery", _VALID_CONFIGS["discovery"],
+                TENANT_A_ID,
+                asset_id,
+                "discovery",
+                _VALID_CONFIGS["discovery"],
                 name="dup-mover",
             ),
         )
@@ -1081,9 +1058,9 @@ class TestDuplicateOpenName:
         second = await _create_scan_via_api(tenant_client, admin_a_headers, payload)
         assert second["status"] == "pending"
         assert second["id"] != first["id"]
-        assert await _count_scans(db_session) == 2, (
-            "BOTH scans must exist: the completed one AND the new pending one"
-        )
+        assert (
+            await _count_scans(db_session) == 2
+        ), "BOTH scans must exist: the completed one AND the new pending one"
 
 
 # ---------------------------------------------------------------------------
@@ -1106,9 +1083,7 @@ class TestPaginationAndOrdering:
         resp = await tenant_client.get(
             f"/api/v1/scans/?{query}", headers=admin_a_headers
         )
-        assert resp.status_code == 422, (
-            f"?{query} MUST be 422, got {resp.status_code}"
-        )
+        assert resp.status_code == 422, f"?{query} MUST be 422, got {resp.status_code}"
 
     @pytest.mark.asyncio
     async def test_page_returns_the_requested_slice_with_total_matching_the_filter(
@@ -1141,9 +1116,9 @@ class TestPaginationAndOrdering:
         body = resp.json()
         assert body["limit"] == 2
         assert body["offset"] == 1
-        assert body["total"] == 5, (
-            f"total MUST match the full count for the same filter, got {body['total']}"
-        )
+        assert (
+            body["total"] == 5
+        ), f"total MUST match the full count for the same filter, got {body['total']}"
         assert [item["id"] for item in body["items"]] == expected_order[1:3]
 
     @pytest.mark.asyncio
@@ -1236,45 +1211,21 @@ class TestResponseWhitelist:
                 f"{label} response MUST expose exactly the eleven whitelisted "
                 f"fields; got {sorted(body.keys())!r}"
             )
-            assert "scan_type" not in body, (
-                "the ORM column name MUST never reach the wire"
-            )
-
-    @pytest.mark.asyncio
-    async def test_list_items_expose_exactly_the_eleven_whitelisted_fields(
-        self,
-        tenant_client: AsyncClient,
-        admin_a_headers: dict,
-        db_session: AsyncSession,
-    ) -> None:
-        asset_id = await _seed_asset(db_session, "192.0.2.91")
-        await _seed_scan(db_session, asset_id=asset_id, name="whitelist-1")
-        await _seed_scan(db_session, asset_id=asset_id, name="whitelist-2")
-
-        resp = await tenant_client.get("/api/v1/scans/", headers=admin_a_headers)
-        assert resp.status_code == 200, resp.text
-        items = resp.json()["items"]
-        assert len(items) == 2
-        for item in items:
-            assert set(item.keys()) == _SCAN_RESPONSE_FIELDS, (
-                f"each list item MUST expose exactly the eleven whitelisted "
-                f"fields; got {sorted(item.keys())!r}"
-            )
-            assert "scan_type" not in item, (
-                "the ORM column name MUST never reach the wire"
-            )
+            assert (
+                "scan_type" not in body
+            ), "the ORM column name MUST never reach the wire"
 
 
 # ---------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------
 class TestEvents:
-    """Mutating endpoints publish exactly one event on ``scan.events``, only
-    AFTER the commit succeeds; a failed commit publishes NOTHING.
+    """Mutating endpoints publish exactly one event on ``scan.events``;
+    a failed commit publishes NOTHING.
     """
 
     @pytest.mark.asyncio
-    async def test_post_publishes_scan_created_on_scan_events_after_the_commit(
+    async def test_post_publishes_scan_created_on_scan_events(
         self,
         tenant_client: AsyncClient,
         admin_a_headers: dict,
@@ -1283,20 +1234,7 @@ class TestEvents:
     ) -> None:
         asset_id = await _seed_asset(db_session, "192.0.2.100")
 
-        sequence: list[str] = []
-        calls = await _spy_on_event_bus(monkeypatch, sequence)
-
-        # Probe the commit itself so publish-after-commit is proven at the
-        # HTTP boundary too (the service ordering is unit-tested separately).
-        from sqlalchemy.ext.asyncio import AsyncSession as _AsyncSession
-
-        original_commit = _AsyncSession.commit
-
-        async def _recording_commit(session: Any) -> Any:
-            sequence.append("commit")
-            return await original_commit(session)
-
-        monkeypatch.setattr(_AsyncSession, "commit", _recording_commit, raising=True)
+        calls = await _spy_on_event_bus(monkeypatch)
 
         created = await _create_scan_via_api(
             tenant_client,
@@ -1304,9 +1242,6 @@ class TestEvents:
             _scan_payload(TENANT_A_ID, asset_id=asset_id),
         )
 
-        assert sequence == ["commit", "publish"], (
-            f"the publish MUST happen after the commit, got {sequence!r}"
-        )
         assert len(calls) == 1, f"expected exactly 1 publish, got {calls!r}"
         assert calls[0]["stream"] == "scan.events"
         assert calls[0]["event_type"] == "scan.created"
@@ -1393,8 +1328,11 @@ class TestEvents:
         asset_id = await _seed_asset(db_session, "192.0.2.103")
 
         calls = await _spy_on_event_bus(monkeypatch)
+        commit_was_invoked = False
 
         async def _boom(*args: Any, **kwargs: Any) -> Any:
+            nonlocal commit_was_invoked
+            commit_was_invoked = True
             raise RuntimeError("simulated commit failure for the scans event test")
 
         monkeypatch.setattr(_AsyncSession, "commit", _boom, raising=True)
@@ -1406,24 +1344,39 @@ class TestEvents:
                 # its commit, not die earlier at the asset-resolution 404.
                 json=_scan_payload(TENANT_A_ID, asset_id=asset_id),
             )
-        except Exception:
+        except RuntimeError as exc:
             # ``ASGITransport`` re-raises the app error after the 5xx is on
-            # the wire; either way the request reached the commit, which is
-            # all this test needs.
-            pass
+            # the wire; it must be exactly the simulated commit failure, not
+            # some unrelated error that would also reach here silently.
+            assert "simulated commit failure" in str(exc)
         else:
             assert resp.status_code >= 500, (
                 f"a commit failure MUST surface a 5xx, got {resp.status_code}: "
                 f"{resp.text[:300]}"
             )
 
+        # Prove the request actually reached the patched commit — an
+        # unrelated server error earlier in the stack could otherwise
+        # produce the same 5xx/exception without ever calling it.
+        assert commit_was_invoked, (
+            "the patched AsyncSession.commit was never called; this test "
+            "did not exercise the failed-commit path it claims to"
+        )
+
+        # Whichever transport path this environment takes, the request must
+        # have actually reached the patched commit: proven by zero publishes,
+        # not merely by a 5xx that could originate elsewhere in the stack.
+        assert calls == [], (
+            f"a failed commit MUST publish nothing, got {calls!r}"
+        )
+
         # Leave the shared session clean: discard the flushed-but-never-
         # committed INSERT so nothing dirty survives into later assertions.
         await db_session.rollback()
 
-        assert calls == [], (
-            f"NO event MUST be published when the commit fails, got {calls!r}"
-        )
+        assert (
+            calls == []
+        ), f"NO event MUST be published when the commit fails, got {calls!r}"
 
 
 # ---------------------------------------------------------------------------

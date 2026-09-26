@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -231,6 +232,38 @@ class TestUpdateVulnerability:
 
         assert result is vuln
         event_bus.publish.assert_not_awaited()
+
+    async def test_cvss_rounding_to_persisted_value_publishes_no_second_event(self) -> None:
+        vuln = Vulnerability(
+            id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            scan_id=uuid.uuid4(),
+            title="x",
+            severity="low",
+            cvss_score=Decimal("8.3"),
+        )
+        db = _make_db(vuln)
+        event_bus = AsyncMock()
+
+        await service.update_vulnerability(
+            vulnerability_id=vuln.id,
+            tenant_id=vuln.tenant_id,
+            data=VulnerabilityUpdate(cvss_score=8.45),
+            db=db,
+            event_bus=event_bus,
+        )
+        assert vuln.cvss_score == Decimal("8.5")
+        assert event_bus.publish.call_args.args[0].changed_fields == ["cvss_score"]
+
+        await service.update_vulnerability(
+            vulnerability_id=vuln.id,
+            tenant_id=vuln.tenant_id,
+            data=VulnerabilityUpdate(cvss_score=8.46),
+            db=db,
+            event_bus=event_bus,
+        )
+        assert vuln.cvss_score == Decimal("8.5")
+        event_bus.publish.assert_awaited_once()
 
 
 @pytest.mark.asyncio

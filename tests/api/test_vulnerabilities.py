@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import set_tenant_context
@@ -133,7 +133,7 @@ class TestHappyPath:
         assert body["tenant_id"] == TENANT_A_ID
 
     @pytest.mark.asyncio
-    async def test_post_forces_status_open_even_if_sent(
+    async def test_post_rejects_client_supplied_status(
         self, tenant_client: AsyncClient, admin_a_headers: dict, db_session: AsyncSession
     ) -> None:
         asset_id = await _seed_asset(db_session, "192.0.2.2")
@@ -199,6 +199,54 @@ class TestHappyPath:
         assert body["title"] == "patchable"
 
     @pytest.mark.asyncio
+    async def test_patch_rejects_explicit_null_status_but_allows_omission(
+        self, tenant_client: AsyncClient, admin_a_headers: dict, db_session: AsyncSession
+    ) -> None:
+        asset_id = await _seed_asset(db_session, "192.0.2.16")
+        scan = await _seed_scan(db_session, asset_id=asset_id, name="patch-null-status")
+        vuln = await _seed_vulnerability(db_session, scan_id=scan.id, title="nullable")
+        url = f"/api/v1/vulnerabilities/{vuln.id}"
+
+        rejected = await tenant_client.patch(
+            url, headers=admin_a_headers, json={"status": None}
+        )
+        assert rejected.status_code == 422, rejected.text
+
+        accepted = await tenant_client.patch(
+            url, headers=admin_a_headers, json={"description": "triaged"}
+        )
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["status"] == "open"
+        assert accepted.json()["description"] == "triaged"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("score", [-0.1, 10.1, "NaN", "Infinity", "-Infinity"])
+    async def test_post_and_patch_reject_invalid_cvss_score(
+        self,
+        tenant_client: AsyncClient,
+        admin_a_headers: dict,
+        db_session: AsyncSession,
+        score: float | str,
+    ) -> None:
+        asset_id = await _seed_asset(db_session, "192.0.2.17")
+        scan = await _seed_scan(db_session, asset_id=asset_id, name="invalid-cvss")
+        vuln = await _seed_vulnerability(db_session, scan_id=scan.id, title="cvss")
+
+        payload = _vuln_payload(TENANT_A_ID, scan.id)
+        payload["cvss_score"] = score
+        created = await tenant_client.post(
+            "/api/v1/vulnerabilities/", headers=admin_a_headers, json=payload
+        )
+        assert created.status_code == 422, created.text
+
+        updated = await tenant_client.patch(
+            f"/api/v1/vulnerabilities/{vuln.id}",
+            headers=admin_a_headers,
+            json={"cvss_score": score},
+        )
+        assert updated.status_code == 422, updated.text
+
+    @pytest.mark.asyncio
     async def test_patch_rejects_identity_fields(
         self, tenant_client: AsyncClient, admin_a_headers: dict, db_session: AsyncSession
     ) -> None:
@@ -244,6 +292,12 @@ class TestHappyPath:
         )
         assert resp.status_code == 404, resp.text
         assert resp.json()["detail"] == "vulnerability scan not found"
+
+        await _set_superadmin_context(db_session)
+        count = (
+            await db_session.execute(select(func.count()).select_from(Vulnerability))
+        ).scalar_one()
+        assert count == 0
 
     @pytest.mark.asyncio
     async def test_post_with_a_tenant_id_mismatch_is_422(

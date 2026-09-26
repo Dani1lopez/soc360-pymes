@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Literal
 
 from sqlalchemy import func, select
@@ -250,17 +251,16 @@ async def update_vulnerability(
     ):
         vulnerability.description = update_data["description"]
         changed_fields.append("description")
-    if (
-        "cvss_score" in update_data
-        and update_data["cvss_score"]
-        != (
-            float(vulnerability.cvss_score)
-            if vulnerability.cvss_score is not None
+    if "cvss_score" in update_data:
+        score = update_data["cvss_score"]
+        normalized_score = (
+            Decimal(str(score)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+            if score is not None
             else None
         )
-    ):
-        vulnerability.cvss_score = update_data["cvss_score"]
-        changed_fields.append("cvss_score")
+        if normalized_score != vulnerability.cvss_score:
+            vulnerability.cvss_score = normalized_score
+            changed_fields.append("cvss_score")
     if (
         "vulnerability_metadata" in update_data
         and update_data["vulnerability_metadata"] != vulnerability.vulnerability_metadata

@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from app.event_schemas import VulnerabilitySeverity, VulnerabilityStatus
 from app.modules.vulnerabilities.models import Vulnerability
@@ -56,7 +56,7 @@ class VulnerabilityCreate(BaseModel):
     description: str | None = None
     severity: VulnerabilitySeverity
     cve_id: Annotated[str, StringConstraints(strip_whitespace=True, max_length=50)] | None = None
-    cvss_score: float | None = None
+    cvss_score: float | None = Field(default=None, ge=0, le=10, allow_inf_nan=False)
     vulnerability_metadata: dict | None = None
 
 
@@ -79,8 +79,15 @@ class VulnerabilityUpdate(BaseModel):
 
     status: VulnerabilityStatus | None = None
     description: str | None = None
-    cvss_score: float | None = None
+    cvss_score: float | None = Field(default=None, ge=0, le=10, allow_inf_nan=False)
     vulnerability_metadata: dict | None = None
+
+    @field_validator("status")
+    @classmethod
+    def reject_null_status(cls, value: VulnerabilityStatus | None) -> VulnerabilityStatus:
+        if value is None:
+            raise ValueError("status cannot be null")
+        return value
 
 
 # ---------------------------------------------------------------------------

@@ -130,12 +130,19 @@ jobs:
           uv run pytest -n 2
           -m "not toxiproxy and not redis_pressure and not serial_only"
 
+      # Runs even when the parallel step failed, so one CI run reports every
+      # direct-test failure (as the former single step did). The extra exclusions
+      # keep tests owned by the dedicated Toxiproxy / Redis-pressure gates out of
+      # this step; they run after their own readiness checks below.
       - name: Run direct tests (serial_only)
+        if: ${{ !cancelled() }}
         env:
           SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
           PG_SUPERUSER: soc360_migration
           PG_SUPERUSER_PASSWORD: soc360_test_password
-        run: uv run pytest -m serial_only
+        run: >
+          uv run pytest
+          -m "serial_only and not toxiproxy and not redis_pressure"
 
       - name: Wait for Toxiproxy readiness
         shell: bash

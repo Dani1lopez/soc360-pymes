@@ -239,7 +239,7 @@ CI runs the direct suite in two steps: parallel with pytest-xdist, then the `ser
 
 ```bash
 uv run pytest -n 2 -m "not toxiproxy and not redis_pressure and not serial_only"
-uv run pytest -m serial_only
+uv run pytest -m "serial_only and not toxiproxy and not redis_pressure"
 ```
 
 Use `-n 2`, not `-n auto`: worker indexes `gw13` and above are unsupported (one Redis DB per worker). Toxiproxy and `redis_pressure` gates stay serial. Rollback to the original single step:

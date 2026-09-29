@@ -21,6 +21,9 @@ _STEP_START = re.compile(r"^(\s*)- name:\s*(.+?)\s*$")
 _RUN_KEY = re.compile(r"^(\s*)run:\s*(.*?)\s*$")
 
 BASE_EXPRESSION = "not toxiproxy and not redis_pressure"
+# The serial step must not swallow tests owned by the dedicated Toxiproxy /
+# Redis-pressure gates, which run after their own readiness checks.
+SERIAL_EXPRESSION = f"serial_only and {BASE_EXPRESSION}"
 
 
 def _steps() -> list[tuple[str, str]]:
@@ -103,10 +106,27 @@ def _serial_only_step() -> list[str]:
     matches = [
         t
         for t in _pytest_steps().values()
-        if _marker_expressions(t) == ["serial_only"]
+        if _marker_expressions(t) == [SERIAL_EXPRESSION]
     ]
     assert len(matches) == 1, "expected exactly one serial_only pytest step in ci.yml"
     return matches[0]
+
+
+def _step_condition(step_name: str) -> str | None:
+    """Return the ``if:`` expression of the named step, if it has one."""
+    lines = CI_FILE.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines):
+        start = _STEP_START.match(line)
+        if not start or start.group(2).strip("\"'") != step_name:
+            continue
+        step_indent = len(start.group(1))
+        for body_line in lines[i + 1 :]:
+            if body_line.strip() and len(body_line) - len(body_line.lstrip()) <= step_indent:
+                break
+            match = re.match(r"^\s*if:\s*(.+?)\s*$", body_line)
+            if match:
+                return match.group(1)
+    return None
 
 
 def test_parser_reads_folded_and_plain_run_scalars() -> None:
@@ -126,10 +146,20 @@ def test_parallel_expression_is_direct_tests_plus_not_serial_only() -> None:
     assert expressions == [f"{BASE_EXPRESSION} and not serial_only"]
 
 
-def test_serial_step_selects_exactly_serial_only_without_xdist() -> None:
+def test_serial_step_selects_serial_only_minus_dedicated_gates_without_xdist() -> None:
     tokens = _serial_only_step()
-    assert _marker_expressions(tokens) == ["serial_only"]
+    assert _marker_expressions(tokens) == [SERIAL_EXPRESSION]
     assert not _has_xdist_flag(tokens)
+
+
+def test_serial_step_still_runs_when_the_parallel_step_fails() -> None:
+    """A failing parallel step must not hide serial_only failures in the same run."""
+    (serial_name,) = [
+        name for name, tokens in _pytest_steps().items() if tokens == _serial_only_step()
+    ]
+    condition = _step_condition(serial_name)
+    assert condition is not None, f"{serial_name} has no `if:` condition"
+    assert "!cancelled()" in condition or "always()" in condition, condition
 
 
 @pytest.mark.parametrize("selector", ["toxiproxy", "redis_pressure"])

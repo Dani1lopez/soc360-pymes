@@ -239,7 +239,7 @@ CI ejecuta la suite directa en dos pasos: en paralelo con pytest-xdist y despué
 
 ```bash
 uv run pytest -n 2 -m "not toxiproxy and not redis_pressure and not serial_only"
-uv run pytest -m serial_only
+uv run pytest -m "serial_only and not toxiproxy and not redis_pressure"
 ```
 
 Usar `-n 2`, no `-n auto`: los índices de worker `gw13` en adelante no están soportados (una DB de Redis por worker). Los gates de Toxiproxy y `redis_pressure` siguen en serie. Rollback al paso único original:

@@ -120,16 +120,17 @@ def _assert_worker_scoped(url: str) -> None:
 
 
 def _migration_database_url() -> str:
-    """DATABASE_URL_MIGRATION for this process (worker-scoped under xdist)."""
-    if root_conftest._XDIST_WORKER_ID:
-        return root_conftest.MIGRATION_DATABASE_URL
+    """DATABASE_URL_MIGRATION currently in the environment.
+
+    Under xdist the root conftest exports the worker-scoped value before the
+    app is imported; reading the live env value (not an import-time constant)
+    keeps the safety guards honest about what this process would really touch.
+    """
     return os.environ.get("DATABASE_URL_MIGRATION", "")
 
 
 def _app_database_url() -> str:
-    """DATABASE_URL for this process (worker-scoped under xdist)."""
-    if root_conftest._XDIST_WORKER_ID:
-        return root_conftest.TEST_DATABASE_URL
+    """DATABASE_URL currently in the environment (worker-scoped under xdist)."""
     return os.environ.get("DATABASE_URL", "")
 
 
@@ -152,8 +153,6 @@ def _clean_database() -> None:
         raise RuntimeError(
             "DATABASE_URL_MIGRATION is not set. Refusing to clean database."
         )
-    _assert_worker_scoped(db_url)
-
     match = re.match(
         r"postgresql\+asyncpg://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)",
         db_url,
@@ -170,6 +169,7 @@ def _clean_database() -> None:
             f"Database name '{dbname}' does not look like a disposable test database. "
             f"Refusing to drop tables. URL (safe): {_db_url_for_log(db_url)}"
         )
+    _assert_worker_scoped(db_url)
 
     async def _drop_all() -> None:
         conn = await asyncpg.connect(

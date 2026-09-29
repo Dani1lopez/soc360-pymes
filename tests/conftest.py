@@ -185,37 +185,8 @@ os.environ.setdefault(
     "ci-test-lock-secret-key-32bytes-min-do-not-use-in-prod",
 )
 
-from app.core.redis import close_pool, get_redis
-from app.dependencies import get_db, get_db_with_tenant
-from app.main import create_app
-from app.modules.tenants.models import Tenant
-from app.modules.users.models import User
-
-TENANT_A_ID = "11111111-1111-1111-1111-111111111111"
-TENANT_B_ID = "22222222-2222-2222-2222-222222222222"
-SUPERADMIN_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-ADMIN_A_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-ANALYST_A_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
-VIEWER_A_ID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
-ADMIN_B_ID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
-# Slice 1 (F2): ``ingestor`` is one of the five canonical F1 roles and is
-# explicitly DENIED on every Assets endpoint (D-006 / RBAC matrix). The
-# tests/conftest seed_data fixture inserts an ingestor user bound to
-# TENANT_A so the T11.2 RBAC matrix can verify the 403 cases.
-INGESTOR_A_ID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
-
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9_]+$")
 
-# Arbitrary advisory-lock key used only to serialize one-time, cluster-wide
-# test bootstrap steps (CREATE DATABASE, CREATE/ALTER ROLE) across
-# concurrent pytest-xdist workers. Distinct from the per-user_id keys the
-# app itself uses for pg_advisory_xact_lock in app/modules/auth/service.py.
-# Advisory locks are scoped per-database, not truly cluster-wide, so this
-# only serializes workers because every one of them takes it through a
-# connection to the same 'postgres' maintenance database (see
-# _maintenance_connection) — never move that lock onto a worker's own
-# database, or cross-worker serialization silently stops working.
-_XDIST_BOOTSTRAP_LOCK_KEY = 727271001
 
 
 def _worker_scoped_db_url(url: str, worker_id: str) -> str:
@@ -230,6 +201,10 @@ def _worker_scoped_db_url(url: str, worker_id: str) -> str:
     if not worker_id:
         return url
     parsed = make_url(url)
+    if (parsed.database or "").endswith(f"_{worker_id}"):
+        # Already scoped (e.g. the env was exported by this module and the
+        # module is evaluated again in the same process): never double-scope.
+        return url
     if not parsed.database or not _SAFE_IDENTIFIER.match(worker_id):
         raise RuntimeError(
             "Cannot derive a worker-scoped database name from "
@@ -249,6 +224,15 @@ TEST_DATABASE_URL = _worker_scoped_db_url(os.environ["DATABASE_URL"], _XDIST_WOR
 MIGRATION_DATABASE_URL = _worker_scoped_db_url(
     os.environ["DATABASE_URL_MIGRATION"], _XDIST_WORKER_ID
 )
+if _XDIST_WORKER_ID:
+    # The app's global engine and ``settings`` read these env vars when
+    # ``app.*`` is imported just below, so they MUST be worker-scoped BEFORE
+    # that import: otherwise code paths that open their own connection from
+    # ``settings.DATABASE_URL`` (e.g. the CSV streaming session) or read
+    # ``settings.DATABASE_URL_MIGRATION`` hit the shared, unmigrated database.
+    # Serial runs keep the raw env values untouched.
+    os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+    os.environ["DATABASE_URL_MIGRATION"] = MIGRATION_DATABASE_URL
 # Only MIGRATION_DATABASE_URL's database is ever CREATE DATABASE'd (see
 # _ensure_database_exists below) — this assumes DATABASE_URL and
 # DATABASE_URL_MIGRATION name the SAME database (just different roles
@@ -264,6 +248,38 @@ if _XDIST_WORKER_ID and (
         "DATABASE_URL and DATABASE_URL_MIGRATION must point at the same "
         "database name for pytest-xdist's per-worker database creation to work"
     )
+
+
+
+from app.core.redis import close_pool, get_redis
+from app.dependencies import get_db, get_db_with_tenant
+from app.main import create_app
+from app.modules.tenants.models import Tenant
+from app.modules.users.models import User
+
+TENANT_A_ID = "11111111-1111-1111-1111-111111111111"
+TENANT_B_ID = "22222222-2222-2222-2222-222222222222"
+SUPERADMIN_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+ADMIN_A_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+ANALYST_A_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+VIEWER_A_ID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+ADMIN_B_ID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+# Slice 1 (F2): ``ingestor`` is one of the five canonical F1 roles and is
+# explicitly DENIED on every Assets endpoint (D-006 / RBAC matrix). The
+# tests/conftest seed_data fixture inserts an ingestor user bound to
+# TENANT_A so the T11.2 RBAC matrix can verify the 403 cases.
+INGESTOR_A_ID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+
+# Arbitrary advisory-lock key used only to serialize one-time, cluster-wide
+# test bootstrap steps (CREATE DATABASE, CREATE/ALTER ROLE) across
+# concurrent pytest-xdist workers. Distinct from the per-user_id keys the
+# app itself uses for pg_advisory_xact_lock in app/modules/auth/service.py.
+# Advisory locks are scoped per-database, not truly cluster-wide, so this
+# only serializes workers because every one of them takes it through a
+# connection to the same 'postgres' maintenance database (see
+# _maintenance_connection) — never move that lock onto a worker's own
+# database, or cross-worker serialization silently stops working.
+_XDIST_BOOTSTRAP_LOCK_KEY = 727271001
 
 
 async def _acquire_bootstrap_lock(conn, timeout_seconds: float = 60.0) -> None:

@@ -409,7 +409,7 @@ def _fetch_scalar(db_url: str, sql: str) -> object:
     return _run_in_event_loop(_run())
 
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(scope="module")
 def isolated_db(migration_chain: tuple[str, str]) -> Iterator[None]:
     """Create a fresh isolated DB, run alembic to HEAD-1, yield, drop DB.
 
@@ -506,8 +506,15 @@ def isolated_db(migration_chain: tuple[str, str]) -> Iterator[None]:
         asyncio.run(_teardown())
 
 
+@pytest.mark.serial_only
+@pytest.mark.usefixtures("isolated_db")
 class _AssetsMigrationTestBase:
     """Shared helpers for online behavior tests.
+
+    ``serial_only``: ``isolated_db`` drops/creates the FIXED-NAME database
+    ``ISOLATED_DB``, so concurrent xdist workers would collide. The marker
+    and the fixture are inherited by every subclass; run them with
+    ``pytest -m serial_only`` and exclude them from parallel runs.
 
     Tests in this hierarchy share a single isolated DB; each test must
     clean its own rows before running so prior tests don't leak state.

@@ -122,6 +122,7 @@ jobs:
       # ROLLBACK: replace both steps with the original single serial step:
       #   run: uv run pytest -m "not toxiproxy and not redis_pressure"
       - name: Run direct tests (parallel, -n 2)
+        id: direct_tests_parallel
         env:
           SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
           PG_SUPERUSER: soc360_migration
@@ -131,11 +132,13 @@ jobs:
           -m "not toxiproxy and not redis_pressure and not serial_only"
 
       # Runs even when the parallel step failed, so one CI run reports every
-      # direct-test failure (as the former single step did). The extra exclusions
-      # keep tests owned by the dedicated Toxiproxy / Redis-pressure gates out of
-      # this step; they run after their own readiness checks below.
+      # direct-test failure (as the former single step did), but not when an
+      # earlier setup step failed: then the parallel step is skipped and this one
+      # would only add a misleading second failure. The extra exclusions keep
+      # tests owned by the dedicated Toxiproxy / Redis-pressure gates out of this
+      # step; they run after their own readiness checks below.
       - name: Run direct tests (serial_only)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.direct_tests_parallel.conclusion != 'skipped' }}
         env:
           SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
           PG_SUPERUSER: soc360_migration

@@ -19,6 +19,7 @@ CI_FILE = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.ym
 
 _STEP_START = re.compile(r"^(\s*)- name:\s*(.+?)\s*$")
 _RUN_KEY = re.compile(r"^(\s*)run:\s*(.*?)\s*$")
+_STEP_KEY = re.compile(r"^\s*([A-Za-z_-]+):\s*(.+?)\s*$")
 
 BASE_EXPRESSION = "not toxiproxy and not redis_pressure"
 # The serial step must not swallow tests owned by the dedicated Toxiproxy /
@@ -112,8 +113,12 @@ def _serial_only_step() -> list[str]:
     return matches[0]
 
 
-def _step_condition(step_name: str) -> str | None:
-    """Return the ``if:`` expression of the named step, if it has one."""
+def _step_key(step_name: str, key: str) -> str | None:
+    """Return the step-level ``key:`` value of the named step, if present.
+
+    Only keys at the step's own indentation count, so an ``if:`` inside a
+    multi-line ``run`` script or an ``env`` block is never mistaken for it.
+    """
     lines = CI_FILE.read_text(encoding="utf-8").splitlines()
     for i, line in enumerate(lines):
         start = _STEP_START.match(line)
@@ -121,12 +126,18 @@ def _step_condition(step_name: str) -> str | None:
             continue
         step_indent = len(start.group(1))
         for body_line in lines[i + 1 :]:
-            if body_line.strip() and len(body_line) - len(body_line.lstrip()) <= step_indent:
+            indent = len(body_line) - len(body_line.lstrip())
+            if body_line.strip() and indent <= step_indent:
                 break
-            match = re.match(r"^\s*if:\s*(.+?)\s*$", body_line)
-            if match:
-                return match.group(1)
+            match = _STEP_KEY.match(body_line)
+            if indent == step_indent + 2 and match and match.group(1) == key:
+                return match.group(2)
     return None
+
+
+def _step_name(tokens: list[str]) -> str:
+    (name,) = [n for n, t in _pytest_steps().items() if t == tokens]
+    return name
 
 
 def test_parser_reads_folded_and_plain_run_scalars() -> None:
@@ -152,14 +163,23 @@ def test_serial_step_selects_serial_only_minus_dedicated_gates_without_xdist() -
     assert not _has_xdist_flag(tokens)
 
 
-def test_serial_step_still_runs_when_the_parallel_step_fails() -> None:
-    """A failing parallel step must not hide serial_only failures in the same run."""
-    (serial_name,) = [
-        name for name, tokens in _pytest_steps().items() if tokens == _serial_only_step()
-    ]
-    condition = _step_condition(serial_name)
+def test_serial_step_runs_after_a_parallel_failure_but_not_after_a_setup_failure() -> None:
+    """The serial step must report next to a failed parallel step, yet stay skipped
+    when an earlier setup step (install, services, migrations) already failed.
+
+    ``steps.<id>.conclusion`` is ``skipped`` for a step that never ran, so
+    excluding it covers the setup-failure case; ``!cancelled()`` keeps the step
+    running after the parallel step fails. The whole condition is compared, not a
+    substring, so ``!always()`` or ``!cancelled() && success()`` cannot pass.
+    """
+    parallel_name = _step_name(_parallel_step())
+    serial_name = _step_name(_serial_only_step())
+    parallel_id = _step_key(parallel_name, "id")
+    assert parallel_id, f"{parallel_name} needs an `id:` so the serial step can gate on it"
+    condition = _step_key(serial_name, "if")
     assert condition is not None, f"{serial_name} has no `if:` condition"
-    assert "!cancelled()" in condition or "always()" in condition, condition
+    expected = f"${{{{ !cancelled() && steps.{parallel_id}.conclusion != 'skipped' }}}}"
+    assert " ".join(condition.split()) == expected, condition
 
 
 @pytest.mark.parametrize("selector", ["toxiproxy", "redis_pressure"])

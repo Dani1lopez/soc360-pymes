@@ -20,12 +20,14 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import make_url
 
 from app.core.config import settings
 from app.core.redis import close_pool
 from app.dependencies import get_current_user, get_db, get_db_with_tenant
 from app.main import create_app
 from app.modules.users.models import User
+import tests.conftest as root_conftest
 
 # Global marker for all tests in this directory
 pytestmark = pytest.mark.integration
@@ -99,6 +101,38 @@ def _is_safe_database_name(dbname: str) -> bool:
     return bool(_SAFE_TEST_TOKEN.search(normalized))
 
 
+def _assert_worker_scoped(url: str) -> None:
+    """Refuse a URL whose database is not this xdist worker's own database.
+
+    Under xdist every destructive step must target ``<db>_<worker_id>``; the
+    unscoped shared database would be wiped by every worker at once.
+    """
+    worker_id = root_conftest._XDIST_WORKER_ID
+    if not worker_id:
+        return
+    dbname = make_url(url).database or ""
+    if not dbname.endswith(f"_{worker_id}"):
+        raise RuntimeError(
+            f"Refusing to touch unscoped database '{dbname}' under pytest-xdist "
+            f"worker {worker_id!r}: expected a '_{worker_id}' worker database. "
+            f"URL (safe): {_db_url_for_log(url)}"
+        )
+
+
+def _migration_database_url() -> str:
+    """DATABASE_URL_MIGRATION for this process (worker-scoped under xdist)."""
+    if root_conftest._XDIST_WORKER_ID:
+        return root_conftest.MIGRATION_DATABASE_URL
+    return os.environ.get("DATABASE_URL_MIGRATION", "")
+
+
+def _app_database_url() -> str:
+    """DATABASE_URL for this process (worker-scoped under xdist)."""
+    if root_conftest._XDIST_WORKER_ID:
+        return root_conftest.TEST_DATABASE_URL
+    return os.environ.get("DATABASE_URL", "")
+
+
 def _clean_database() -> None:
     """Drop all tables in the public schema to ensure a pristine migration state.
 
@@ -113,11 +147,12 @@ def _clean_database() -> None:
     """
     import asyncpg
 
-    db_url = os.environ.get("DATABASE_URL_MIGRATION", "")
+    db_url = _migration_database_url()
     if not db_url:
         raise RuntimeError(
             "DATABASE_URL_MIGRATION is not set. Refusing to clean database."
         )
+    _assert_worker_scoped(db_url)
 
     match = re.match(
         r"postgresql\+asyncpg://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)",
@@ -177,10 +212,12 @@ def _run_alembic_upgrade(dry_run: bool = False, db_url: str = "") -> None:
     cmd = [
         sys.executable, "-m", "alembic", "upgrade", "head",
     ]
+    migration_url = _migration_database_url()
+    _assert_worker_scoped(migration_url)
     env = {
         **os.environ,
         "PYTHONPATH": project_root,
-        "DATABASE_URL_MIGRATION": os.environ["DATABASE_URL_MIGRATION"],
+        "DATABASE_URL_MIGRATION": migration_url,
     }
 
     try:
@@ -293,13 +330,20 @@ def prepare_database():
     - PostgreSQL is unreachable
     - Alembic upgrade fails
     """
-    db_url = os.environ.get("DATABASE_URL", "")
+    db_url = _app_database_url()
 
     if not db_url:
         raise RuntimeError(
             "DATABASE_URL not set. Cannot run integration tests. "
             "Set it to a test PostgreSQL instance."
         )
+
+    if root_conftest._XDIST_WORKER_ID:
+        # Create (idempotently, under the shared bootstrap lock) this worker's
+        # database and app role BEFORE the connectivity check: the worker DB
+        # does not exist yet on a fresh cluster. Serial runs skip this and
+        # keep the exact previous behavior (no maintenance-DB connection).
+        asyncio.run(root_conftest._bootstrap_worker_database())
 
     # Quick connectivity check before trying migrations
     try:

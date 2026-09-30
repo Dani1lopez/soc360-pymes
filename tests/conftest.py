@@ -329,6 +329,103 @@ async def _ensure_database_exists(conn, dbname: str) -> None:
         await conn.execute(f'CREATE DATABASE "{dbname}"')
 
 
+async def _ensure_app_role() -> None:
+    """Idempotently create the soc360_app login role for test GRANTs.
+
+    The role is created outside the schema transaction via a raw asyncpg
+    connection to avoid any transactional-DDL edge cases with CREATE ROLE.
+    Safe for repeated test runs (DO $$ IF NOT EXISTS).
+    """
+    import asyncpg
+
+    parsed = make_url(MIGRATION_DATABASE_URL)
+    if (
+        not parsed.username
+        or not parsed.password
+        or not parsed.host
+        or not parsed.port
+        or not parsed.database
+    ):
+        raise RuntimeError(
+            f"MIGRATION_DATABASE_URL is incomplete: missing one or more "
+            f"required URL components (user, password, host, port, database). "
+            f"Got: host={parsed.host}, port={parsed.port}, database={parsed.database}"
+        )
+    conn = await asyncpg.connect(
+        user=parsed.username,
+        password=parsed.password,
+        host=parsed.host,
+        port=parsed.port,
+        database=parsed.database,
+    )
+    # Extract the password for soc360_app from the test DATABASE_URL
+    # so _ensure_app_role and db_session use the same credential.
+    app_parsed = make_url(TEST_DATABASE_URL)
+    app_password = app_parsed.password
+    if not app_password:
+        raise RuntimeError(
+            "TEST_DATABASE_URL is missing its password component; "
+            "set DATABASE_URL in tests/.env"
+        )
+    try:
+        role_exists = await conn.fetchval(
+            "SELECT 1 FROM pg_roles WHERE rolname = 'soc360_app'"
+        )
+        action = "ALTER" if role_exists else "CREATE"
+        # Postgres does not accept $-parameters in ALTER/CREATE ROLE's
+        # PASSWORD clause (confirmed: raises a syntax error), so this
+        # can't be parameter-bound like a normal query. Double up any
+        # single quotes instead — the standard SQL string-literal
+        # escape, safe for arbitrary content unlike a fixed dollar-quote
+        # delimiter (which a password could coincidentally contain).
+        escaped_password = app_password.replace("'", "''")
+        await conn.execute(
+            f"{action} ROLE soc360_app WITH LOGIN PASSWORD "
+            f"'{escaped_password}' NOSUPERUSER NOBYPASSRLS"
+        )
+    finally:
+        await conn.close()
+
+
+async def _bootstrap_worker_database() -> None:
+    """Create this worker's database and app role (idempotent, locked).
+
+    Serializes only the steps that touch Postgres's cluster-wide shared
+    catalogs (pg_database for CREATE DATABASE, pg_authid for CREATE/ALTER
+    ROLE) — concurrent workers running these can fail with "tuple
+    concurrently updated" on those catalogs. Migrations that follow target
+    each worker's own, already-isolated database, so they do NOT need the
+    lock; holding it that long would serialize every worker's full
+    migration cycle, and a fixed lock-wait timeout would then have to scale
+    with the worker count. Shared by the root and integration
+    ``prepare_database`` fixtures under xdist.
+    """
+    lock_conn = await _maintenance_connection()
+    try:
+        await _acquire_bootstrap_lock(lock_conn)
+        try:
+            await _ensure_database_exists(
+                lock_conn, make_url(MIGRATION_DATABASE_URL).database
+            )
+            await _ensure_app_role()
+        finally:
+            # Best-effort: if the connection itself is what broke (e.g. the
+            # server restarted mid-bootstrap), this unlock call would also
+            # fail and its error would replace — and hide — the real
+            # exception above. Postgres releases session advisory locks
+            # automatically when the connection closes (see the outer
+            # finally), so this is a courtesy, not the only way the lock
+            # gets released.
+            try:
+                await lock_conn.execute(
+                    f"SELECT pg_advisory_unlock({_XDIST_BOOTSTRAP_LOCK_KEY})"
+                )
+            except Exception:
+                pass
+    finally:
+        await lock_conn.close()
+
+
 def _assert_safe_test_database() -> None:
     """Fail closed before any destructive migration reset.
 
@@ -376,63 +473,6 @@ def _run_alembic(*args: str) -> None:
 # ✅ SYNC fixture — usa asyncio.run() para no contaminar ningún loop de test
 @pytest.fixture(scope="session", autouse=True)
 def prepare_database():
-    async def _ensure_app_role() -> None:
-        """Idempotently create the soc360_app login role for test GRANTs.
-
-        The role is created outside the schema transaction via a raw asyncpg
-        connection to avoid any transactional-DDL edge cases with CREATE ROLE.
-        Safe for repeated test runs (DO $$ IF NOT EXISTS).
-        """
-        import asyncpg
-
-        parsed = make_url(MIGRATION_DATABASE_URL)
-        if (
-            not parsed.username
-            or not parsed.password
-            or not parsed.host
-            or not parsed.port
-            or not parsed.database
-        ):
-            raise RuntimeError(
-                f"MIGRATION_DATABASE_URL is incomplete: missing one or more "
-                f"required URL components (user, password, host, port, database). "
-                f"Got: host={parsed.host}, port={parsed.port}, database={parsed.database}"
-            )
-        conn = await asyncpg.connect(
-            user=parsed.username,
-            password=parsed.password,
-            host=parsed.host,
-            port=parsed.port,
-            database=parsed.database,
-        )
-        # Extract the password for soc360_app from the test DATABASE_URL
-        # so _ensure_app_role and db_session use the same credential.
-        app_parsed = make_url(TEST_DATABASE_URL)
-        app_password = app_parsed.password
-        if not app_password:
-            raise RuntimeError(
-                "TEST_DATABASE_URL is missing its password component; "
-                "set DATABASE_URL in tests/.env"
-            )
-        try:
-            role_exists = await conn.fetchval(
-                "SELECT 1 FROM pg_roles WHERE rolname = 'soc360_app'"
-            )
-            action = "ALTER" if role_exists else "CREATE"
-            # Postgres does not accept $-parameters in ALTER/CREATE ROLE's
-            # PASSWORD clause (confirmed: raises a syntax error), so this
-            # can't be parameter-bound like a normal query. Double up any
-            # single quotes instead — the standard SQL string-literal
-            # escape, safe for arbitrary content unlike a fixed dollar-quote
-            # delimiter (which a password could coincidentally contain).
-            escaped_password = app_password.replace("'", "''")
-            await conn.execute(
-                f"{action} ROLE soc360_app WITH LOGIN PASSWORD "
-                f"'{escaped_password}' NOSUPERUSER NOBYPASSRLS"
-            )
-        finally:
-            await conn.close()
-
     def _run_migrations() -> None:
         # Drop everything and re-run the full Alembic chain so RLS
         # policies, GRANTs, triggers, and indexes are created exactly as
@@ -455,43 +495,9 @@ def prepare_database():
             _run_migrations()
             return
 
-        lock_conn = await _maintenance_connection()
-        try:
-            # Serialize only the steps that touch Postgres's cluster-wide
-            # shared catalogs (pg_database for CREATE DATABASE, pg_authid
-            # for CREATE/ALTER ROLE) — concurrent workers running these can
-            # fail with "tuple concurrently updated" on those catalogs. The
-            # Alembic downgrade/upgrade that follows targets each worker's
-            # own, already-isolated database, so it does NOT need the lock;
-            # holding it that long would serialize every worker's full
-            # migration cycle one after another, and a fixed lock-wait
-            # timeout would then have to scale with the worker count to
-            # avoid false-positive timeouts.
-            await _acquire_bootstrap_lock(lock_conn)
-            try:
-                await _ensure_database_exists(
-                    lock_conn, make_url(MIGRATION_DATABASE_URL).database
-                )
-                await _ensure_app_role()
-            finally:
-                # Best-effort: if the connection itself is what broke (e.g.
-                # the server restarted mid-bootstrap), this unlock call
-                # would also fail and its error would replace — and hide —
-                # the real exception from _ensure_database_exists /
-                # _ensure_app_role above. Postgres releases session
-                # advisory locks automatically when the connection closes
-                # (see the outer finally), so this is a courtesy, not the
-                # only way the lock gets released.
-                try:
-                    await lock_conn.execute(
-                        f"SELECT pg_advisory_unlock({_XDIST_BOOTSTRAP_LOCK_KEY})"
-                    )
-                except Exception:
-                    pass
-            # Runs unlocked, in parallel across workers — see _run_migrations.
-            _run_migrations()
-        finally:
-            await lock_conn.close()
+        await _bootstrap_worker_database()
+        # Runs unlocked, in parallel across workers — see _run_migrations.
+        _run_migrations()
 
     async def _teardown() -> None:
         _assert_safe_test_database()

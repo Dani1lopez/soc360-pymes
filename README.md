@@ -235,6 +235,19 @@ uv run mypy .
 uv run pytest -v
 ```
 
+CI runs the direct suite in two steps: parallel with pytest-xdist, then the `serial_only` tests (fixed-name databases and migrations) serially:
+
+```bash
+uv run pytest -n 2 -m "not toxiproxy and not redis_pressure and not serial_only"
+uv run pytest -m "serial_only and not toxiproxy and not redis_pressure"
+```
+
+Use `-n 2`, not `-n auto`: worker indexes `gw13` and above are unsupported (one Redis DB per worker). Toxiproxy and `redis_pressure` gates stay serial. Rollback to the original single step:
+
+```bash
+uv run pytest -m "not toxiproxy and not redis_pressure"
+```
+
 Key testing patterns:
 - Concurrency tests for advisory locks and parallel sessions.
 - Fail-closed tests for Redis-down scenarios (auth, revocation, locks, DLQ).

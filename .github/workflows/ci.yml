@@ -113,12 +113,39 @@ jobs:
             echo "context=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run direct tests
+      # Direct tests run in two exhaustive, non-overlapping selections
+      # (guarded by tests/unit/test_ci_pytest_selection.py and
+      # tests/unit/test_xdist_serial_partition.py).
+      # Workers are pinned to 2: `-n auto` is NOT safe because worker index
+      # gw13+ raises at tests/conftest.py import (one Redis DB per worker).
+      # Toxiproxy and redis_pressure gates below stay serial by design.
+      # ROLLBACK: replace both steps with the original single serial step:
+      #   run: uv run pytest -m "not toxiproxy and not redis_pressure"
+      - name: Run direct tests (parallel, -n 2)
+        id: direct_tests_parallel
         env:
           SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
           PG_SUPERUSER: soc360_migration
           PG_SUPERUSER_PASSWORD: soc360_test_password
-        run: uv run pytest -m "not toxiproxy and not redis_pressure"
+        run: >
+          uv run pytest -n 2
+          -m "not toxiproxy and not redis_pressure and not serial_only"
+
+      # Runs even when the parallel step failed, so one CI run reports every
+      # direct-test failure (as the former single step did), but not when an
+      # earlier setup step failed: then the parallel step is skipped and this one
+      # would only add a misleading second failure. The extra exclusions keep
+      # tests owned by the dedicated Toxiproxy / Redis-pressure gates out of this
+      # step; they run after their own readiness checks below.
+      - name: Run direct tests (serial_only)
+        if: ${{ !cancelled() && steps.direct_tests_parallel.conclusion != 'skipped' }}
+        env:
+          SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
+          PG_SUPERUSER: soc360_migration
+          PG_SUPERUSER_PASSWORD: soc360_test_password
+        run: >
+          uv run pytest
+          -m "serial_only and not toxiproxy and not redis_pressure"
 
       - name: Wait for Toxiproxy readiness
         shell: bash

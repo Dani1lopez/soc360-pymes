@@ -15,6 +15,7 @@ would let every worker drop/migrate the SAME shared database while
 from __future__ import annotations
 
 import asyncio
+import inspect
 from types import SimpleNamespace
 from unittest import mock
 
@@ -31,9 +32,9 @@ WORKER_APP_URL = "postgresql+asyncpg://app:secret@localhost:5434/soc360_test_gw1
 
 @pytest.fixture
 def xdist_worker(monkeypatch):
-    """Simulate worker ``gw1``: worker-scoped constants, shared raw env."""
-    monkeypatch.setenv("DATABASE_URL_MIGRATION", SHARED_MIGRATION_URL)
-    monkeypatch.setenv("DATABASE_URL", SHARED_APP_URL)
+    """Simulate worker ``gw1``: the root conftest exported worker-scoped env."""
+    monkeypatch.setenv("DATABASE_URL_MIGRATION", WORKER_MIGRATION_URL)
+    monkeypatch.setenv("DATABASE_URL", WORKER_APP_URL)
     monkeypatch.setattr(root_conftest, "_XDIST_WORKER_ID", "gw1")
     monkeypatch.setattr(root_conftest, "MIGRATION_DATABASE_URL", WORKER_MIGRATION_URL)
     monkeypatch.setattr(root_conftest, "TEST_DATABASE_URL", WORKER_APP_URL)
@@ -70,6 +71,33 @@ class TestScopedUrls:
         assert integ._app_database_url() == SHARED_APP_URL
 
 
+class TestEnvExportedBeforeAppImport:
+    """The app engine/settings read env at import, so it must be scoped first."""
+
+    def test_worker_scoping_is_idempotent(self):
+        once = root_conftest._worker_scoped_db_url(SHARED_APP_URL, "gw1")
+        assert once == WORKER_APP_URL
+        assert root_conftest._worker_scoped_db_url(once, "gw1") == WORKER_APP_URL
+
+    def test_root_conftest_exports_scoped_env_before_app_import(self):
+        source = inspect.getsource(root_conftest)
+        export = source.index('os.environ["DATABASE_URL"] = TEST_DATABASE_URL')
+        app_import = source.index("from app.core.redis import")
+        assert export < app_import
+
+    @pytest.mark.skipif(
+        not root_conftest._XDIST_WORKER_ID, reason="only meaningful under xdist"
+    )
+    def test_settings_and_app_engine_use_worker_database(self):
+        from app.core.config import settings
+        from app.core.database import engine
+
+        worker = root_conftest._XDIST_WORKER_ID
+        assert settings.DATABASE_URL == root_conftest.TEST_DATABASE_URL
+        assert settings.DATABASE_URL_MIGRATION == root_conftest.MIGRATION_DATABASE_URL
+        assert engine.url.database.endswith(f"_{worker}")
+
+
 class TestCleanDatabase:
     def test_xdist_cleanup_connects_only_to_worker_db(self, xdist_worker, monkeypatch):
         connect = _fake_asyncpg(monkeypatch)
@@ -85,17 +113,16 @@ class TestCleanDatabase:
 
     def test_cleanup_refuses_unscoped_db_under_xdist(self, xdist_worker, monkeypatch):
         connect = _fake_asyncpg(monkeypatch)
-        # Worker-scoped constant leaked back to the shared name: refuse.
-        monkeypatch.setattr(root_conftest, "MIGRATION_DATABASE_URL", SHARED_MIGRATION_URL)
+        # Unscoped URL leaked back into the env: refuse.
+        monkeypatch.setenv("DATABASE_URL_MIGRATION", SHARED_MIGRATION_URL)
         with pytest.raises(RuntimeError, match="unscoped"):
             integ._clean_database()
         connect.assert_not_awaited()
 
     def test_allowlist_rejects_non_test_worker_db(self, xdist_worker, monkeypatch):
         connect = _fake_asyncpg(monkeypatch)
-        monkeypatch.setattr(
-            root_conftest,
-            "MIGRATION_DATABASE_URL",
+        monkeypatch.setenv(
+            "DATABASE_URL_MIGRATION",
             "postgresql+asyncpg://mig:secret@localhost:5434/prod_gw1",
         )
         with pytest.raises(RuntimeError, match="disposable test database") as exc:

@@ -14,6 +14,10 @@ from pathlib import Path
 
 import pytest
 
+# These tests run alembic upgrade/downgrade against the shared, UNSCOPED
+# database (not a per-worker one), so they must not run on concurrent xdist
+# workers. Run them with ``pytest -m serial_only``.
+pytestmark = pytest.mark.serial_only
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_INDEXES = {

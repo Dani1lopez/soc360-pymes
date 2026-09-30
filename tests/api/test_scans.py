@@ -298,16 +298,25 @@ async def _create_scan_via_api(
 
 
 async def _spy_on_event_bus(
+    tenant_client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> list[dict[str, Any]]:
     """Wrap ``publish`` on the EventBus singleton the scans routes resolve.
 
+    Resolves the bus through ``tenant_client``'s own ``get_event_bus``
+    dependency override (the exact call the route handler's DI will make)
+    rather than calling ``event_deps.get_event_bus()`` directly, so the
+    spy always attaches to the instance the request actually uses — see
+    ``tests/conftest.py::_rebind_event_bus_if_stale`` and
+    ``tests/api/test_assets.py::TestEventsSpy`` for the same pattern and
+    the fixture-resolution-order hazard it avoids.
+
     Returns the recorded publications as dicts with ``event_type``,
     ``stream``, ``changed_fields`` and ``scan_id``.
     """
-    from app.dependencies import event_deps
+    from app.dependencies.event_deps import get_event_bus
 
-    bus = await event_deps.get_event_bus()
+    bus = await tenant_client.app.dependency_overrides[get_event_bus]()
     calls: list[dict[str, Any]] = []
     original_publish = bus.publish
 
@@ -1234,7 +1243,7 @@ class TestEvents:
     ) -> None:
         asset_id = await _seed_asset(db_session, "192.0.2.100")
 
-        calls = await _spy_on_event_bus(monkeypatch)
+        calls = await _spy_on_event_bus(tenant_client, monkeypatch)
 
         created = await _create_scan_via_api(
             tenant_client,
@@ -1263,7 +1272,7 @@ class TestEvents:
         )
 
         # Install the spy AFTER the POST so only the PATCH is observed.
-        calls = await _spy_on_event_bus(monkeypatch)
+        calls = await _spy_on_event_bus(tenant_client, monkeypatch)
 
         patched = await tenant_client.patch(
             f"/api/v1/scans/{created['id']}",
@@ -1296,7 +1305,7 @@ class TestEvents:
             _scan_payload(TENANT_A_ID, asset_id=asset_id),
         )
 
-        calls = await _spy_on_event_bus(monkeypatch)
+        calls = await _spy_on_event_bus(tenant_client, monkeypatch)
 
         deleted = await tenant_client.delete(
             f"/api/v1/scans/{created['id']}", headers=admin_a_headers
@@ -1327,7 +1336,7 @@ class TestEvents:
 
         asset_id = await _seed_asset(db_session, "192.0.2.103")
 
-        calls = await _spy_on_event_bus(monkeypatch)
+        calls = await _spy_on_event_bus(tenant_client, monkeypatch)
         commit_was_invoked = False
 
         async def _boom(*args: Any, **kwargs: Any) -> Any:

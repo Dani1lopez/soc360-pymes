@@ -1075,10 +1075,10 @@ class TestEventsSpy:
     async def test_post_publishes_asset_created(
         self, tenant_client: AsyncClient, admin_a_headers, seed_data, monkeypatch
     ) -> None:
-        from app.dependencies import event_deps
+        from app.dependencies.event_deps import get_event_bus
 
         # Force the singleton to be created (uses the test redis pool).
-        bus = await event_deps.get_event_bus()
+        bus = await tenant_client.app.dependency_overrides[get_event_bus]()
 
         calls: list[dict[str, Any]] = []
         original_publish = bus.publish
@@ -1119,9 +1119,9 @@ class TestEventsSpy:
     async def test_patch_publishes_asset_updated_with_changed_fields(
         self, tenant_client: AsyncClient, admin_a_headers, seed_data, monkeypatch
     ) -> None:
-        from app.dependencies import event_deps
+        from app.dependencies.event_deps import get_event_bus
 
-        bus = await event_deps.get_event_bus()
+        bus = await tenant_client.app.dependency_overrides[get_event_bus]()
 
         calls: list[dict[str, Any]] = []
         original_publish = bus.publish
@@ -1169,9 +1169,9 @@ class TestEventsSpy:
     async def test_delete_publishes_asset_deleted(
         self, tenant_client: AsyncClient, admin_a_headers, seed_data, monkeypatch
     ) -> None:
-        from app.dependencies import event_deps
+        from app.dependencies.event_deps import get_event_bus
 
-        bus = await event_deps.get_event_bus()
+        bus = await tenant_client.app.dependency_overrides[get_event_bus]()
 
         calls: list[dict[str, Any]] = []
         original_publish = bus.publish
@@ -1220,10 +1220,10 @@ class TestEventsSpy:
         invariant is broken. The API MUST surface a 5xx (the exact code
         is not asserted) and the spy MUST NOT record a publish call.
         """
-        from app.dependencies import event_deps
+        from app.dependencies.event_deps import get_event_bus
         from app.modules.assets import service
 
-        bus = await event_deps.get_event_bus()
+        bus = await tenant_client.app.dependency_overrides[get_event_bus]()
 
         calls: list[dict[str, Any]] = []
         original_publish = bus.publish
@@ -1234,7 +1234,11 @@ class TestEventsSpy:
 
         monkeypatch.setattr(bus, "publish", _spy)
 
+        commit_was_invoked = False
+
         async def _boom(*args, **kwargs):
+            nonlocal commit_was_invoked
+            commit_was_invoked = True
             raise RuntimeError("simulated commit failure for T11.7 negative test")
 
         monkeypatch.setattr(service, "_real_commit_marker", None, raising=False)
@@ -1254,23 +1258,27 @@ class TestEventsSpy:
                     "value": "192.0.2.104",
                 },
             )
+        except RuntimeError as exc:
+            # Starlette's ``ServerErrorMiddleware`` re-raises after sending
+            # the 500 debug response when ``debug=True``. It must be
+            # exactly the simulated commit failure, not some unrelated
+            # error that would also reach here silently.
+            assert "simulated commit failure" in str(exc)
+        else:
             # Any 5xx is acceptable. 4xx means the router rejected the
             # request before commit, which would defeat the test purpose.
             assert (
                 resp.status_code >= 500
             ), f"commit failure MUST yield 5xx; got {resp.status_code}: {resp.text}"
-        except AssertionError:
-            # A failed assertion above is a TEST failure, not the expected
-            # ``ServerErrorMiddleware`` re-raise: never swallow it.
-            raise
-        except Exception:
-            # Starlette's ``ServerErrorMiddleware`` re-raises after sending
-            # the 500 debug response when ``debug=True``. The 5xx was
-            # already written to the wire; only the spy assertion matters
-            # from this side of the call.
-            pass
         finally:
             monkeypatch.setattr(AsyncSession, "commit", original_commit, raising=True)
+
+        # Prove the request actually reached the patched commit — otherwise
+        # a 5xx from an unrelated cause (e.g. the request failing before
+        # commit) would satisfy the status-code assertion above without
+        # exercising the publish-after-commit invariant this test claims
+        # to cover.
+        assert commit_was_invoked, "request never reached the patched commit"
 
         # Outside the try/except: the publish-after-commit invariant.
         assert (

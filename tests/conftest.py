@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import subprocess
+import time
 from pathlib import Path
 
 import bcrypt
@@ -68,10 +70,113 @@ if _missing:
 
 os.environ.setdefault("POSTGRES_USER", "soc360_app")
 os.environ.setdefault("POSTGRES_DB", "soc360_test")
+# ---------------------------------------------------------------------------
+# Redis logical-DB isolation (XD-01)
+# ---------------------------------------------------------------------------
+# Redis defaults to 16 logical databases (0..15). db=14 is reserved for the
+# serial ``tenant_client`` real-Redis fixture and db=15 for the serial
+# app pool / Toxiproxy flush target (the Toxiproxy fixtures are serial-only:
+# see ``_assert_serial_toxiproxy``), and db=0 is reserved/avoided because of
+# ad-hoc dev traffic on db=0, so only indices 1..13 are assignable to xdist
+# workers (worker indices 0..12, shifted by +1 so no worker ever lands on
+# db=0); anything else is rejected instead of silently colliding.
+# Under xdist the app settings pool and the tenant_client real client
+# intentionally share ONE worker-specific DB: both run in the same worker
+# process and the fixture teardown flushes only that DB.
+_XDIST_WORKER_REDIS_DB_LIMIT = 13  # exclusive upper bound on worker index: 0..12 (db 1..13)
+_SERIAL_TENANT_REDIS_DB = 14
+_SERIAL_APP_REDIS_DB = 15
+
+
+def _xdist_worker_id() -> str:
+    """Return e.g. 'gw0', 'gw1', or '' when not running under pytest-xdist."""
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "")
+    return worker if worker and worker != "master" else ""
+
+
+def _worker_scoped_redis_db(worker_id: str) -> int:
+    """Map an xdist worker id to its dedicated Redis logical database.
+
+    Serial runs keep the app-pool default (db=15); every xdist worker gets
+    db=<worker index + 1> (gw0->1, gw1->2, ...), shifted by one so no worker
+    ever lands on db=0 (reserved for ad-hoc dev traffic), and bounded so no
+    worker can land on the reserved serial databases (14/15) either.
+    Unsupported worker ids are rejected with an explicit error instead of
+    silently colliding with another worker's state.
+    """
+    if not worker_id:
+        return _SERIAL_APP_REDIS_DB
+    match = re.fullmatch(r"gw(\d+)", worker_id)
+    if not match:
+        raise RuntimeError(
+            f"Unsupported pytest-xdist worker id {worker_id!r}: cannot "
+            "derive a Redis logical database (expected 'gw<index>')."
+        )
+    index = int(match.group(1))
+    if index >= _XDIST_WORKER_REDIS_DB_LIMIT:
+        raise RuntimeError(
+            f"pytest-xdist worker {worker_id!r} cannot be assigned a Redis "
+            f"logical database: index {index} exceeds the assignable range "
+            f"0..{_XDIST_WORKER_REDIS_DB_LIMIT - 1} (worker indices map to "
+            f"databases 1..{_XDIST_WORKER_REDIS_DB_LIMIT}; db=0 is reserved "
+            "for ad-hoc dev traffic, and databases "
+            f"{_SERIAL_TENANT_REDIS_DB} and {_SERIAL_APP_REDIS_DB} are "
+            "reserved for the serial tenant_client and Toxiproxy fixtures). "
+            f"Run with -n {_XDIST_WORKER_REDIS_DB_LIMIT} or fewer workers."
+        )
+    return index + 1
+
+
+def redis_db_value() -> int:
+    """Resolve the Redis logical DB for this process.
+
+    Serial runs honor an explicit ``REDIS_DB``; with none set they default
+    to db=15. Under pytest-xdist the worker mapping always wins, even when
+    ``REDIS_DB`` is exported (e.g. CI sets ``REDIS_DB=15``, the serial
+    Toxiproxy/app-pool target): honoring it would put every worker on the
+    same shared logical DB. This must run before any ``app.core`` import
+    so ``app.core.config.settings`` and the app's shared connection pool
+    bind to this worker's own logical DB.
+    """
+    worker_id = _xdist_worker_id()
+    if worker_id:
+        return _worker_scoped_redis_db(worker_id)
+    env_value = os.environ.get("REDIS_DB")
+    if env_value is not None:
+        return int(env_value)
+    return _worker_scoped_redis_db(worker_id)
+
+
+def _tenant_client_redis_db(worker_id: str) -> int:
+    """Redis DB for the ``tenant_client`` real-Redis fixture.
+
+    Serial runs keep the historical db=14 (isolated from the app pool's
+    db=15 and from ad-hoc dev traffic on db=0). Under xdist the fixture
+    shares the app pool's worker-specific DB (db=<worker index + 1>, never
+    db=0): both run in the same worker process, so a per-worker DB isolates
+    them from other workers, while the per-test flushdb teardown shows the
+    app pool exactly the serial behavior it already expects.
+    """
+    if not worker_id:
+        return _SERIAL_TENANT_REDIS_DB
+    return _worker_scoped_redis_db(worker_id)
+
+
 # Structured Redis settings (PR1 #260 — REDIS_URL is rejected)
 os.environ.setdefault("REDIS_HOST", "localhost")
 os.environ.setdefault("REDIS_PORT", "6379")
-os.environ.setdefault("REDIS_DB", "15")
+# Worker-specific Redis logical DB (XD-01): resolved (and pinned into the
+# environment) BEFORE any app.core import so settings REDIS_DB and the
+# app's shared connection pool bind to this worker's own logical DB.
+# Serial runs keep ``setdefault`` semantics: an explicit REDIS_DB wins.
+# Under xdist the worker mapping is authoritative and OVERWRITES the
+# environment, because CI exports REDIS_DB=15 and both workers would
+# otherwise bind the same shared db=15.
+_resolved_redis_db = redis_db_value()
+if _xdist_worker_id():
+    os.environ["REDIS_DB"] = str(_resolved_redis_db)
+else:
+    os.environ.setdefault("REDIS_DB", str(_resolved_redis_db))
 os.environ.setdefault("REDIS_PASSWORD", "soc360_redis_dev_password")
 # PR5b' distributed lock secret (must be at least 32 bytes to satisfy production
 # validation in app/core/config.py; this default is test-only).
@@ -99,8 +204,129 @@ ADMIN_B_ID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
 # TENANT_A so the T11.2 RBAC matrix can verify the 403 cases.
 INGESTOR_A_ID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
 
-TEST_DATABASE_URL = os.environ["DATABASE_URL"]
-MIGRATION_DATABASE_URL = os.environ["DATABASE_URL_MIGRATION"]
+_SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9_]+$")
+
+# Arbitrary advisory-lock key used only to serialize one-time, cluster-wide
+# test bootstrap steps (CREATE DATABASE, CREATE/ALTER ROLE) across
+# concurrent pytest-xdist workers. Distinct from the per-user_id keys the
+# app itself uses for pg_advisory_xact_lock in app/modules/auth/service.py.
+# Advisory locks are scoped per-database, not truly cluster-wide, so this
+# only serializes workers because every one of them takes it through a
+# connection to the same 'postgres' maintenance database (see
+# _maintenance_connection) — never move that lock onto a worker's own
+# database, or cross-worker serialization silently stops working.
+_XDIST_BOOTSTRAP_LOCK_KEY = 727271001
+
+
+def _worker_scoped_db_url(url: str, worker_id: str) -> str:
+    """Append the xdist worker id to the URL's database name.
+
+    Every pytest-xdist worker is a separate process running the full suite
+    against the SAME Postgres instance. Without a distinct database per
+    worker, two workers would concurrently ``alembic downgrade base`` /
+    ``upgrade head`` the same physical database, corrupting each other's
+    schema and data mid-test-run.
+    """
+    if not worker_id:
+        return url
+    parsed = make_url(url)
+    if not parsed.database or not _SAFE_IDENTIFIER.match(worker_id):
+        raise RuntimeError(
+            "Cannot derive a worker-scoped database name from "
+            f"{parsed.render_as_string(hide_password=True)!r} and worker id "
+            f"{worker_id!r}."
+        )
+    # render_as_string(hide_password=False) is required: str(url) masks the
+    # password as "***" by default, which would silently break every
+    # connection made with this worker-scoped URL.
+    return parsed.set(database=f"{parsed.database}_{worker_id}").render_as_string(
+        hide_password=False
+    )
+
+
+_XDIST_WORKER_ID = _xdist_worker_id()
+TEST_DATABASE_URL = _worker_scoped_db_url(os.environ["DATABASE_URL"], _XDIST_WORKER_ID)
+MIGRATION_DATABASE_URL = _worker_scoped_db_url(
+    os.environ["DATABASE_URL_MIGRATION"], _XDIST_WORKER_ID
+)
+# Only MIGRATION_DATABASE_URL's database is ever CREATE DATABASE'd (see
+# _ensure_database_exists below) — this assumes DATABASE_URL and
+# DATABASE_URL_MIGRATION name the SAME database (just different roles
+# connecting to it). If that ever stops being true, the app-role's
+# database silently never gets created under xdist. Only checked under
+# xdist, where CREATE DATABASE actually runs — a plain `assert` would also
+# be stripped under `python -O`, and running it unconditionally would
+# break single-process setups that never needed the two URLs to agree.
+if _XDIST_WORKER_ID and (
+    make_url(TEST_DATABASE_URL).database != make_url(MIGRATION_DATABASE_URL).database
+):
+    raise RuntimeError(
+        "DATABASE_URL and DATABASE_URL_MIGRATION must point at the same "
+        "database name for pytest-xdist's per-worker database creation to work"
+    )
+
+
+async def _acquire_bootstrap_lock(conn, timeout_seconds: float = 60.0) -> None:
+    """Bounded-wait acquire of the xdist bootstrap advisory lock.
+
+    A plain ``pg_advisory_lock()`` blocks indefinitely with no timeout
+    option of its own (``lock_timeout`` does not apply to it). Polling
+    ``pg_try_advisory_lock`` instead means a wedged worker (crashed mid
+    bootstrap, connection stuck) produces a clear timeout error instead of
+    hanging every other worker — and the whole CI job — until the outer
+    job timeout kills it.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        acquired = await conn.fetchval(
+            f"SELECT pg_try_advisory_lock({_XDIST_BOOTSTRAP_LOCK_KEY})"
+        )
+        if acquired:
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Timed out after {timeout_seconds}s waiting for the xdist "
+                "bootstrap advisory lock — another worker's setup may be stuck."
+            )
+        await asyncio.sleep(0.2)
+
+
+async def _maintenance_connection():
+    """Open an asyncpg connection to the ``postgres`` maintenance database.
+
+    Uses the migration role's credentials. Needed for anything that can't
+    target a possibly-not-yet-existing worker database — CREATE DATABASE,
+    and the xdist bootstrap advisory lock, which must be held on a
+    connection that outlives and is independent of that worker database.
+    """
+    import asyncpg
+
+    admin_url = make_url(MIGRATION_DATABASE_URL)
+    return await asyncpg.connect(
+        user=admin_url.username,
+        password=admin_url.password,
+        host=admin_url.host,
+        port=admin_url.port,
+        database="postgres",
+    )
+
+
+async def _ensure_database_exists(conn, dbname: str) -> None:
+    """``CREATE DATABASE`` if it doesn't exist yet (idempotent, per worker).
+
+    Takes an already-open maintenance-DB connection (see
+    ``_maintenance_connection``) — Postgres forbids ``CREATE DATABASE``
+    inside a transaction block, and the target database itself may not
+    exist yet, so no other connection target works here.
+    """
+    if not _SAFE_IDENTIFIER.match(dbname):
+        raise RuntimeError(f"Refusing to create database with unsafe name: {dbname!r}")
+
+    exists = await conn.fetchval(
+        "SELECT 1 FROM pg_database WHERE datname = $1", dbname
+    )
+    if not exists:
+        await conn.execute(f'CREATE DATABASE "{dbname}"')
 
 
 def _assert_safe_test_database() -> None:
@@ -193,20 +419,79 @@ def prepare_database():
                 "SELECT 1 FROM pg_roles WHERE rolname = 'soc360_app'"
             )
             action = "ALTER" if role_exists else "CREATE"
+            # Postgres does not accept $-parameters in ALTER/CREATE ROLE's
+            # PASSWORD clause (confirmed: raises a syntax error), so this
+            # can't be parameter-bound like a normal query. Double up any
+            # single quotes instead — the standard SQL string-literal
+            # escape, safe for arbitrary content unlike a fixed dollar-quote
+            # delimiter (which a password could coincidentally contain).
+            escaped_password = app_password.replace("'", "''")
             await conn.execute(
-                f"{action} ROLE soc360_app WITH LOGIN PASSWORD '{app_password}' "
-                "NOSUPERUSER NOBYPASSRLS"
+                f"{action} ROLE soc360_app WITH LOGIN PASSWORD "
+                f"'{escaped_password}' NOSUPERUSER NOBYPASSRLS"
             )
         finally:
             await conn.close()
 
-    async def _setup() -> None:
-        _assert_safe_test_database()
-        await _ensure_app_role()
-        # Drop everything and re-run the full Alembic chain so RLS policies,
-        # GRANTs, triggers, and indexes are created exactly as in production.
+    def _run_migrations() -> None:
+        # Drop everything and re-run the full Alembic chain so RLS
+        # policies, GRANTs, triggers, and indexes are created exactly as
+        # in production. Shared by both the single-process and xdist
+        # paths below so they can't silently drift apart.
         _run_alembic("downgrade", "base")
         _run_alembic("upgrade", "head")
+
+    async def _setup() -> None:
+        _assert_safe_test_database()
+
+        if not _XDIST_WORKER_ID:
+            # Single-process run: no other worker to race against, so skip
+            # the maintenance-DB connection and lock entirely. This keeps
+            # the exact pre-xdist behavior — in particular, it does not
+            # newly require the migration role to have CONNECT on the
+            # 'postgres' maintenance database, which some managed/hardened
+            # Postgres setups restrict.
+            await _ensure_app_role()
+            _run_migrations()
+            return
+
+        lock_conn = await _maintenance_connection()
+        try:
+            # Serialize only the steps that touch Postgres's cluster-wide
+            # shared catalogs (pg_database for CREATE DATABASE, pg_authid
+            # for CREATE/ALTER ROLE) — concurrent workers running these can
+            # fail with "tuple concurrently updated" on those catalogs. The
+            # Alembic downgrade/upgrade that follows targets each worker's
+            # own, already-isolated database, so it does NOT need the lock;
+            # holding it that long would serialize every worker's full
+            # migration cycle one after another, and a fixed lock-wait
+            # timeout would then have to scale with the worker count to
+            # avoid false-positive timeouts.
+            await _acquire_bootstrap_lock(lock_conn)
+            try:
+                await _ensure_database_exists(
+                    lock_conn, make_url(MIGRATION_DATABASE_URL).database
+                )
+                await _ensure_app_role()
+            finally:
+                # Best-effort: if the connection itself is what broke (e.g.
+                # the server restarted mid-bootstrap), this unlock call
+                # would also fail and its error would replace — and hide —
+                # the real exception from _ensure_database_exists /
+                # _ensure_app_role above. Postgres releases session
+                # advisory locks automatically when the connection closes
+                # (see the outer finally), so this is a courtesy, not the
+                # only way the lock gets released.
+                try:
+                    await lock_conn.execute(
+                        f"SELECT pg_advisory_unlock({_XDIST_BOOTSTRAP_LOCK_KEY})"
+                    )
+                except Exception:
+                    pass
+            # Runs unlocked, in parallel across workers — see _run_migrations.
+            _run_migrations()
+        finally:
+            await lock_conn.close()
 
     async def _teardown() -> None:
         _assert_safe_test_database()
@@ -490,6 +775,110 @@ async def client(db_session: AsyncSession):
         _auth_service.get_event_bus = _original_auth_get_event_bus
 
 
+def _redis_client_target(redis_client: object) -> tuple[str, int, int, str | None] | None:
+    """Return the ``(host, port, db, password)`` tuple ``redis_client`` is bound to.
+
+    Reads ``connection_pool.connection_kwargs`` — the attribute path a
+    ``redis.asyncio.Redis`` client (``redis==5.2.1``, pinned in
+    ``uv.lock``; see ``app/core/redis.py``'s ``Redis(connection_pool=...)``
+    construction) stores its connection target under. Comparing the full
+    ``(host, port, db)`` triple (not just the DB index alone) closes a gap
+    a Guardian Angel/Codex review caught: two clients pointing at the same
+    DB *number* on two different Redis servers are not the same target,
+    so matching only the DB index could wrongly trust a bus connected to
+    an entirely different Redis instance. This works for *any* real Redis
+    client regardless of pool identity: two distinct ``Redis(...)`` calls
+    (and therefore two distinct ``ConnectionPool`` objects) targeting the
+    same host/port/db still report the same triple here, which is exactly
+    what lets a legitimately different real-Redis pool be trusted below.
+
+    ``password`` is included for the same reason: ``tenant_client``
+    (below) tries an authenticated connection first and falls back to
+    unauthenticated only on ``AuthenticationError``. Two clients can share
+    the same ``(host, port, db)`` while one authenticates and the other
+    doesn't (e.g. local Redis flips between requiring auth across runs) —
+    trusting a cached bus on host/port/db alone would let it reuse the
+    WRONG credentials for this client's connection, another Guardian
+    Angel/Codex review finding. ``.get("password")`` (not ``[...]``) since
+    an unauthenticated client's kwargs may omit the key entirely; that
+    absence still participates in the comparison, so an authenticated vs.
+    unauthenticated mismatch is never silently trusted.
+
+    Returns ``None`` — rather than raising — for anything that is not a
+    real Redis client wired this way (unexpected type, missing attribute,
+    or any error while reading it), so callers fail closed and treat the
+    target as unknown/untrusted instead of assuming it is safe.
+    """
+    try:
+        kwargs = redis_client.connection_pool.connection_kwargs
+        return (kwargs["host"], kwargs["port"], kwargs["db"], kwargs.get("password"))
+    except Exception:
+        return None
+
+
+def _rebind_event_bus_if_stale(cached_bus: object, redis_client: object, bus_cls: type):
+    """Return an ``EventBus`` safe for ``tenant_client`` to use.
+
+    Rebuilds a fresh ``bus_cls(redis_client)`` when ``cached_bus`` is
+    ``None``, bound to a ``FakeRedis`` client, or bound to a real
+    ``redis.asyncio.Redis`` client whose ``(host, port, db, password)``
+    target does not match ``redis_client``'s; otherwise trusts and reuses
+    ``cached_bus`` as-is. This is the fix for a fixture-resolution-order
+    hazard: ``event_deps._event_bus = None`` clear points in
+    ``tenant_client`` are order-dependent — a fixture resolving a login
+    through the ``client`` fixture (e.g. ``admin_a_headers`` ->
+    ``admin_a_token`` -> ``client.post('/api/v1/auth/login')``) after the
+    last clear point, but before the first request through
+    ``tenant_client``'s app, re-caches the singleton against the
+    ``client`` fixture's own ``FakeRedis``-backed bus. Checking the cached
+    bus's Redis client *type*, and — for a real client — the exact target
+    it is actually bound to (rather than its identity against a single
+    expected ``redis_client``), targets exactly that hazard without
+    discarding a legitimately different real-Redis bus that happens to
+    point at the same target.
+
+    ``TestEventsSpy`` in ``tests/api/test_assets.py`` needs to monkeypatch
+    ``bus.publish`` on the EXACT instance the route handler will use. It
+    does this by resolving the bus through
+    ``tenant_client.app.dependency_overrides[get_event_bus]()`` — the same
+    ``override_get_event_bus`` closure (and therefore the same call into
+    this function) the route handler's dependency injection resolves —
+    rather than calling ``event_deps.get_event_bus()`` directly and hoping
+    fixture-resolution order happens to hand back the same singleton. That
+    guarantees the spy's fetch and the route handler's fetch agree on the
+    same, correctly-target-checked instance, so this function needs no
+    "trust a monkeypatched bus unconditionally" exception: every bus it
+    hands out, spied or not, still goes through the target check below.
+
+    A real ``redis.asyncio.Redis``-backed bus is trusted only when ``_redis_client_target(cached_bus._redis)`` equals
+    ``_redis_client_target(redis_client)``: the same ``(host, port, db,
+    password)`` tuple, any pool object. A bus bound to a *different* target (e.g.
+    one built via a direct, un-instrumented call to
+    ``event_deps.get_event_bus()``, which under a serial run defaults to
+    ``settings.REDIS_DB`` = db 15 while ``tenant_client`` explicitly uses
+    db 14) is no longer blindly trusted just because it is real Redis —
+    it is rebuilt against ``redis_client`` instead. This closes the
+    Guardian Angel/Codex reviewer finding that this function previously
+    trusted "any real Redis-backed bus regardless of DB" (and, in an
+    earlier pass, regardless of which Redis *server* even shared that DB
+    number), either of which let ``tenant_client`` publish outside its
+    assigned worker/tenant database. If the cached bus's target (or
+    ``redis_client``'s target) cannot be determined,
+    ``_redis_client_target`` returns ``None`` and the mismatch branch
+    below fails closed by rebuilding, rather than assuming the bus is
+    safe.
+    """
+    if cached_bus is None:
+        return bus_cls(redis_client)
+    cached_redis = getattr(cached_bus, "_redis", None)
+    if isinstance(cached_redis, FakeRedis):
+        return bus_cls(redis_client)
+    cached_target = _redis_client_target(cached_redis)
+    if cached_target is not None and cached_target == _redis_client_target(redis_client):
+        return cached_bus
+    return bus_cls(redis_client)
+
+
 # ---------------------------------------------------------------------------
 # Slice 1 (F2) — tenant_client fixture with explicit RLS context
 # ---------------------------------------------------------------------------
@@ -544,7 +933,7 @@ async def tenant_client(db_session: AsyncSession):
         return _RealAsyncRedis(
             host=_settings.REDIS_HOST,
             port=_settings.REDIS_PORT,
-            db=14,
+            db=_tenant_client_redis_db(_XDIST_WORKER_ID),
             password=password,
             decode_responses=True,
         )
@@ -565,16 +954,18 @@ async def tenant_client(db_session: AsyncSession):
         except Exception as exc:  # pragma: no cover - env guard
             await test_redis.aclose()
             raise RuntimeError(
-"tenant_client fixture requires a reachable Redis on "
-f"{_settings.REDIS_HOST}:{_settings.REDIS_PORT} db=14. "
-f"Original error: {exc!r}"
+                "tenant_client fixture requires a reachable Redis on "
+                f"{_settings.REDIS_HOST}:{_settings.REDIS_PORT} "
+                f"db={_tenant_client_redis_db(_XDIST_WORKER_ID)}. "
+                f"Original error: {exc!r}"
             ) from exc
     except Exception as exc:  # pragma: no cover - env guard
         await test_redis.aclose()
         raise RuntimeError(
-"tenant_client fixture requires a reachable Redis on "
-f"{_settings.REDIS_HOST}:{_settings.REDIS_PORT} db=14. "
-f"Original error: {exc!r}"
+            "tenant_client fixture requires a reachable Redis on "
+            f"{_settings.REDIS_HOST}:{_settings.REDIS_PORT} "
+            f"db={_tenant_client_redis_db(_XDIST_WORKER_ID)}. "
+            f"Original error: {exc!r}"
         ) from exc
 
     async def override_get_db():
@@ -588,9 +979,9 @@ f"Original error: {exc!r}"
         # itself calls ``set_tenant_context`` during user resolution,
         # so this is idempotent for the same request.
         await set_tenant_context(
-db=db_session,
-tenant_id=user.tenant_id,
-is_superadmin=user.is_superadmin,
+            db=db_session,
+            tenant_id=user.tenant_id,
+            is_superadmin=user.is_superadmin,
         )
         yield db_session
 
@@ -608,16 +999,42 @@ is_superadmin=user.is_superadmin,
     async def override_get_event_bus():
         from app.dependencies import event_deps
 
-        # Reuse the existing singleton if one is already cached; only
-        # build a fresh bus when nothing has been resolved yet. The
-        # spy in TestEventsSpy calls ``event_deps.get_event_bus()``
-        # which materialises the singleton, then monkeypatches
-        # ``bus.publish``. Subsequent invocations from the request
-        # handler must hit the SAME instance so the spy observes the
-        # publish. Constructing a new bus here would silently bypass
-        # the patch (the test sees ``Expected 1 publish; got []``).
-        if event_deps._event_bus is None:
-            event_deps._event_bus = _TestEventBus(test_redis)
+        # Reuse the existing singleton unless it is a leaked, un-instrumented
+        # ``FakeRedis``-backed bus. The two ``event_deps._event_bus = None``
+        # clear points above are best-effort: if a fixture that transitively
+        # depends on ``client`` (e.g. ``admin_a_token`` -> ``client.post``
+        # login) resolves AFTER the last clear point but BEFORE the first
+        # request through this client's app, it re-caches the singleton
+        # against the ``client`` fixture's own ``FakeRedis``-backed bus
+        # instead of ``test_redis`` (db=14). Trusting ``is None`` alone is
+        # therefore order-dependent and unsound. ``_rebind_event_bus_if_stale``
+        # checks the TYPE of the Redis client the cached bus is actually
+        # bound to (``EventBus._redis``): a ``FakeRedis``-backed bus is
+        # discarded and rebuilt against ``test_redis``. A real
+        # ``redis.asyncio.Redis``-backed bus is trusted only when its
+        # (host, port, db, password) TARGET
+        # (``connection_pool.connection_kwargs``) matches ``test_redis``'s
+        # — a different pool object targeting the same host/port/db/
+        # password is still trusted, but a real bus bound to a
+        # DIFFERENT target (e.g. one built via a direct, un-instrumented
+        # ``event_deps.get_event_bus()`` call defaulting to
+        # ``settings.REDIS_DB``, or one pointed at a different Redis
+        # server entirely) is rebuilt instead of blindly trusted, which
+        # would otherwise let this client publish outside its assigned
+        # worker/tenant database.
+        # ``TestEventsSpy`` (tests/api/test_assets.py) resolves the bus
+        # through this exact closure — via
+        # ``tenant_client.app.dependency_overrides[get_event_bus]()`` —
+        # instead of calling ``event_deps.get_event_bus()`` directly, so
+        # it always gets the same, correctly target-checked instance the
+        # route handler will use, with no special-casing needed here for
+        # an already-monkeypatched bus. Once correctly bound, the same
+        # instance is reused across the request lifecycle so
+        # TestEventsSpy's monkeypatch of ``bus.publish`` stays attached to
+        # the instance the route handler actually uses.
+        event_deps._event_bus = _rebind_event_bus_if_stale(
+            event_deps._event_bus, test_redis, _TestEventBus
+        )
         return event_deps._event_bus
 
     app.dependency_overrides[get_db] = override_get_db
@@ -645,6 +1062,14 @@ is_superadmin=user.is_superadmin,
             transport=ASGITransport(app=app),
             base_url="http://test",
         ) as ac:
+            # Exposed so a test can resolve the EXACT EventBus instance the
+            # route handler will use, via
+            # ``tenant_client.app.dependency_overrides[get_event_bus]()``
+            # (calls ``override_get_event_bus`` above) — instead of calling
+            # ``event_deps.get_event_bus()`` directly and relying on
+            # fixture-resolution-order luck to land on the same singleton.
+            # See ``TestEventsSpy`` in ``tests/api/test_assets.py``.
+            ac.app = app
             yield ac
     finally:
         await test_redis.flushdb()
@@ -792,8 +1217,41 @@ async def isolated_db_session(pooled_engine):
 # ---------------------------------------------------------------------------
 # Toxiproxy session fixture — PR1 #260 baseline fault-injection harness
 # ---------------------------------------------------------------------------
+# Serial-only: the proxy is ONE global endpoint for the whole test run
+# (a single proxy named ``redis`` listening on 0.0.0.0:26379). Under
+# pytest-xdist, workers sharing it would race on the same toxic set and
+# reset each other's state, so these fixtures skip instead —
+# fault-injection tests run exclusively in CI's dedicated serial
+# Toxiproxy gate (the parallel selection already excludes them).
 
 TOXIPROXY_CLEANUP_TIMEOUT_SECONDS = 5.0
+
+
+def _assert_serial_toxiproxy() -> None:
+    """Fail closed when Toxiproxy fixtures run under pytest-xdist.
+
+    The fault-injection proxy is a single shared endpoint for the whole
+    test run (one proxy named ``redis`` listening on 0.0.0.0:26379, plus
+    the serial-only DB flush below): two xdist workers touching it would
+    race on the same toxic set and reset each other's state. Toxiproxy
+    tests must run exclusively in CI's dedicated serial Toxiproxy gate.
+    """
+    worker_id = _xdist_worker_id()
+    if worker_id:
+        raise RuntimeError(
+            "Toxiproxy fixture requested under pytest-xdist worker "
+            f"{worker_id!r}: the fault-injection proxy (0.0.0.0:26379) is a "
+            "single shared endpoint, so these fixtures are serial-only. Run "
+            "them in the dedicated serial Toxiproxy gate instead."
+        )
+
+
+def _skip_toxiproxy_under_xdist() -> None:
+    """Skip the calling Toxiproxy fixture when running under pytest-xdist."""
+    try:
+        _assert_serial_toxiproxy()
+    except RuntimeError as exc:
+        pytest.skip(str(exc))
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
@@ -803,7 +1261,10 @@ async def toxiproxy_session():
     Creates the proxy if it does not exist, ensures it is enabled,
     and asserts clean Redis state through the proxy. Setup and teardown
     failures are propagated because this is a mandatory CI baseline.
+    Serial-only: skips under pytest-xdist because the proxy is a single
+    shared endpoint (see the section comment above).
     """
+    _skip_toxiproxy_under_xdist()
     from tests.helpers.toxiproxy import ToxiproxyTransportController
 
     controller = ToxiproxyTransportController()
@@ -820,11 +1281,19 @@ async def toxiproxy_session():
 
 
 async def _flush_toxiproxy_database() -> None:
-    """Flush only the disposable Redis database used by integration tests."""
+    """Flush the disposable Redis database (db 15) used by integration tests.
+
+    Serial-only by design: db 15 is the reserved serial app/Toxiproxy
+    target, while each xdist worker gets its own db 1..13 — flushing it
+    from a worker would wipe the shared serial state while the proxy is
+    still shared. Fails closed under xdist (before any connection opens)
+    instead of flushing an arbitrary worker DB.
+    """
+    _assert_serial_toxiproxy()
     async with Redis(
         host=os.environ.get("REDIS_HOST", "localhost"),
         port=int(os.environ.get("REDIS_PORT", "6379")),
-        db=15,
+        db=_SERIAL_APP_REDIS_DB,
         password=os.environ.get("REDIS_PASSWORD") or None,
         decode_responses=True,
     ) as client:
@@ -833,7 +1302,12 @@ async def _flush_toxiproxy_database() -> None:
 
 @pytest_asyncio.fixture(scope="function")
 async def toxiproxy_client(toxiproxy_session):
-    """Yield a clean function-scoped controller for the Redis proxy."""
+    """Yield a clean function-scoped controller for the Redis proxy.
+
+    Serial-only: skips under pytest-xdist because the proxy is a single
+    shared endpoint (see the section comment above).
+    """
+    _skip_toxiproxy_under_xdist()
 
     async def reset_state() -> None:
         results = await asyncio.gather(

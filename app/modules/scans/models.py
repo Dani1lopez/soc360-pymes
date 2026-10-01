@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -45,6 +46,11 @@ class Scan(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Slice 5 (F2) executor outcome columns. ``failure_reason`` is a short,
+    # bounded machine reason (``timeout``, ``connect_fallback``, ...) set only
+    # when the scan ends ``failed``; ``raw_output`` holds the raw nmap XML.
+    failure_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    raw_output: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

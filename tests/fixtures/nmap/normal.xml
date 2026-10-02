@@ -17,4 +17,5 @@
     <hostscript><script id="host-vuln" output="No findings"/></hostscript>
     <unknown>ignored</unknown>
   </host>
+<runstats><finished time="1700000000" timestr="Tue Nov 14 22:13:20 2023" exit="success"/><hosts up="1" down="0" total="1"/></runstats>
 </nmaprun>

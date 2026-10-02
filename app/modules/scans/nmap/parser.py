@@ -149,6 +149,8 @@ def parse_nmap_xml(data: bytes | str) -> NmapReport:
     scan_types = frozenset(_attributes(root, "scaninfo", "type"))
     if not scan_types:
         raise NmapParseError("missing_scaninfo")
+    if root.find("runstats/finished") is None:
+        raise NmapParseError("incomplete_report")
     return NmapReport(scan_types, tuple(_host(host) for host in root.findall("host")))
 
 

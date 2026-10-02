@@ -41,6 +41,12 @@ def test_normal_report(as_bytes: bool) -> None:
     assert not hasattr(report, "__dict__")
 
 
+@pytest.mark.parametrize("ending", ["", "<runstats/>"])
+def test_incomplete_report(ending: str) -> None:
+    with pytest.raises(NmapParseError, match="incomplete_report"):
+        parse_nmap_xml(f'<nmaprun><scaninfo type="syn"/>{ending}</nmaprun>')
+
+
 def test_connect_fallback() -> None:
     report = parse_nmap_xml((FIXTURES / "connect_fallback.xml").read_bytes())
     with pytest.raises(NmapParseError) as caught:
@@ -81,14 +87,16 @@ def test_bad_fixtures(fixture: str, reason: str) -> None:
         *[
             (
                 '<nmaprun><scaninfo type="syn"/><host><ports>'
-                f'<port portid="{port}"/></ports></host></nmaprun>',
+                f'<port portid="{port}"/></ports></host>'
+                "<runstats><finished/></runstats></nmaprun>",
                 "invalid_port",
             )
             for port in ("70000", "-1")
         ],
         (
             '<nmaprun><scaninfo type="syn"/><host><ports>'
-            '<port portid="bad"/></ports></host></nmaprun>',
+            '<port portid="bad"/></ports></host>'
+            "<runstats><finished/></runstats></nmaprun>",
             "invalid_port",
         ),
     ],
@@ -104,7 +112,7 @@ def test_missing_optional_attributes() -> None:
         '<nmaprun><scaninfo type="syn"/><host><ports>'
         '<port protocol="tcp" portid="80"/><port protocol="udp" portid="53">'
         "<service/><script/></port></ports><hostscript><script/></hostscript>"
-        "</host></nmaprun>"
+        "</host><runstats><finished/></runstats></nmaprun>"
     )
     host = report.hosts[0]
     assert (host.addresses, host.hostnames, host.os_matches) == ((), (), ())

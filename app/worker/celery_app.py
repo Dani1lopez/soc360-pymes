@@ -1,0 +1,76 @@
+"""Celery application for asynchronous scan execution (F2 slice 6).
+
+Run the worker with ``celery -A app.worker.celery_app:celery_app worker``.
+Configuration is resolved lazily on first access to ``celery_app.conf`` so
+importing this module never validates settings or touches the broker.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Protocol
+
+from celery import Celery
+from pydantic import SecretStr
+
+from app.core.config import settings
+from app.modules.scans.executor import NMAP_TIMEOUT_SECONDS
+
+# Margin between Nmap's own timeout and Celery's soft limit, and between the
+# soft and hard limits, so cleanup can run before the worker is killed.
+TIME_LIMIT_MARGIN_SECONDS = 300
+# The broker redelivers unacknowledged messages after this delay; it must exceed
+# the hard limit or a running scan would be delivered to a second worker.
+VISIBILITY_TIMEOUT_MARGIN_SECONDS = 600
+
+
+class BrokerSettings(Protocol):
+    REDIS_HOST: str
+    REDIS_PORT: int
+    REDIS_DB: int
+    REDIS_PASSWORD: SecretStr
+    CELERY_BROKER_REDIS_DB: int
+
+
+def build_broker_url(config: BrokerSettings) -> str:
+    """Return the broker URL; credentials travel separately, never in the URL."""
+    if config.CELERY_BROKER_REDIS_DB == config.REDIS_DB:
+        raise ValueError(
+            "CELERY_BROKER_REDIS_DB must differ from REDIS_DB to isolate the broker"
+        )
+    return f"redis://{config.REDIS_HOST}:{config.REDIS_PORT}/{config.CELERY_BROKER_REDIS_DB}"
+
+
+def build_celery_config(config: BrokerSettings) -> dict[str, Any]:
+    """Celery settings for at-least-once, JSON-only scan delivery."""
+    soft_limit = int(NMAP_TIMEOUT_SECONDS) + TIME_LIMIT_MARGIN_SECONDS
+    hard_limit = soft_limit + TIME_LIMIT_MARGIN_SECONDS
+    material = config.REDIS_PASSWORD.get_secret_value()
+    return {
+        "broker_url": build_broker_url(config),
+        "broker_password": material or None,
+        "broker_connection_retry_on_startup": True,
+        "broker_transport_options": {
+            "visibility_timeout": hard_limit + VISIBILITY_TIMEOUT_MARGIN_SECONDS,
+        },
+        "task_serializer": "json",
+        "result_serializer": "json",
+        "accept_content": ["json"],
+        "task_ignore_result": True,
+        "result_backend": None,
+        "task_acks_late": True,
+        "task_reject_on_worker_lost": True,
+        "worker_prefetch_multiplier": 1,
+        "task_soft_time_limit": soft_limit,
+        "task_time_limit": hard_limit,
+        "timezone": "UTC",
+        "enable_utc": True,
+    }
+
+
+def create_celery_app(config: BrokerSettings) -> Celery:
+    app = Celery("soc360", set_as_current=False)
+    app.add_defaults(lambda: build_celery_config(config))
+    return app
+
+
+celery_app = create_celery_app(settings)

@@ -19,6 +19,9 @@ from app.modules.assets.service import _validate_asset_value
 
 Resolver = Callable[[str], Awaitable[list[str]]]
 
+# A hanging DNS lookup would leave a claimed scan running indefinitely.
+RESOLUTION_TIMEOUT_SECONDS = 10.0
+
 
 class TargetRejectedError(ValueError):
     """A target gate failure with a stable, persistable failure reason."""
@@ -57,7 +60,11 @@ def _public_ip(value: str) -> str:
 
 
 async def resolve_scan_target(
-    asset_type: str, value: str, *, resolver: Resolver | None = None
+    asset_type: str,
+    value: str,
+    *,
+    resolver: Resolver | None = None,
+    resolution_timeout: float = RESOLUTION_TIMEOUT_SECONDS,
 ) -> ScanTarget:
     """Canonicalize syntax and require every scan address to be global.
 
@@ -95,7 +102,10 @@ async def resolve_scan_target(
             else:
                 return ScanTarget(asset_type, value, (_public_ip(host),))
         try:
-            resolved = await (resolver or _resolve_host)(host)
+            async with asyncio.timeout(resolution_timeout):
+                resolved = await (resolver or _resolve_host)(host)
+        except TimeoutError as exc:
+            raise TargetRejectedError("target_resolution_timeout") from exc
         except socket.gaierror as exc:
             raise TargetRejectedError("target_unresolvable") from exc
         if not resolved:

@@ -157,4 +157,7 @@ async def execute_scan(
         return await _shielded(fail(exc.reason))
     except Exception:
         logger.exception("Unexpected scan failure scan_id=%s", scan_id)
+        if not claimed:
+            # Never fail a row this executor does not own; let the caller decide.
+            raise
         return await _shielded(fail("internal_error"))

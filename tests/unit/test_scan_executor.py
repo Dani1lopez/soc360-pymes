@@ -184,6 +184,14 @@ async def test_cancellation_during_failure_cleanup_still_marks_failed(setup):
     assert done == ["timeout"]
 
 
+async def test_unexpected_error_before_claim_does_not_touch_the_scan(setup):
+    s = setup
+    s.load.side_effect = RuntimeError("db down")
+    with pytest.raises(RuntimeError):
+        await execute(s)
+    s.transition.assert_not_awaited()
+
+
 async def test_dual_family(setup):
     s = setup
     s.resolver.return_value += ["2606:4700:4700::1111"]

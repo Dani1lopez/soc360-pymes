@@ -1,5 +1,6 @@
 """Scan-time target gates, without DNS or process execution."""
 
+import asyncio
 import socket
 from dataclasses import FrozenInstanceError
 
@@ -138,3 +139,15 @@ async def test_url_literal_never_resolved(url: str, ip: str) -> None:
     assert (await resolve_scan_target("web_app", url, resolver=resolver)).addresses == (
         ip,
     )
+
+
+async def test_hanging_resolver_is_bounded() -> None:
+    async def resolver(host: str) -> list[str]:
+        await asyncio.sleep(30)
+        return ["93.184.216.34"]
+
+    with pytest.raises(TargetRejectedError) as caught:
+        await resolve_scan_target(
+            "hostname", "example.com", resolver=resolver, resolution_timeout=0.05
+        )
+    assert caught.value.reason == "target_resolution_timeout"

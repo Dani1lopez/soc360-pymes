@@ -51,6 +51,8 @@ frontend/.env.*
 # Resultados de scans — pueden contener datos sensibles de clientes
 *.xml
 *.nmap
+# Synthetic parser fixtures (RFC 5737 documentation addresses only)
+!tests/fixtures/nmap/*.xml
 scans/results/
 reports/generated/
 

@@ -68,7 +68,7 @@ def build_celery_config(config: BrokerSettings) -> dict[str, Any]:
 
 
 def create_celery_app(config: BrokerSettings) -> Celery:
-    app = Celery("soc360", set_as_current=False)
+    app = Celery("soc360", set_as_current=False, include=["app.worker.tasks"])
     app.add_defaults(lambda: build_celery_config(config))
     return app
 

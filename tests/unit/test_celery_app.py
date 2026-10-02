@@ -110,9 +110,11 @@ class TestCreateCeleryApp:
 
 
 class TestSettingsFields:
-    def test_defaults(self) -> None:
+    def test_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from app.core.config import Settings
 
+        # tests/conftest.py pins the broker DB in the environment for the suite.
+        monkeypatch.delenv("CELERY_BROKER_REDIS_DB", raising=False)
         settings = Settings(_env_file=None, **_REQUIRED)
 
         assert settings.SCAN_EXECUTION_ENABLED is False

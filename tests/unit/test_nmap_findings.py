@@ -90,3 +90,15 @@ def test_multiple_hosts_ports_and_empty():
     assert len(extract_findings(NmapReport(frozenset(), (host, host)))) == 4
     assert extract_findings(NmapReport(frozenset(), ())) == []
     assert extract_findings(report("open service")) == []
+
+
+@pytest.mark.parametrize(
+    "output,score",
+    [
+        ("VULNERABLE\nCVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", None),
+        ("VULNERABLE CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H CVSS: 9.8", 9.8),
+        ("VULNERABLE CVSSv3.1 base score: 7.5", 7.5),
+    ],
+)
+def test_cvss_vector_version_is_not_a_score(output, score):
+    assert extract_findings(report(output))[0].cvss_score == score

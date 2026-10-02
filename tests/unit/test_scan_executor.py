@@ -161,6 +161,29 @@ async def test_cancellation_before_claim_leaves_scan_untouched(setup):
     s.transition.assert_not_awaited()
 
 
+async def test_cancellation_during_failure_cleanup_still_marks_failed(setup):
+    s = setup
+    s.run.side_effect = NmapRunError("timeout")
+    started, release, done = asyncio.Event(), asyncio.Event(), []
+
+    async def slow(*args, **kwargs):
+        if kwargs["to"] == "failed":
+            started.set()
+            await release.wait()
+            done.append(kwargs["failure_reason"])
+        return True
+
+    s.transition.side_effect = slow
+    task = asyncio.create_task(execute(s))
+    await started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert done == ["timeout"]
+
+
 async def test_dual_family(setup):
     s = setup
     s.resolver.return_value += ["2606:4700:4700::1111"]

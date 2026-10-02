@@ -46,8 +46,10 @@ def extract_findings(report: NmapReport) -> list[FindingDraft]:
             if not re.search(r"\bVULNERABLE\b", positive, re.I):
                 continue
             cve = re.search(r"CVE-\d{4}-\d{4,}", output)
+            # A vector string ("CVSS:3.1/AV:N/...") carries a version, not a score.
+            scored = re.sub(r"\bCVSS:\d(?:\.\d)?/\S*", "", output, flags=re.I)
             cvss = re.search(
-                r"\bCVSS(?:v\d(?:\.\d)?)?[^\d\n+-]*([+-]?\d+(?:\.\d+)?)", output, re.I
+                r"\bCVSS(?:v\d(?:\.\d)?)?[^\d\n+-]*([+-]?\d+(?:\.\d+)?)", scored, re.I
             )
             score = round(min(10.0, max(0.0, float(cvss[1]))), 1) if cvss else None
             suffix = f":{port}/{protocol}" if port is not None else ""

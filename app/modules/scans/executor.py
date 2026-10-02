@@ -10,7 +10,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Literal
+from typing import Literal, TypeVar
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,12 +33,32 @@ from app.modules.vulnerabilities.models import Vulnerability
 logger = logging.getLogger(__name__)
 NMAP_TIMEOUT_SECONDS = 3600.0
 NMAP_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
+T = TypeVar("T")
 ScanOutcome = Literal["completed", "failed", "cancelled", "skipped"]
 
 
 async def _db_phase(session: AsyncSession, tenant_id: uuid.UUID) -> None:
     # set_config(..., true) expires after EVERY commit/rollback.
     await set_tenant_context(session, tenant_id)
+
+
+async def _shielded(cleanup: Awaitable[T]) -> T:
+    """Run terminal DB cleanup to completion even if the caller is cancelled.
+
+    A cancellation that arrives meanwhile is re-raised once the cleanup is done,
+    so a scan is never left ``running`` by an interrupted failure transition.
+    """
+    task = asyncio.ensure_future(cleanup)
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+    result = task.result()
+    if cancelled:
+        raise asyncio.CancelledError
+    return result
 
 
 async def _load_scan(
@@ -126,21 +146,15 @@ async def execute_scan(
         # Only a scan this executor claimed may be cancelled; before the claim
         # the row is still pending (or owned by another executor) and untouched.
         if claimed:
-            cleanup = asyncio.create_task(cancel())
-            while not cleanup.done():
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError:
-                    continue
-            cleanup.result()
+            await _shielded(cancel())
         raise
     except NmapRunError as exc:
         logger.warning(
             "Nmap scan_id=%s reason=%s detail=%s", scan_id, exc.reason, exc.detail
         )
-        return await fail(exc.reason)
+        return await _shielded(fail(exc.reason))
     except (TargetRejectedError, NmapParseError) as exc:
-        return await fail(exc.reason)
+        return await _shielded(fail(exc.reason))
     except Exception:
         logger.exception("Unexpected scan failure scan_id=%s", scan_id)
-        return await fail("internal_error")
+        return await _shielded(fail("internal_error"))

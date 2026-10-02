@@ -26,9 +26,8 @@ EXPECTED_PROFILE = (
     "addresses",
     [
         ("8.8.8.8",),
-        ("2606:4700:4700::1111",),
         ("8.8.8.0/24",),
-        ("8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"),
+        ("8.8.8.8", "1.1.1.1"),
     ],
 )
 def test_exact_argv_and_target_separator(addresses: tuple[str, ...]) -> None:
@@ -42,6 +41,47 @@ def test_exact_argv_and_target_separator(addresses: tuple[str, ...]) -> None:
     assert not any("exploit" in argument for argument in argv)
     assert [argument for argument in argv if argument.startswith("--script")] == [
         "--script=vuln"
+    ]
+
+
+@pytest.mark.parametrize("address", ["2606:4700:4700::1111", "2606:4700::/120"])
+def test_ipv6_profile(address: str) -> None:
+    assert build_nmap_command(ScanTarget("ip", address, (address,))) == [
+        "nmap",
+        *EXPECTED_PROFILE,
+        "-6",
+        "--",
+        address,
+    ]
+
+
+def test_mixed_families_rejected() -> None:
+    with pytest.raises(ValueError, match="^scan target mixes address families$"):
+        build_nmap_command(
+            ScanTarget("hostname", "example.com", ("8.8.8.8", "2606:4700::1111"))
+        )
+
+
+@pytest.mark.parametrize(
+    "addresses,expected",
+    [
+        ((), []),
+        (("8.8.8.8",), [("8.8.8.8",)]),
+        (("2606:4700::/120",), [("2606:4700::/120",)]),
+        (
+            ("2606:4700::1111", "8.8.8.0/24", "2606:4700::1001", "1.1.1.1"),
+            [("8.8.8.0/24", "1.1.1.1"), ("2606:4700::1111", "2606:4700::1001")],
+        ),
+    ],
+)
+def test_split_by_family(
+    addresses: tuple[str, ...], expected: list[tuple[str, ...]]
+) -> None:
+    from app.modules.scans.nmap.command import split_by_family
+
+    target = ScanTarget("hostname", "example.com", addresses)
+    assert split_by_family(target) == [
+        ScanTarget(target.asset_type, target.original, group) for group in expected
     ]
 
 

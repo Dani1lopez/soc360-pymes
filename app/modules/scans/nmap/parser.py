@@ -100,6 +100,8 @@ def _port(element: Any) -> NmapPort:
         port_id = int(element.get("portid", ""))
     except ValueError as exc:
         raise NmapParseError("invalid_port") from exc
+    if not 0 <= port_id <= 65535:
+        raise NmapParseError("invalid_port")
     service = element.find("service")
     state = element.find("state")
     return NmapPort(

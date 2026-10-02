@@ -48,4 +48,26 @@ def build_nmap_command(target: ScanTarget, *, nmap_path: str = "nmap") -> list[s
                 raise ValueError(
                     "scan address must be an IP or network literal"
                 ) from exc
-    return [nmap_path, *NMAP_PROFILE, "--", *target.addresses]
+    families = split_by_family(target)
+    if len(families) > 1:
+        raise ValueError("scan target mixes address families")
+    ipv6 = ipaddress.ip_network(target.addresses[0], strict=False).version == 6
+    return [
+        nmap_path,
+        *NMAP_PROFILE,
+        *(["-6"] if ipv6 else []),
+        "--",
+        *target.addresses,
+    ]
+
+
+def split_by_family(target: ScanTarget) -> list[ScanTarget]:
+    """Group validated literals by family, retaining metadata and address order."""
+    groups: dict[int, list[str]] = {4: [], 6: []}
+    for address in target.addresses:
+        groups[ipaddress.ip_network(address, strict=False).version].append(address)
+    return [
+        ScanTarget(target.asset_type, target.original, tuple(addresses))
+        for addresses in groups.values()
+        if addresses
+    ]

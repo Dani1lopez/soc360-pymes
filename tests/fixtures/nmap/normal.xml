@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<?xml-stylesheet href="file:///usr/share/nmap/nmap.xsl" type="text/xsl"?>
+<nmaprun scanner="nmap" version="7.95">
+  <scaninfo type="syn" protocol="tcp" numservices="1000" services="80"/>
+  <scaninfo type="udp" protocol="udp" numservices="1000" services="53"/>
+  <host><status state="up"/><address addr="203.0.113.10" addrtype="ipv4"/>
+    <hostnames><hostname name="dns.example" type="PTR"/></hostnames>
+    <ports>
+      <port protocol="tcp" portid="80"><state state="open"/>
+        <service name="http" product="Example" version="1.0" extrainfo="test"/>
+        <script id="http-vuln" output="unsafe &lt;script&gt; &amp; data"/>
+      </port>
+      <port protocol="udp" portid="53"><state state="open"/><service name="domain"/></port>
+    </ports>
+    <os><osmatch name="Linux 5.x" accuracy="95"/></os>
+    <hostscript><script id="host-vuln" output="No findings"/></hostscript>
+    <unknown>ignored</unknown>
+  </host>
+<runstats><finished time="1700000000" timestr="Tue Nov 14 22:13:20 2023" exit="success"/><hosts up="1" down="0" total="1"/></runstats>
+</nmaprun>

@@ -149,6 +149,9 @@ class TestScanModel:
         assert "config" in n
         assert "started_at" in n
         assert "completed_at" in n
+        # Slice 5 (F2): executor outcome columns.
+        assert "failure_reason" in n
+        assert "raw_output" in n
 
     def test_column_defaults(self) -> None:
         assert _column_default(Scan.__table__, "status") == "pending"

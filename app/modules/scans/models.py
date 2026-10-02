@@ -40,6 +40,11 @@ class Scan(Base):
     scan_type: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
     config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Set by the run trigger on enqueue; NULL means never dispatched.
+    # Used for the daily quota and the reaper.
+    dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -82,6 +87,7 @@ class Scan(Base):
             name="fk_scans_asset_tenant",
         ),
         Index("ix_scans_asset_tenant", "asset_id", "tenant_id"),
+        Index("ix_scans_tenant_dispatched_at", "tenant_id", "dispatched_at"),
         # Slice 2 business rule: at most one OPEN definition per
         # (tenant_id, asset_id, name). The index is partial on purpose — the
         # name is released as soon as the scan leaves ``pending``, so an asset

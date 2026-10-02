@@ -4,7 +4,7 @@ Every status change of a ``Scan`` row goes through this module (F2 slice 5,
 decisions 5-6). Two rules define it:
 
 1. The transition map is the single source of truth for which edges exist:
-   ``pending → {running, cancelled}``,
+   ``pending → {running, cancelled, failed}``,
    ``running → {completed, failed, cancelled}``, and
    ``completed``/``failed``/``cancelled`` are terminal (no outgoing edges).
    A terminal row can therefore never be revived — rescan means a new
@@ -53,7 +53,7 @@ __all__ = [
 # with an empty set on purpose: they are VALID targets (and valid sources to
 # look up), they just never originate a transition.
 SCAN_TRANSITIONS: dict[str, frozenset[str]] = {
-    "pending": frozenset({"running", "cancelled"}),
+    "pending": frozenset({"running", "cancelled", "failed"}),
     "running": frozenset({"completed", "failed", "cancelled"}),
     "completed": frozenset(),
     "failed": frozenset(),

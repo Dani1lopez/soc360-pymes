@@ -72,7 +72,7 @@ def _in_source_lists(params: dict) -> list:
 
 class TestTransitionMap:
     def test_pending_edges(self) -> None:
-        assert SCAN_TRANSITIONS["pending"] == {"running", "cancelled"}
+        assert SCAN_TRANSITIONS["pending"] == {"running", "cancelled", "failed"}
 
     def test_running_edges(self) -> None:
         assert SCAN_TRANSITIONS["running"] == {"completed", "failed", "cancelled"}
@@ -83,9 +83,8 @@ class TestTransitionMap:
             assert SCAN_TRANSITIONS[status] == set()
 
     def test_invalid_edges_are_absent(self) -> None:
-        # A pending scan can never jump straight to a terminal outcome.
+        # A pending scan cannot complete without running first.
         assert "completed" not in SCAN_TRANSITIONS["pending"]
-        assert "failed" not in SCAN_TRANSITIONS["pending"]
         # No state ever re-enters pending, and a running scan cannot be
         # claimed a second time.
         assert "pending" not in SCAN_TRANSITIONS["running"]
@@ -221,13 +220,13 @@ class TestSingleConditionalUpdate:
         assert "started_at" not in sql
         assert "failure_reason" not in sql
 
-    async def test_failed_targets_running_and_stores_reason(self) -> None:
+    async def test_failed_targets_pending_and_running_and_stores_reason(self) -> None:
         session = _RecordingSession()
         await transition_scan(
             _as_session(session), uuid.uuid4(), to="failed", failure_reason="timeout"
         )
         sql, params = _compile(session.statements[0])
-        assert _in_source_lists(params) == [["running"]]
+        assert _in_source_lists(params) == [["pending", "running"]]
         assert "completed_at" in sql
         assert "failure_reason" in sql
         assert "started_at" not in sql

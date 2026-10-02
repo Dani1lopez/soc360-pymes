@@ -98,6 +98,31 @@ async def test_running_to_completed_sets_completed_at(db_session, seed_data) -> 
     assert row.failure_reason is None
 
 
+async def test_pending_dispatch_lost_fails_without_starting(
+    db_session, seed_data
+) -> None:
+    scan = await _seed_pending_scan(db_session)
+
+    assert (
+        await transition_scan(
+            db_session, scan.id, to="failed", failure_reason="dispatch_lost"
+        )
+        is True
+    )
+
+    row = await _reread(db_session, scan.id)
+    assert row.status == "failed"
+    assert row.completed_at is not None
+    assert row.started_at is None
+    assert row.failure_reason == "dispatch_lost"
+    assert (
+        await transition_scan(
+            db_session, scan.id, to="failed", failure_reason="dispatch_lost"
+        )
+        is False
+    )
+
+
 async def test_failed_stores_failure_reason(db_session, seed_data) -> None:
     scan = await _seed_pending_scan(db_session)
     assert await transition_scan(db_session, scan.id, to="running") is True

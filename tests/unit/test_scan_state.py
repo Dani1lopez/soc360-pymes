@@ -109,6 +109,25 @@ class TestTransitionMap:
 
 
 class TestValueErrorGuards:
+    async def test_reason_length_bound(self) -> None:
+        session = _RecordingSession()
+        with pytest.raises(ValueError, match="64"):
+            await transition_scan(
+                _as_session(session), uuid.uuid4(), to="failed", failure_reason="x" * 65
+            )
+        assert session.statements == []
+        assert session.commit_count == 0
+
+    @pytest.mark.parametrize("target", ["pending", "running", "cancelled"])
+    async def test_raw_output_forbidden(self, target: str) -> None:
+        session = _RecordingSession()
+        with pytest.raises(ValueError):
+            await transition_scan(
+                _as_session(session), uuid.uuid4(), to=target, raw_output="xml"
+            )
+        assert session.statements == []
+        assert session.commit_count == 0
+
     async def test_unknown_target_raises_before_touching_db(self) -> None:
         session = _RecordingSession()
         with pytest.raises(ValueError, match="unknown scan status"):
@@ -157,6 +176,23 @@ class TestValueErrorGuards:
 
 
 class TestSingleConditionalUpdate:
+    @pytest.mark.parametrize("rowcount", [0, 1])
+    @pytest.mark.parametrize("target", ["completed", "failed"])
+    async def test_caller_owned_completion(self, rowcount: int, target: str) -> None:
+        session = _RecordingSession(rowcount=rowcount)
+        result = await transition_scan(
+            _as_session(session),
+            uuid.uuid4(),
+            to=target,
+            failure_reason="x" * 64 if target == "failed" else None,
+            raw_output="",
+            commit=False,
+        )
+        assert result is (rowcount == 1)
+        assert session.commit_count == 0
+        _, params = _compile(session.statements[0])
+        assert params["raw_output"] == ""
+
     async def test_exactly_one_update_statement_and_no_read(self) -> None:
         session = _RecordingSession(rowcount=1)
         result = await transition_scan(_as_session(session), uuid.uuid4(), to="running")

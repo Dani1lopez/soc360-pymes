@@ -50,6 +50,26 @@ async def test_success_and_bounded_stderr() -> None:
     assert result.stderr_tail == "x" * 4091 + "\ufffdtail"
 
 
+async def test_nonzero_exit_keeps_diagnostics() -> None:
+    with pytest.raises(NmapRunError) as caught:
+        await run_nmap(
+            child(
+                "import os, sys; os.write(2, b'x'*10000 + b'diagnostic'); sys.exit(3)"
+            ),
+            timeout=2,
+            max_output_bytes=100,
+        )
+    assert caught.value.reason == "nonzero_exit"
+    assert str(caught.value) == "nonzero_exit"
+    assert caught.value.detail is not None
+    assert caught.value.detail.endswith("diagnostic")
+    assert len(caught.value.detail.encode()) <= 4096
+
+
+def test_error_detail_defaults_to_none() -> None:
+    assert NmapRunError("timeout").detail is None
+
+
 async def test_child_gets_minimal_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SOC360_TEST_SECRET", "do-not-leak")
     result = await run_nmap(

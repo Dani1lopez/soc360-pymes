@@ -22,8 +22,12 @@ the database, as does an unknown target status — and a known status no
 transition can ever reach (``pending``).
 
 Commit handling follows ``app.modules.scans.service``: each public function
-ends with ``await session.commit()`` — even when zero rows matched — so the
+defaults to ``await session.commit()`` — even when zero rows matched — so the
 conditional UPDATE's transaction is closed deterministically in every outcome.
+With ``transition_scan(commit=False)``, the caller owns the transaction and
+must commit or roll back (including on a zero-row update), allowing findings
+and completion to be persisted atomically. ``raw_output`` is allowed only
+for completed/failed outcomes; failure reasons are bounded to 64 characters.
 With the savepoint ``db_session`` fixture a commit only releases the
 savepoint; the outer test transaction still rolls everything back.
 """
@@ -77,13 +81,17 @@ async def transition_scan(
     *,
     to: str,
     failure_reason: str | None = None,
+    raw_output: str | None = None,
+    commit: bool = True,
 ) -> bool:
     """Atomically move scan ``scan_id`` to status ``to``; True iff 1 row updated.
 
     Raises ``ValueError`` — before touching the database — when ``to`` is not
     a known status, when no status may ever transition to ``to`` (``pending``
     is only an initial state), when ``failure_reason`` is missing for
-    ``to="failed"``, or when it is supplied for any other target.
+    ``to="failed"``, when it is supplied for any other target or exceeds
+    64 characters, or when ``raw_output`` is supplied outside completed/failed.
+    With ``commit=False``, the caller owns commit/rollback of the UPDATE.
 
     The statement is one conditional UPDATE with ``synchronize_session=False``:
     the identity map is deliberately left alone so callers must re-read the
@@ -100,7 +108,14 @@ async def transition_scan(
             "failure_reason is only allowed when transitioning to 'failed'"
         )
 
+    if failure_reason is not None and len(failure_reason) > 64:
+        raise ValueError("failure_reason must not exceed 64 characters")
+    if raw_output is not None and to not in ("completed", "failed"):
+        raise ValueError("raw_output is only allowed for completed or failed scans")
+
     values: dict[str, object] = {"status": to}
+    if raw_output is not None:
+        values["raw_output"] = raw_output
     if to == "running":
         values["started_at"] = datetime.now(timezone.utc)
     elif to in TERMINAL_STATUSES:
@@ -115,7 +130,8 @@ async def transition_scan(
         .execution_options(synchronize_session=False)
     )
     result = await session.execute(stmt)
-    await session.commit()
+    if commit:
+        await session.commit()
     return result.rowcount == 1
 
 

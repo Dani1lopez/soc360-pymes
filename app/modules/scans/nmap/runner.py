@@ -20,8 +20,9 @@ logger = logging.getLogger(__name__)
 class NmapRunError(Exception):
     """A bounded failure code suitable for scans.failure_reason."""
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, detail: str | None = None) -> None:
         self.reason = reason
+        self.detail = detail
         super().__init__(reason)
 
 
@@ -131,7 +132,7 @@ async def run_nmap(
             await asyncio.gather(*readers)
             returncode = await process.wait()
             if returncode != 0:
-                raise NmapRunError("nonzero_exit")
+                raise NmapRunError("nonzero_exit", detail=stderr_task.result())
             return NmapRunResult(stdout_task.result(), stderr_task.result(), returncode)
     except BaseException as exc:
         for task in readers:

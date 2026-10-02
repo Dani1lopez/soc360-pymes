@@ -49,7 +49,7 @@ def test_engine_disposed_on_execution_error(monkeypatch, task_engine):
     engine.dispose.assert_awaited_once_with()
 
 
-@pytest.mark.parametrize("invalid", ["not-a-uuid", None])
+@pytest.mark.parametrize("invalid", ["not-a-uuid", None, 123, ["x"]])
 @pytest.mark.parametrize("position", [0, 1])
 def test_invalid_ids_skip_without_engine(task_engine, invalid, position):
     _, factory, _ = task_engine

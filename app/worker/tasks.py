@@ -65,7 +65,10 @@ async def _run_scan(
 
 @celery_app.task(name="scans.run_scan", ignore_result=True)
 def run_scan(scan_id: str, tenant_id: str) -> str:
+    # uuid.UUID raises AttributeError (not TypeError) for some non-str inputs.
     try:
+        if not isinstance(scan_id, str) or not isinstance(tenant_id, str):
+            raise TypeError("scan task ids must be strings")
         parsed_scan_id = uuid.UUID(scan_id)
         parsed_tenant_id = uuid.UUID(tenant_id)
     except (ValueError, TypeError):

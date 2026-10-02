@@ -78,6 +78,14 @@ def test_bad_fixtures(fixture: str, reason: str) -> None:
         ("<!DOCTYPE other><nmaprun/>", "forbidden_xml_construct"),
         ("<other/>", "unexpected_root"),
         ("<nmaprun/>", "missing_scaninfo"),
+        *[
+            (
+                '<nmaprun><scaninfo type="syn"/><host><ports>'
+                f'<port portid="{port}"/></ports></host></nmaprun>',
+                "invalid_port",
+            )
+            for port in ("70000", "-1")
+        ],
         (
             '<nmaprun><scaninfo type="syn"/><host><ports>'
             '<port portid="bad"/></ports></host></nmaprun>',

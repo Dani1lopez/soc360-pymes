@@ -6,11 +6,15 @@ does not parse the output.
 """
 
 import asyncio
+import logging
 import math
 import os
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
+
+
+logger = logging.getLogger(__name__)
 
 
 class NmapRunError(Exception):
@@ -73,7 +77,12 @@ async def _cleanup(process: asyncio.subprocess.Process, grace_period: float) -> 
                 process.kill()
             except ProcessLookupError:
                 pass
-            await process.wait()
+            try:
+                await asyncio.wait_for(process.wait(), grace_period)
+            except TimeoutError:
+                logger.warning(
+                    "Nmap process pid=%s did not exit after kill", process.pid
+                )
     finally:
         for task in drains:
             task.cancel()

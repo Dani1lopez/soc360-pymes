@@ -3,11 +3,36 @@ import json
 import os
 import signal
 import sys
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.modules.scans.nmap.runner import NmapRunError, run_nmap
+from app.modules.scans.nmap.runner import NmapRunError, _cleanup, run_nmap
+
+
+async def test_cleanup_bounds_post_kill_wait(caplog: pytest.LogCaptureFixture) -> None:
+    process = Mock()
+    process.pid = 12345
+    process.stdout = asyncio.StreamReader()
+    process.stderr = asyncio.StreamReader()
+
+    async def never_exits() -> int:
+        await asyncio.Event().wait()
+        return 0
+
+    process.wait = AsyncMock(side_effect=never_exits)
+    before = set(asyncio.all_tasks())
+    await asyncio.wait_for(_cleanup(process, grace_period=0.01), timeout=0.2)
+    process.terminate.assert_called_once()
+    process.kill.assert_called_once()
+    assert process.wait.call_count == 2
+    assert set(asyncio.all_tasks()) == before
+    assert any(
+        record.name == "app.modules.scans.nmap.runner"
+        and record.levelname == "WARNING"
+        and "12345" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def child(script: str) -> list[str]:

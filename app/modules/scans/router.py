@@ -4,7 +4,7 @@ Routes registered under ``/api/v1/scans`` (see :mod:`app.main`).
 
 RBAC matrix — exact allowlists only; ``superadmin`` is never implicit:
 
-* POST (create + run) — ``admin`` OR ``superadmin``
+* POST (create + run + cancel) — ``admin`` OR ``superadmin``
 * GET (list + by-id) — ``admin`` OR ``analyst`` OR ``viewer`` OR ``superadmin``
 * PATCH  — ``admin`` OR ``superadmin``
 * DELETE — ``admin`` OR ``superadmin``
@@ -353,4 +353,34 @@ async def run_scan(
             detail="scan dispatch failed, retry later",
         ) from None
 
+    return ScanResponse.from_orm_instance(scan)
+
+
+# ---------------------------------------------------------------------------
+# POST /scans/{scan_id}/cancel
+# ---------------------------------------------------------------------------
+@router.post(
+    "/{scan_id}/cancel",
+    response_model=ScanResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Cancel a pending or running scan",
+)
+async def cancel_scan(
+    scan_id: uuid.UUID,
+    db: DBDep,
+    current_user: User = Depends(require_any_role("admin", "superadmin")),
+) -> ScanResponse:
+    """Stop an open scan, regardless of the execution kill switch.
+
+    Terminal scans return 409; missing or invisible scans return 404.
+    The worker observes cancellation and terminates the running subprocess.
+    """
+    try:
+        scan = await service.cancel_scan(scan_id, _caller_tenant_id(current_user), db)
+    except service.ScanNotCancellableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if scan is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="scan not found"
+        )
     return ScanResponse.from_orm_instance(scan)

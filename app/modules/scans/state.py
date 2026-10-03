@@ -144,8 +144,7 @@ async def transition_scan(
 async def cancel_scan(session: AsyncSession, scan_id: uuid.UUID) -> bool:
     """Move a ``pending`` or ``running`` scan to ``cancelled``; False if too late.
 
-    Service-function-only by explicit decision (Q2): the HTTP trigger and a
-    cancel endpoint land together in a later slice, so this module exposes no
-    router and ``app/main.py`` stays untouched.
+    The HTTP cancel endpoint uses the same transition via the scan service;
+    the worker watches persisted cancellation to stop a live executor.
     """
     return await transition_scan(session, scan_id, to="cancelled")

@@ -1,6 +1,8 @@
 """Fresh worker loops complete a scan and skip duplicate delivery."""
 
 import asyncio
+import os
+import sys
 from functools import partial
 from pathlib import Path
 from uuid import UUID
@@ -12,7 +14,8 @@ from app.core.config import settings
 from app.core.database import set_tenant_context
 from app.modules.scans.executor import execute_scan
 from app.modules.scans.models import Scan
-from app.modules.scans.nmap.runner import NmapRunResult
+from app.modules.scans.nmap.runner import NmapRunResult, run_nmap
+from app.modules.scans.state import transition_scan
 from app.modules.vulnerabilities.models import Vulnerability
 from app.worker import tasks
 from tests.conftest import TENANT_A_ID, TEST_DATABASE_URL
@@ -23,6 +26,58 @@ from tests.integration.test_scan_state_transitions import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+async def test_worker_live_cancel(isolated_db_session, tmp_path):
+    scan_id, asset_id = await _seed_committed_scan(
+        isolated_db_session, status="pending"
+    )
+    tenant_id = UUID(TENANT_A_ID)
+    pid_file = tmp_path / "nmap.pid"
+
+    async def resolver(host):
+        return ["93.184.216.34"]
+
+    async def blocking_nmap(argv, **kwargs):
+        code = (
+            "import os,time; from pathlib import Path; "
+            f"Path({str(pid_file)!r}).write_text(str(os.getpid())); time.sleep(60)"
+        )
+        return await run_nmap([sys.executable, "-c", code], **kwargs)
+
+    running = asyncio.create_task(
+        tasks._run_scan(
+            scan_id,
+            tenant_id,
+            execute=partial(execute_scan, resolver=resolver, run=blocking_nmap),
+            cancel_poll_seconds=0.02,
+        )
+    )
+    try:
+        async with asyncio.timeout(5):
+            while not pid_file.exists():
+                if running.done():
+                    pytest.fail(
+                        f"executor stopped before process started: {running.result()}"
+                    )
+                await asyncio.sleep(0.01)
+        pid = int(pid_file.read_text())
+        async with isolated_db_session() as session:
+            await set_tenant_context(session, tenant_id)
+            assert await transition_scan(session, scan_id, to="cancelled")
+        assert await asyncio.wait_for(asyncio.shield(running), 3) == "cancelled"
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+        async with isolated_db_session() as session:
+            await set_tenant_context(session, tenant_id)
+            assert (
+                await session.scalar(select(Scan.status).where(Scan.id == scan_id))
+                == "cancelled"
+            )
+    finally:
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+        await _cleanup_committed_scan(isolated_db_session, scan_id, asset_id)
 
 
 async def test_worker_scan_duplicate_delivery(isolated_db_session, monkeypatch):

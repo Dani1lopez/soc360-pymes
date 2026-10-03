@@ -33,6 +33,7 @@ from app.event_schemas import (
 )
 from app.modules.scans.models import Scan
 from app.modules.scans.schemas import ScanCreateRequest, ScanUpdate
+from app.modules.scans.state import transition_scan
 from app.modules.tenants.models import Tenant
 
 __all__ = [
@@ -40,6 +41,8 @@ __all__ = [
     "ScanAssetNotFoundError",
     "ScanConfigError",
     "ScanDuplicateError",
+    "ScanNotCancellableError",
+    "cancel_scan",
     "ScanNotDispatchableError",
     "ScanQuotaExceededError",
     "dispatch_scan",
@@ -211,6 +214,27 @@ def _is_open_name_violation(exc: IntegrityError) -> bool:
 def _is_asset_fk_violation(exc: IntegrityError) -> bool:
     """Detect an fk_scans_asset_tenant violation across drivers."""
     return _violates_constraint(exc, _ASSET_FK_CONSTRAINT)
+
+
+class ScanNotCancellableError(Exception):
+    def __init__(self) -> None:
+        super().__init__("scan is not cancellable")
+
+
+async def cancel_scan(
+    scan_id: uuid.UUID, tenant_id: uuid.UUID | None, db: AsyncSession
+) -> Scan | None:
+    """Cancel only an open scan visible to the caller, then refresh under RLS."""
+    scan = await get_scan(scan_id, tenant_id, db)
+    if scan is None:
+        return None
+    if not await transition_scan(db, scan_id, to="cancelled", commit=False):
+        await db.rollback()
+        raise ScanNotCancellableError()
+    await db.commit()
+    await _restore_tenant_context(db, tenant_id)
+    await db.refresh(scan)
+    return scan
 
 
 class ScanNotDispatchableError(Exception):

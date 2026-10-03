@@ -17,13 +17,15 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Any, Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.event_bus import EventBus
+from app.core.database import set_tenant_context
 from app.event_schemas import (
     ScanCreatedEvent,
     ScanDeletedEvent,
@@ -31,12 +33,17 @@ from app.event_schemas import (
 )
 from app.modules.scans.models import Scan
 from app.modules.scans.schemas import ScanCreateRequest, ScanUpdate
+from app.modules.tenants.models import Tenant
 
 __all__ = [
     "SCAN_EVENTS_STREAM",
     "ScanAssetNotFoundError",
     "ScanConfigError",
     "ScanDuplicateError",
+    "ScanNotDispatchableError",
+    "ScanQuotaExceededError",
+    "dispatch_scan",
+    "undo_dispatch",
     "_validate_scan_config",
     "create_scan",
     "delete_scan",
@@ -204,6 +211,98 @@ def _is_open_name_violation(exc: IntegrityError) -> bool:
 def _is_asset_fk_violation(exc: IntegrityError) -> bool:
     """Detect an fk_scans_asset_tenant violation across drivers."""
     return _violates_constraint(exc, _ASSET_FK_CONSTRAINT)
+
+
+class ScanNotDispatchableError(Exception):
+    def __init__(self) -> None:
+        super().__init__("scan is not dispatchable")
+
+
+class ScanQuotaExceededError(Exception):
+    def __init__(self) -> None:
+        super().__init__("daily scan quota exceeded")
+
+
+async def _restore_tenant_context(db: AsyncSession, tenant_id: uuid.UUID | None) -> None:
+    """Re-apply the RLS context after a commit dropped it.
+
+    ``set_tenant_context`` is transaction-local, so any statement after a
+    commit would otherwise be filtered by RLS and silently match no rows.
+    ``tenant_id=None`` is the superadmin path, as everywhere in this module.
+    """
+    await set_tenant_context(db, tenant_id, is_superadmin=tenant_id is None)
+
+
+async def dispatch_scan(
+    scan_id: uuid.UUID, tenant_id: uuid.UUID | None, db: AsyncSession
+) -> Scan | None:
+    """Reserve daily quota atomically, committing before broker delivery.
+
+    Returns the refreshed scan with the tenant context restored, so the
+    caller can keep using the session after the commit.
+    """
+    scan = await get_scan(scan_id, tenant_id, db)
+    if scan is None:
+        return None
+    limit = (
+        await db.execute(
+            select(Tenant.scans_per_day)
+            .where(Tenant.id == scan.tenant_id)
+            # Without read=True, key_share=True emits FOR NO KEY UPDATE.
+            .with_for_update(key_share=True)
+        )
+    ).scalar_one()
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        update(Scan)
+        .where(
+            Scan.id == scan_id, Scan.status == "pending", Scan.dispatched_at.is_(None)
+        )
+        .values(dispatched_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount == 0:
+        await db.rollback()
+        raise ScanNotDispatchableError()
+    count = (
+        await db.execute(
+            select(func.count())
+            .select_from(Scan)
+            .where(
+                Scan.tenant_id == scan.tenant_id,
+                Scan.dispatched_at
+                >= now.replace(hour=0, minute=0, second=0, microsecond=0),
+                ~and_(
+                    Scan.status.in_(("failed", "cancelled")), Scan.started_at.is_(None)
+                ),
+            )
+        )
+    ).scalar_one()
+    if count > limit:
+        await db.rollback()
+        raise ScanQuotaExceededError()
+    await db.commit()
+    await _restore_tenant_context(db, tenant_id)
+    await db.refresh(scan)
+    return scan
+
+
+async def undo_dispatch(
+    db: AsyncSession, scan_id: uuid.UUID, tenant_id: uuid.UUID | None
+) -> None:
+    """Release a failed delivery reservation only while still pending.
+
+    Always runs after ``dispatch_scan`` committed, so it restores the tenant
+    context first; without it RLS would filter the UPDATE to zero rows.
+    """
+    await _restore_tenant_context(db, tenant_id)
+    await db.execute(
+        update(Scan)
+        .where(Scan.id == scan_id, Scan.status == "pending")
+        .values(dispatched_at=None)
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
 
 
 async def create_scan(

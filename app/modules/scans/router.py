@@ -4,7 +4,7 @@ Routes registered under ``/api/v1/scans`` (see :mod:`app.main`).
 
 RBAC matrix — exact allowlists only; ``superadmin`` is never implicit:
 
-* POST   — ``admin`` OR ``superadmin``
+* POST (create + run) — ``admin`` OR ``superadmin``
 * GET (list + by-id) — ``admin`` OR ``analyst`` OR ``viewer`` OR ``superadmin``
 * PATCH  — ``admin`` OR ``superadmin``
 * DELETE — ``admin`` OR ``superadmin``
@@ -36,12 +36,15 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 
+from app.core.config import settings
+from app.core.logging import get_logger
 from app.dependencies import DBDep
 from app.dependencies.auth import require_any_role
 from app.dependencies.event_deps import get_event_bus
 from app.event_bus import EventBus
 from app.modules.assets.models import Asset
 from app.modules.scans import service
+from app.modules.scans.dispatch import ScanDispatcher, get_scan_dispatcher
 from app.modules.scans.schemas import (
     ScanCreateRequest,
     ScanListResponse,
@@ -51,6 +54,7 @@ from app.modules.scans.schemas import (
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/scans", tags=["scans"])
+logger = get_logger(__name__)
 
 
 # Annotated-style dependency for EventBus — preferred FastAPI pattern.
@@ -286,3 +290,67 @@ async def delete_scan(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="scan not found"
         )
+
+
+# ---------------------------------------------------------------------------
+# POST /scans/{scan_id}/run
+# ---------------------------------------------------------------------------
+def _require_execution_enabled() -> None:
+    """403 while the scan execution kill switch is off (read per request)."""
+    if not settings.SCAN_EXECUTION_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="scan execution is disabled",
+        )
+
+
+@router.post(
+    "/{scan_id}/run",
+    response_model=ScanResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(_require_execution_enabled)],
+    summary="Dispatch a pending scan for asynchronous execution",
+)
+async def run_scan(
+    scan_id: uuid.UUID,
+    db: DBDep,
+    dispatcher: Annotated[ScanDispatcher, Depends(get_scan_dispatcher)],
+    current_user: User = Depends(require_any_role("admin", "superadmin")),
+) -> ScanResponse:
+    """Reserve quota, commit, then enqueue; compensate if the enqueue fails.
+
+    The dispatch is committed BEFORE the broker sees the message, so a failed
+    enqueue leaves a recorded-but-unsent dispatch that is undone here (503,
+    the client may retry) or, if this process dies first, repaired by the
+    reaper. The worker refuses to claim an undispatched scan, so a message
+    that reached the broker despite a failed enqueue call is skipped.
+    """
+    tenant_id = _caller_tenant_id(current_user)
+    try:
+        scan = await service.dispatch_scan(scan_id, tenant_id, db)
+    except service.ScanNotDispatchableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except service.ScanQuotaExceededError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)
+        )
+    if scan is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="scan not found"
+        )
+
+    try:
+        await dispatcher.dispatch(scan.id, scan.tenant_id)
+    except Exception:
+        logger.warning("scan_dispatch_failed", scan_id=str(scan_id))
+        try:
+            await service.undo_dispatch(db, scan_id, tenant_id)
+        except Exception:
+            # The reaper marks the stale dispatch as dispatch_lost.
+            logger.warning("scan_dispatch_compensation_failed", scan_id=str(scan_id))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="scan dispatch failed, retry later",
+        ) from None
+
+    return ScanResponse.from_orm_instance(scan)

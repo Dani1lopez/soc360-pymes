@@ -38,7 +38,7 @@ async def _enable_superadmin(session) -> None:
     await session.execute(text("SET LOCAL app.is_superadmin = 'true'"))
 
 
-async def _seed_pending_scan(db_session) -> Scan:
+async def _seed_pending_scan(db_session, *, dispatched: bool = True) -> Scan:
     """Insert a fresh asset + pending scan in the savepoint transaction."""
     await _enable_superadmin(db_session)
     asset = Asset(
@@ -56,6 +56,8 @@ async def _seed_pending_scan(db_session) -> Scan:
         name=f"state-machine-{uuid.uuid4().hex[:12]}",
         scan_type="discovery",
         status="pending",
+        # Omitted (not None) when undispatched so the column default applies.
+        **({"dispatched_at": datetime.now(timezone.utc)} if dispatched else {}),
     )
     db_session.add(scan)
     await db_session.flush()
@@ -71,6 +73,25 @@ async def _reread(db_session, scan_id: uuid.UUID):
 # ---------------------------------------------------------------------------
 # Savepoint tests — timestamps and failure_reason persistence
 # ---------------------------------------------------------------------------
+
+
+async def test_undispatched_pending_cannot_run(db_session, seed_data) -> None:
+    scan = await _seed_pending_scan(db_session, dispatched=False)
+
+    assert await transition_scan(db_session, scan.id, to="running") is False
+
+    row = await _reread(db_session, scan.id)
+    assert row.status == "pending"
+    assert row.started_at is None
+
+
+async def test_undispatched_pending_can_cancel(db_session, seed_data) -> None:
+    scan = await _seed_pending_scan(db_session, dispatched=False)
+
+    assert await transition_scan(db_session, scan.id, to="cancelled") is True
+    row = await _reread(db_session, scan.id)
+    assert row.status == "cancelled"
+    assert row.started_at is None
 
 
 async def test_pending_to_running_sets_started_at(db_session, seed_data) -> None:
@@ -101,7 +122,7 @@ async def test_running_to_completed_sets_completed_at(db_session, seed_data) -> 
 async def test_pending_dispatch_lost_fails_without_starting(
     db_session, seed_data
 ) -> None:
-    scan = await _seed_pending_scan(db_session)
+    scan = await _seed_pending_scan(db_session, dispatched=False)
 
     assert (
         await transition_scan(
@@ -210,6 +231,7 @@ async def _seed_committed_scan(
             name=f"state-race-{uuid.uuid4().hex[:12]}",
             scan_type="discovery",
             status=status,
+            dispatched_at=datetime.now(timezone.utc),
             started_at=(datetime.now(timezone.utc) if status != "pending" else None),
         )
         session.add(scan)

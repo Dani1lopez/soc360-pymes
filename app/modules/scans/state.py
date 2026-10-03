@@ -93,6 +93,10 @@ async def transition_scan(
     64 characters, or when ``raw_output`` is supplied outside completed/failed.
     With ``commit=False``, the caller owns commit/rollback of the UPDATE.
 
+    Transitioning to ``running`` also requires non-NULL ``dispatched_at``;
+    an undispatched pending scan is left unchanged and returns False.
+    Other transitions do not require dispatch.
+
     The statement is one conditional UPDATE with ``synchronize_session=False``:
     the identity map is deliberately left alone so callers must re-read the
     row from the database instead of trusting a possibly stale ORM object.
@@ -129,6 +133,8 @@ async def transition_scan(
         .values(**values)
         .execution_options(synchronize_session=False)
     )
+    if to == "running":
+        stmt = stmt.where(Scan.dispatched_at.isnot(None))
     result = await session.execute(stmt)
     if commit:
         await session.commit()

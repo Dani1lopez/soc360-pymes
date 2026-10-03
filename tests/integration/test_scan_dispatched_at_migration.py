@@ -14,7 +14,7 @@ def test_migration_chain_has_single_head() -> None:
 
 
 async def test_dispatched_at_defaults_to_null(db_session, seed_data) -> None:
-    scan = await _seed_pending_scan(db_session)
+    scan = await _seed_pending_scan(db_session, dispatched=False)
     result = await db_session.execute(
         select(Scan.dispatched_at).where(Scan.id == scan.id)
     )

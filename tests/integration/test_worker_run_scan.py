@@ -39,9 +39,13 @@ async def test_worker_live_cancel(isolated_db_session, tmp_path):
         return ["93.184.216.34"]
 
     async def blocking_nmap(argv, **kwargs):
+        # Write then rename: os.replace is atomic, so the test never observes
+        # an existing but still empty pid file.
+        tmp_file = f"{pid_file}.tmp"
         code = (
             "import os,time; from pathlib import Path; "
-            f"Path({str(pid_file)!r}).write_text(str(os.getpid())); time.sleep(60)"
+            f"Path({tmp_file!r}).write_text(str(os.getpid())); "
+            f"os.replace({tmp_file!r}, {str(pid_file)!r}); time.sleep(60)"
         )
         return await run_nmap([sys.executable, "-c", code], **kwargs)
 

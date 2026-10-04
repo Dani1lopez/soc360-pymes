@@ -88,6 +88,12 @@ class Scan(Base):
         ),
         Index("ix_scans_asset_tenant", "asset_id", "tenant_id"),
         Index("ix_scans_tenant_dispatched_at", "tenant_id", "dispatched_at"),
+        Index(
+            "ix_scans_ready",
+            "dispatched_at",
+            "id",
+            postgresql_where="status = 'pending' AND dispatched_at IS NOT NULL",
+        ),
         # Slice 2 business rule: at most one OPEN definition per
         # (tenant_id, asset_id, name). The index is partial on purpose — the
         # name is released as soon as the scan leaves ``pending``, so an asset

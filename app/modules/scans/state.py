@@ -37,15 +37,17 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import set_tenant_context
 from app.modules.scans.models import Scan
 
 __all__ = [
     "SCAN_TRANSITIONS",
     "TERMINAL_STATUSES",
     "cancel_scan",
+    "claim_next_scan",
     "transition_scan",
 ]
 
@@ -73,6 +75,38 @@ _ALLOWED_FROM: dict[str, frozenset[str]] = {
     )
     for target in SCAN_TRANSITIONS
 }
+
+
+async def claim_next_scan(
+    session: AsyncSession,
+) -> tuple[uuid.UUID, uuid.UUID] | None:
+    """Claim the oldest ready row: Postgres is the queue.
+
+    SKIP LOCKED makes concurrent claimers take distinct rows. started_at uses
+    the database clock, not the worker clock. Superadmin context is only for
+    this cross-tenant claim and ends at commit; execution later runs under
+    the claimed tenant's context.
+    """
+    await set_tenant_context(session, None, is_superadmin=True)
+    ready = (Scan.status == "pending", Scan.dispatched_at.isnot(None))
+    oldest = (
+        select(Scan.id)
+        .where(*ready)
+        .order_by(Scan.dispatched_at, Scan.id)
+        .with_for_update(skip_locked=True)
+        .limit(1)
+        .scalar_subquery()
+    )
+    stmt = (
+        update(Scan)
+        .where(Scan.id == oldest, *ready)
+        .values(status="running", started_at=func.now())
+        .returning(Scan.id, Scan.tenant_id)
+        .execution_options(synchronize_session=False)
+    )
+    row = (await session.execute(stmt)).one_or_none()
+    await session.commit()
+    return (row.id, row.tenant_id) if row is not None else None
 
 
 async def transition_scan(

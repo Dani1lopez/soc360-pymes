@@ -17,10 +17,9 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime, timezone
 from typing import Any, Literal
 
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,7 +45,6 @@ __all__ = [
     "ScanNotDispatchableError",
     "ScanQuotaExceededError",
     "dispatch_scan",
-    "undo_dispatch",
     "_validate_scan_config",
     "create_scan",
     "delete_scan",
@@ -276,13 +274,12 @@ async def dispatch_scan(
             .with_for_update(key_share=True)
         )
     ).scalar_one()
-    now = datetime.now(timezone.utc)
     result = await db.execute(
         update(Scan)
         .where(
             Scan.id == scan_id, Scan.status == "pending", Scan.dispatched_at.is_(None)
         )
-        .values(dispatched_at=now)
+        .values(dispatched_at=func.now())
         .execution_options(synchronize_session=False)
     )
     if result.rowcount == 0:
@@ -295,7 +292,7 @@ async def dispatch_scan(
             .where(
                 Scan.tenant_id == scan.tenant_id,
                 Scan.dispatched_at
-                >= now.replace(hour=0, minute=0, second=0, microsecond=0),
+                >= text("date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'"),
                 ~and_(
                     Scan.status.in_(("failed", "cancelled")), Scan.started_at.is_(None)
                 ),
@@ -309,24 +306,6 @@ async def dispatch_scan(
     await _restore_tenant_context(db, tenant_id)
     await db.refresh(scan)
     return scan
-
-
-async def undo_dispatch(
-    db: AsyncSession, scan_id: uuid.UUID, tenant_id: uuid.UUID | None
-) -> None:
-    """Release a failed delivery reservation only while still pending.
-
-    Always runs after ``dispatch_scan`` committed, so it restores the tenant
-    context first; without it RLS would filter the UPDATE to zero rows.
-    """
-    await _restore_tenant_context(db, tenant_id)
-    await db.execute(
-        update(Scan)
-        .where(Scan.id == scan_id, Scan.status == "pending")
-        .values(dispatched_at=None)
-        .execution_options(synchronize_session=False)
-    )
-    await db.commit()
 
 
 async def create_scan(

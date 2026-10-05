@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from app.core.config import settings
 from app.modules.scans.models import Scan
@@ -200,7 +200,7 @@ async def test_quota(
         assert dispatcher.calls == []
 
 
-async def test_dispatch_failure_retry(
+async def test_dispatch_failure_keeps_reservation(
     tenant_client, admin_a_headers, db_session, dispatcher
 ):
     scan = await seed(db_session)
@@ -208,8 +208,21 @@ async def test_dispatch_failure_retry(
     dispatcher.fail = True
     url = f"/api/v1/scans/{scan_id}/run"
     response = await tenant_client.post(url, headers=admin_a_headers)
-    assert response.status_code == 503
-    assert response.json()["detail"] == "scan dispatch failed, retry later"
-    assert await dispatched(db_session, scan_id) is None
-    dispatcher.fail = False
-    assert (await tenant_client.post(url, headers=admin_a_headers)).status_code == 202
+    assert response.status_code == 202
+    assert response.json()["status"] == "pending"
+    assert await dispatched(db_session, scan_id) is not None
+    assert dispatcher.calls == [(scan_id, UUID(TENANT_A_ID))]
+    assert (await tenant_client.post(url, headers=admin_a_headers)).status_code == 409
+
+
+async def test_dispatch_uses_database_clock(
+    tenant_client, admin_a_headers, db_session, dispatcher
+):
+    scan = await seed(db_session)
+    scan_id = scan.id
+    transaction_start = (await db_session.execute(select(func.now()))).scalar_one()
+    response = await tenant_client.post(
+        f"/api/v1/scans/{scan_id}/run", headers=admin_a_headers
+    )
+    assert response.status_code == 202
+    assert await dispatched(db_session, scan_id) == transaction_start

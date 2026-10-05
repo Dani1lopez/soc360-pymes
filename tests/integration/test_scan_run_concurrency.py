@@ -1,4 +1,4 @@
-"""Quota serialization and compensation using actual PostgreSQL commits."""
+"""Quota serialization and dispatch RLS using actual PostgreSQL commits."""
 
 import asyncio
 from datetime import datetime, timezone
@@ -13,7 +13,6 @@ from app.modules.scans.models import Scan
 from app.modules.scans.service import (
     ScanQuotaExceededError,
     dispatch_scan,
-    undo_dispatch,
 )
 from app.modules.tenants.models import Tenant
 
@@ -111,7 +110,7 @@ async def test_concurrent_daily_quota(isolated_db_session, committed_scans):
     assert any("FOR NO KEY UPDATE" in sql for sql in statements)
 
 
-async def test_compensation_real_commit_rls(isolated_db_session, committed_scans):
+async def test_dispatch_real_commit_rls(isolated_db_session, committed_scans):
     tenant_id, scan_ids = committed_scans
     async with isolated_db_session() as db:
         role = (
@@ -123,9 +122,7 @@ async def test_compensation_real_commit_rls(isolated_db_session, committed_scans
         ).one()
         await db.rollback()
         if role.rolsuper or role.rolbypassrls:
-            pytest.skip(
-                "test database role bypasses RLS; cannot prove RLS compensation"
-            )
+            pytest.skip("test database role bypasses RLS; cannot prove RLS dispatch")
         await set_tenant_context(db, tenant_id, False)
         scan = await dispatch_scan(scan_ids[0], tenant_id, db)
         # The service restores the transaction-local context after its commit.
@@ -135,8 +132,7 @@ async def test_compensation_real_commit_rls(isolated_db_session, committed_scans
         assert (
             await db.execute(select(Scan.id).where(Scan.id == scan_ids[0]))
         ).scalar_one_or_none() is None
-        await undo_dispatch(db, scan_ids[0], tenant_id)
         await set_tenant_context(db, tenant_id, False)
         assert (
             await db.execute(select(Scan.dispatched_at).where(Scan.id == scan_ids[0]))
-        ).scalar_one() is None
+        ).scalar_one() is not None

@@ -317,13 +317,11 @@ async def run_scan(
     dispatcher: Annotated[ScanDispatcher, Depends(get_scan_dispatcher)],
     current_user: User = Depends(require_any_role("admin", "superadmin")),
 ) -> ScanResponse:
-    """Reserve quota, commit, then enqueue; compensate if the enqueue fails.
+    """Commit the dispatch as the source of truth, then ring a best-effort bell.
 
-    The dispatch is committed BEFORE the broker sees the message, so a failed
-    enqueue leaves a recorded-but-unsent dispatch that is undone here (503,
-    the client may retry) or, if this process dies first, repaired by the
-    reaper. The worker refuses to claim an undispatched scan, so a message
-    that reached the broker despite a failed enqueue call is skipped.
+    Broker delivery is only a hint to the worker: failure still returns 202
+    and preserves the committed dispatch. The periodic pump recovers a lost
+    bell by waking the worker to claim pending work from PostgreSQL.
     """
     tenant_id = _caller_tenant_id(current_user)
     try:
@@ -343,15 +341,6 @@ async def run_scan(
         await dispatcher.dispatch(scan.id, scan.tenant_id)
     except Exception:
         logger.warning("scan_dispatch_failed", scan_id=str(scan_id))
-        try:
-            await service.undo_dispatch(db, scan_id, tenant_id)
-        except Exception:
-            # The reaper marks the stale dispatch as dispatch_lost.
-            logger.warning("scan_dispatch_compensation_failed", scan_id=str(scan_id))
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="scan dispatch failed, retry later",
-        ) from None
 
     return ScanResponse.from_orm_instance(scan)
 

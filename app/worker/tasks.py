@@ -25,6 +25,7 @@ from app.core.config import settings
 from app.core.database import _build_connect_args, set_tenant_context
 from app.modules.scans.models import Scan
 from app.modules.scans.executor import ScanOutcome, execute_scan
+from app.modules.scans.state import claim_next_scan
 from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,12 @@ async def _wait_for_cancel(
 
 class ScanExecutor(Protocol):
     def __call__(
-        self, session: AsyncSession, scan_id: uuid.UUID, *, tenant_id: uuid.UUID
+        self,
+        session: AsyncSession,
+        scan_id: uuid.UUID,
+        *,
+        tenant_id: uuid.UUID,
+        claimed: bool,
     ) -> Awaitable[ScanOutcome]: ...
 
 
@@ -66,21 +72,27 @@ def build_task_engine() -> AsyncEngine:
     )
 
 
-async def _run_scan(
-    scan_id: uuid.UUID,
-    tenant_id: uuid.UUID,
+async def _wake(
     *,
     engine_factory: Callable[[], AsyncEngine] | None = None,
+    claim: Callable[[AsyncSession], Awaitable[tuple[uuid.UUID, uuid.UUID] | None]]
+    | None = None,
     execute: ScanExecutor | None = None,
     cancel_poll_seconds: float = CANCEL_POLL_SECONDS,
-) -> ScanOutcome:
+) -> str:
     engine = (engine_factory or build_task_engine)()
     try:
-        async with async_sessionmaker(
-            engine, class_=AsyncSession, expire_on_commit=False
-        )() as session:
+        maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with maker() as session:
+            row = await (claim or claim_next_scan)(session)
+        if row is None:
+            return "idle"
+        scan_id, tenant_id = row
+        async with maker() as session:
             executor = asyncio.create_task(
-                (execute or execute_scan)(session, scan_id, tenant_id=tenant_id)
+                (execute or execute_scan)(
+                    session, scan_id, tenant_id=tenant_id, claimed=True
+                )
             )
             watcher = asyncio.create_task(
                 _wait_for_cancel(
@@ -106,15 +118,6 @@ async def _run_scan(
         await engine.dispose()
 
 
-@celery_app.task(name="scans.run_scan", ignore_result=True)
-def run_scan(scan_id: str, tenant_id: str) -> str:
-    # uuid.UUID raises AttributeError (not TypeError) for some non-str inputs.
-    try:
-        if not isinstance(scan_id, str) or not isinstance(tenant_id, str):
-            raise TypeError("scan task ids must be strings")
-        parsed_scan_id = uuid.UUID(scan_id)
-        parsed_tenant_id = uuid.UUID(tenant_id)
-    except (ValueError, TypeError):
-        logger.warning("Skipping scan task with invalid UUID arguments")
-        return "skipped"
-    return asyncio.run(_run_scan(parsed_scan_id, parsed_tenant_id))
+@celery_app.task(name="scans.wake", ignore_result=True)
+def wake() -> str:
+    return asyncio.run(_wake())

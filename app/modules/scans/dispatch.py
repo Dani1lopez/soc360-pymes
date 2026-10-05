@@ -14,12 +14,14 @@ class ScanDispatcher(Protocol):
 
 
 class CeleryScanDispatcher:
+    """Ring the doorbell; the message carries no data."""
+
     async def dispatch(self, scan_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
-        from app.worker.tasks import run_scan
+        from app.worker.tasks import wake
 
         await asyncio.to_thread(
-            run_scan.apply_async,
-            args=[str(scan_id), str(tenant_id)],
+            wake.apply_async,
+            args=[],
             retry=True,
             retry_policy={
                 "max_retries": 2,

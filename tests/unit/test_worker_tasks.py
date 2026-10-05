@@ -29,18 +29,28 @@ def task_engine(monkeypatch):
         await asyncio.Event().wait()
 
     monkeypatch.setattr(tasks, "_wait_for_cancel", idle_watcher, raising=False)
+    monkeypatch.setattr(
+        tasks,
+        "claim_next_scan",
+        AsyncMock(return_value=(uuid.uuid4(), uuid.uuid4())),
+        raising=False,
+    )
     return engine, factory, session
 
 
 @pytest.mark.parametrize("outcome", ["completed", "failed", "cancelled", "skipped"])
-def test_run_scan_parses_ids_and_returns_outcome(monkeypatch, task_engine, outcome):
+def test_wake_returns_outcome(monkeypatch, task_engine, outcome):
     engine, factory, session = task_engine
     scan_id, tenant_id = uuid.uuid4(), uuid.uuid4()
     execute = AsyncMock(return_value=outcome)
     monkeypatch.setattr(tasks, "execute_scan", execute)
 
-    assert tasks.run_scan.run(str(scan_id), str(tenant_id)) == outcome
-    execute.assert_awaited_once_with(session, scan_id, tenant_id=tenant_id)
+    tasks.claim_next_scan.return_value = (scan_id, tenant_id)
+    assert tasks.wake.run() == outcome
+    execute.assert_awaited_once_with(
+        session, scan_id, tenant_id=tenant_id, claimed=True
+    )
+    tasks.claim_next_scan.assert_awaited_once_with(session)
     factory.assert_called_once_with()
     engine.dispose.assert_awaited_once_with()
 
@@ -51,18 +61,20 @@ def test_engine_disposed_on_execution_error(monkeypatch, task_engine):
         tasks, "execute_scan", AsyncMock(side_effect=RuntimeError("scan failed"))
     )
     with pytest.raises(RuntimeError, match="scan failed"):
-        tasks.run_scan.run(str(uuid.uuid4()), str(uuid.uuid4()))
+        tasks.wake.run()
     engine.dispose.assert_awaited_once_with()
 
 
-@pytest.mark.parametrize("invalid", ["not-a-uuid", None, 123, ["x"]])
-@pytest.mark.parametrize("position", [0, 1])
-def test_invalid_ids_skip_without_engine(task_engine, invalid, position):
-    _, factory, _ = task_engine
-    ids = [str(uuid.uuid4()), str(uuid.uuid4())]
-    ids[position] = invalid
-    assert tasks.run_scan.run(*ids) == "skipped"
-    factory.assert_not_called()
+def test_idle_disposes_engine_without_execution(monkeypatch, task_engine):
+    engine, factory, session = task_engine
+    tasks.claim_next_scan.return_value = None
+    execute = AsyncMock()
+    monkeypatch.setattr(tasks, "execute_scan", execute)
+    assert tasks.wake.run() == "idle"
+    tasks.claim_next_scan.assert_awaited_once_with(session)
+    execute.assert_not_awaited()
+    factory.assert_called_once_with()
+    engine.dispose.assert_awaited_once_with()
 
 
 async def test_live_cancel(monkeypatch, task_engine):
@@ -81,9 +93,7 @@ async def test_live_cancel(monkeypatch, task_engine):
         await started.wait()
 
     monkeypatch.setattr(tasks, "_wait_for_cancel", watcher)
-    result = await asyncio.wait_for(
-        tasks._run_scan(uuid.uuid4(), uuid.uuid4(), execute=execute), 1
-    )
+    result = await asyncio.wait_for(tasks._wake(execute=execute), 1)
     assert result == "cancelled"
     assert cancelled.is_set()
     task_engine[0].dispose.assert_awaited_once()
@@ -105,12 +115,7 @@ async def test_executor_finishes_cleans_watcher(monkeypatch, task_engine):
         return "completed"
 
     monkeypatch.setattr(tasks, "_wait_for_cancel", watcher)
-    assert (
-        await asyncio.wait_for(
-            tasks._run_scan(uuid.uuid4(), uuid.uuid4(), execute=execute), 1
-        )
-        == "completed"
-    )
+    assert await asyncio.wait_for(tasks._wake(execute=execute), 1) == "completed"
     assert stopped.is_set()
 
 
@@ -145,4 +150,4 @@ def test_task_engine_uses_null_pool():
 
 def test_task_registered_through_loader():
     celery_app.loader.import_default_modules()
-    assert "scans.run_scan" in celery_app.tasks
+    assert "scans.wake" in celery_app.tasks

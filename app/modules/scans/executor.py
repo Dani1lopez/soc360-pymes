@@ -78,6 +78,7 @@ async def execute_scan(
     scan_id: uuid.UUID,
     *,
     tenant_id: uuid.UUID,
+    claimed: bool = False,
     resolver: Resolver | None = None,
     nmap_path: str = "nmap",
     timeout: float = NMAP_TIMEOUT_SECONDS,
@@ -95,16 +96,18 @@ async def execute_scan(
         await _db_phase(session, tenant_id)
         await transition_scan(session, scan_id, to="cancelled")
 
-    claimed = False
     try:
         await _db_phase(session, tenant_id)
         asset = await _load_scan(session, scan_id, tenant_id)
         if asset is None:
+            if claimed:
+                return await _shielded(fail("asset_missing"))
             return "skipped"
-        await _db_phase(session, tenant_id)
-        if not await transition_scan(session, scan_id, to="running"):
-            return "skipped"
-        claimed = True
+        if not claimed:
+            await _db_phase(session, tenant_id)
+            if not await transition_scan(session, scan_id, to="running"):
+                return "skipped"
+            claimed = True
         target = await resolve_scan_target(*asset, resolver=resolver)
         documents = []
         drafts = []

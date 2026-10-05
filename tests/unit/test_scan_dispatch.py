@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.scans.dispatch import CeleryScanDispatcher
-from app.worker.tasks import run_scan
+from app.worker import tasks
 
 
 async def test_celery_dispatch(monkeypatch):
@@ -17,12 +17,12 @@ async def test_celery_dispatch(monkeypatch):
         assert threading.get_ident() != main_thread
         calls.append(kwargs)
 
-    monkeypatch.setattr(run_scan, "apply_async", publish)
+    monkeypatch.setattr(tasks.wake, "apply_async", publish)
     scan_id, tenant_id = uuid4(), uuid4()
     await CeleryScanDispatcher().dispatch(scan_id, tenant_id)
     assert calls == [
         {
-            "args": [str(scan_id), str(tenant_id)],
+            "args": [],
             "retry": True,
             "retry_policy": {
                 "max_retries": 2,
@@ -38,6 +38,6 @@ async def test_dispatch_failure_propagates(monkeypatch):
     def publish(**kwargs):
         raise RuntimeError("unavailable")
 
-    monkeypatch.setattr(run_scan, "apply_async", publish)
+    monkeypatch.setattr(tasks.wake, "apply_async", publish)
     with pytest.raises(RuntimeError, match="unavailable"):
         await CeleryScanDispatcher().dispatch(uuid4(), uuid4())

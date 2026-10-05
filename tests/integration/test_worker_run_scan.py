@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 
 from app.core.config import settings
 from app.core.database import set_tenant_context
@@ -26,6 +26,32 @@ from tests.integration.test_scan_state_transitions import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+async def test_undispatched_row_is_untouched(isolated_db_session):
+    scan_id, asset_id = await _seed_committed_scan(
+        isolated_db_session, status="pending"
+    )
+    try:
+        async with isolated_db_session() as session:
+            await _enable_superadmin(session)
+            await session.execute(
+                update(Scan).where(Scan.id == scan_id).values(dispatched_at=None)
+            )
+            await session.commit()
+        assert await tasks._wake() == "idle"
+        async with isolated_db_session() as session:
+            await _enable_superadmin(session)
+            row = (
+                await session.execute(
+                    select(Scan.status, Scan.started_at, Scan.dispatched_at).where(
+                        Scan.id == scan_id
+                    )
+                )
+            ).one()
+            assert tuple(row) == ("pending", None, None)
+    finally:
+        await _cleanup_committed_scan(isolated_db_session, scan_id, asset_id)
 
 
 async def test_worker_live_cancel(isolated_db_session, tmp_path):
@@ -50,9 +76,7 @@ async def test_worker_live_cancel(isolated_db_session, tmp_path):
         return await run_nmap([sys.executable, "-c", code], **kwargs)
 
     running = asyncio.create_task(
-        tasks._run_scan(
-            scan_id,
-            tenant_id,
+        tasks._wake(
             execute=partial(execute_scan, resolver=resolver, run=blocking_nmap),
             cancel_poll_seconds=0.02,
         )
@@ -100,7 +124,10 @@ async def test_worker_scan_duplicate_delivery(isolated_db_session, monkeypatch):
         async def fake_resolver(host: str) -> list[str]:
             return ["93.184.216.34"]
 
+        runs = []
+
         async def fake_run(argv: list[str], **kwargs: object) -> NmapRunResult:
+            runs.append(argv)
             return NmapRunResult(xml, "", 0)
 
         monkeypatch.setattr(
@@ -108,14 +135,9 @@ async def test_worker_scan_duplicate_delivery(isolated_db_session, monkeypatch):
             "execute_scan",
             partial(execute_scan, resolver=fake_resolver, run=fake_run),
         )
-        assert (
-            await asyncio.to_thread(tasks.run_scan.run, str(scan_id), str(tenant_id))
-            == "completed"
-        )
-        assert (
-            await asyncio.to_thread(tasks.run_scan.run, str(scan_id), str(tenant_id))
-            == "skipped"
-        )
+        assert await tasks._wake() == "completed"
+        assert await tasks._wake() == "idle"
+        assert len(runs) == 1
         async with isolated_db_session() as session:
             await set_tenant_context(session, tenant_id)
             assert (

@@ -25,8 +25,8 @@ from app.core.config import settings
 from app.core.database import _build_connect_args, set_tenant_context
 from app.modules.scans.models import Scan
 from app.modules.scans.executor import ScanOutcome, execute_scan
-from app.modules.scans.state import claim_next_scan
-from app.worker.celery_app import celery_app
+from app.modules.scans.state import claim_next_scan, reap_stale_scans
+from app.worker.celery_app import STALE_SCAN_SECONDS, celery_app
 
 logger = logging.getLogger(__name__)
 CANCEL_POLL_SECONDS = 5.0
@@ -116,6 +116,26 @@ async def _wake(
                     await asyncio.gather(executor, return_exceptions=True)
     finally:
         await engine.dispose()
+
+
+async def _reap(*, engine_factory: Callable[[], AsyncEngine] | None = None) -> int:
+    engine = (engine_factory or build_task_engine)()
+    try:
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with maker() as session:
+            count = await reap_stale_scans(
+                session, older_than_seconds=STALE_SCAN_SECONDS
+            )
+        if count > 0:
+            logger.warning("Reaped %d stale running scans", count)
+        return count
+    finally:
+        await engine.dispose()
+
+
+@celery_app.task(name="scans.reap", ignore_result=True)
+def reap() -> int:
+    return asyncio.run(_reap())
 
 
 @celery_app.task(name="scans.wake", ignore_result=True)

@@ -21,6 +21,14 @@ TIME_LIMIT_MARGIN_SECONDS = 300
 # The broker redelivers unacknowledged messages after this delay; it must exceed
 # the hard limit or a running scan would be delivered to a second worker.
 VISIBILITY_TIMEOUT_MARGIN_SECONDS = 600
+REAP_INTERVAL_SECONDS = 300
+
+
+def hard_time_limit_seconds() -> int:
+    return int(NMAP_TIMEOUT_SECONDS) + 2 * TIME_LIMIT_MARGIN_SECONDS
+
+
+STALE_SCAN_SECONDS = hard_time_limit_seconds() + TIME_LIMIT_MARGIN_SECONDS
 
 
 class BrokerSettings(Protocol):
@@ -43,7 +51,7 @@ def build_broker_url(config: BrokerSettings) -> str:
 def build_celery_config(config: BrokerSettings) -> dict[str, Any]:
     """Celery settings for at-least-once, JSON-only scan delivery."""
     soft_limit = int(NMAP_TIMEOUT_SECONDS) + TIME_LIMIT_MARGIN_SECONDS
-    hard_limit = soft_limit + TIME_LIMIT_MARGIN_SECONDS
+    hard_limit = hard_time_limit_seconds()
     material = config.REDIS_PASSWORD.get_secret_value()
     return {
         "broker_url": build_broker_url(config),
@@ -62,6 +70,9 @@ def build_celery_config(config: BrokerSettings) -> dict[str, Any]:
         "worker_prefetch_multiplier": 1,
         "task_soft_time_limit": soft_limit,
         "task_time_limit": hard_limit,
+        "beat_schedule": {
+            "scans.reap": {"task": "scans.reap", "schedule": REAP_INTERVAL_SECONDS},
+        },
         "timezone": "UTC",
         "enable_utc": True,
     }

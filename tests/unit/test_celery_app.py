@@ -84,6 +84,17 @@ class TestCeleryConfig:
         assert NMAP_TIMEOUT_SECONDS < soft < hard < visibility
 
 
+def test_reaper_schedule_and_threshold():
+    from app.worker.celery_app import STALE_SCAN_SECONDS
+
+    config = build_celery_config(_stub())
+    assert config["beat_schedule"]["scans.reap"] == {
+        "task": "scans.reap",
+        "schedule": 300,
+    }
+    assert STALE_SCAN_SECONDS > config["task_time_limit"]
+
+
 class TestCreateCeleryApp:
     def test_configuration_is_lazy(self) -> None:
         app = create_celery_app(_stub(redis_db=1, broker_db=1))

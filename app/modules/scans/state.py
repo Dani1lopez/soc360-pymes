@@ -35,7 +35,7 @@ savepoint; the outer test transaction still rolls everything back.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +48,7 @@ __all__ = [
     "TERMINAL_STATUSES",
     "cancel_scan",
     "claim_next_scan",
+    "reap_stale_scans",
     "transition_scan",
 ]
 
@@ -107,6 +108,24 @@ async def claim_next_scan(
     row = (await session.execute(stmt)).one_or_none()
     await session.commit()
     return (row.id, row.tenant_id) if row is not None else None
+
+
+async def reap_stale_scans(session: AsyncSession, *, older_than_seconds: int) -> int:
+    """Past the Celery hard limit, no task for a stale row can still be alive."""
+    if older_than_seconds <= 0:
+        raise ValueError("older_than_seconds must be positive")
+    await set_tenant_context(session, None, is_superadmin=True)
+    result = await session.execute(
+        update(Scan)
+        .where(
+            Scan.status == "running",
+            Scan.started_at <= func.now() - timedelta(seconds=older_than_seconds),
+        )
+        .values(status="failed", failure_reason="worker_lost", completed_at=func.now())
+        .execution_options(synchronize_session=False)
+    )
+    await session.commit()
+    return result.rowcount
 
 
 async def transition_scan(

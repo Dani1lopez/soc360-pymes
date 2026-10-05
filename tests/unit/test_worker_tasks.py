@@ -148,6 +148,24 @@ def test_task_engine_uses_null_pool():
         asyncio.run(engine.dispose())
 
 
+@pytest.mark.parametrize("fails", [False, True])
+async def test_reap_disposes_engine(monkeypatch, task_engine, fails):
+    engine, factory, session = task_engine
+    reaper = AsyncMock(
+        side_effect=RuntimeError("lost") if fails else None, return_value=2
+    )
+    monkeypatch.setattr(tasks, "reap_stale_scans", reaper, raising=False)
+    if fails:
+        with pytest.raises(RuntimeError, match="lost"):
+            await tasks._reap(engine_factory=factory)
+    else:
+        assert await tasks._reap(engine_factory=factory) == 2
+    reaper.assert_awaited_once_with(
+        session, older_than_seconds=tasks.STALE_SCAN_SECONDS
+    )
+    engine.dispose.assert_awaited_once_with()
+
+
 def test_task_registered_through_loader():
     celery_app.loader.import_default_modules()
     assert "scans.wake" in celery_app.tasks

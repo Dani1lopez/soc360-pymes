@@ -166,6 +166,28 @@ async def test_reap_disposes_engine(monkeypatch, task_engine, fails):
     engine.dispose.assert_awaited_once_with()
 
 
+@pytest.mark.parametrize("count", [0, 3])
+async def test_pump_rings_ready_count(monkeypatch, task_engine, count):
+    engine, factory, session = task_engine
+    counter = AsyncMock(return_value=count)
+    monkeypatch.setattr(tasks, "count_ready_scans", counter, raising=False)
+    ring = MagicMock()
+    assert await tasks._pump(engine_factory=factory, ring=ring) == count
+    counter.assert_awaited_once_with(session, limit=tasks.PUMP_MAX_BELLS)
+    assert ring.call_args_list == [()] * count
+    engine.dispose.assert_awaited_once_with()
+
+
+async def test_pump_disposes_on_ring_error(monkeypatch, task_engine):
+    monkeypatch.setattr(
+        tasks, "count_ready_scans", AsyncMock(return_value=1), raising=False
+    )
+    with pytest.raises(RuntimeError, match="lost"):
+        await tasks._pump(ring=MagicMock(side_effect=RuntimeError("lost")))
+    task_engine[0].dispose.assert_awaited_once_with()
+
+
 def test_task_registered_through_loader():
     celery_app.loader.import_default_modules()
     assert "scans.wake" in celery_app.tasks
+    assert "scans.pump" in celery_app.tasks

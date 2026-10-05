@@ -25,8 +25,8 @@ from app.core.config import settings
 from app.core.database import _build_connect_args, set_tenant_context
 from app.modules.scans.models import Scan
 from app.modules.scans.executor import ScanOutcome, execute_scan
-from app.modules.scans.state import claim_next_scan, reap_stale_scans
-from app.worker.celery_app import STALE_SCAN_SECONDS, celery_app
+from app.modules.scans.state import claim_next_scan, count_ready_scans, reap_stale_scans
+from app.worker.celery_app import PUMP_MAX_BELLS, STALE_SCAN_SECONDS, celery_app
 
 logger = logging.getLogger(__name__)
 CANCEL_POLL_SECONDS = 5.0
@@ -131,6 +131,31 @@ async def _reap(*, engine_factory: Callable[[], AsyncEngine] | None = None) -> i
         return count
     finally:
         await engine.dispose()
+
+
+async def _pump(
+    *,
+    engine_factory: Callable[[], AsyncEngine] | None = None,
+    ring: Callable[[], None] | None = None,
+) -> int:
+    engine = (engine_factory or build_task_engine)()
+    try:
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with maker() as session:
+            count = await count_ready_scans(session, limit=PUMP_MAX_BELLS)
+        bell = ring if ring is not None else lambda: wake.apply_async(args=[])
+        for _ in range(count):
+            bell()
+        if count > 0:
+            logger.info("Rang %d bells for ready scans", count)
+        return count
+    finally:
+        await engine.dispose()
+
+
+@celery_app.task(name="scans.pump", ignore_result=True)
+def pump() -> int:
+    return asyncio.run(_pump())
 
 
 @celery_app.task(name="scans.reap", ignore_result=True)

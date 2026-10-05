@@ -48,6 +48,7 @@ __all__ = [
     "TERMINAL_STATUSES",
     "cancel_scan",
     "claim_next_scan",
+    "count_ready_scans",
     "reap_stale_scans",
     "transition_scan",
 ]
@@ -78,6 +79,20 @@ _ALLOWED_FROM: dict[str, frozenset[str]] = {
 }
 
 
+_READY = (Scan.status == "pending", Scan.dispatched_at.isnot(None))
+
+
+async def count_ready_scans(session: AsyncSession, *, limit: int) -> int:
+    """Count a bounded batch of committed ready work across tenants."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    await set_tenant_context(session, None, is_superadmin=True)
+    ready = select(Scan.id).where(*_READY).limit(limit).subquery()
+    count = await session.scalar(select(func.count()).select_from(ready))
+    await session.commit()
+    return count
+
+
 async def claim_next_scan(
     session: AsyncSession,
 ) -> tuple[uuid.UUID, uuid.UUID] | None:
@@ -89,7 +104,7 @@ async def claim_next_scan(
     the claimed tenant's context.
     """
     await set_tenant_context(session, None, is_superadmin=True)
-    ready = (Scan.status == "pending", Scan.dispatched_at.isnot(None))
+    ready = _READY
     oldest = (
         select(Scan.id)
         .where(*ready)

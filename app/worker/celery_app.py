@@ -22,6 +22,8 @@ TIME_LIMIT_MARGIN_SECONDS = 300
 # the hard limit or a running scan would be delivered to a second worker.
 VISIBILITY_TIMEOUT_MARGIN_SECONDS = 600
 REAP_INTERVAL_SECONDS = 300
+PUMP_INTERVAL_SECONDS = 60
+PUMP_MAX_BELLS = 10
 
 
 def hard_time_limit_seconds() -> int:
@@ -72,6 +74,7 @@ def build_celery_config(config: BrokerSettings) -> dict[str, Any]:
         "task_time_limit": hard_limit,
         "beat_schedule": {
             "scans.reap": {"task": "scans.reap", "schedule": REAP_INTERVAL_SECONDS},
+            "scans.pump": {"task": "scans.pump", "schedule": PUMP_INTERVAL_SECONDS},
         },
         "timezone": "UTC",
         "enable_utc": True,

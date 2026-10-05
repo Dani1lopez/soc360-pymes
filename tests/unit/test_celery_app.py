@@ -95,6 +95,13 @@ def test_reaper_schedule_and_threshold():
     assert STALE_SCAN_SECONDS > config["task_time_limit"]
 
 
+def test_pump_schedule():
+    assert build_celery_config(_stub())["beat_schedule"]["scans.pump"] == {
+        "task": "scans.pump",
+        "schedule": 60,
+    }
+
+
 class TestCreateCeleryApp:
     def test_configuration_is_lazy(self) -> None:
         app = create_celery_app(_stub(redis_db=1, broker_db=1))

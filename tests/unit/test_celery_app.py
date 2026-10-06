@@ -95,6 +95,26 @@ def test_reaper_schedule_and_threshold():
     assert STALE_SCAN_SECONDS > config["task_time_limit"]
 
 
+@pytest.mark.parametrize(
+    ("task_name", "queue"),
+    [
+        ("scans.pump", "maintenance"),
+        ("scans.reap", "maintenance"),
+        ("scans.wake", "scans"),
+    ],
+)
+def test_task_routing(task_name, queue):
+    app = create_celery_app(_stub())
+    assert app.conf.task_default_queue == "scans"
+    assert app.amqp.router.route({}, task_name)["queue"].name == queue
+
+
+def test_broker_socket_timeouts():
+    options = build_celery_config(_stub())["broker_transport_options"]
+    assert options["socket_timeout"] == 5
+    assert options["socket_connect_timeout"] == 5
+
+
 def test_pump_schedule():
     assert build_celery_config(_stub())["beat_schedule"]["scans.pump"] == {
         "task": "scans.pump",

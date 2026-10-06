@@ -1,6 +1,8 @@
 """Celery application for asynchronous scan execution (F2 slice 6).
 
-Run the worker with ``celery -A app.worker.celery_app:celery_app worker``.
+Run scans with ``celery -A app.worker.celery_app:celery_app worker -Q scans``.
+Run maintenance separately with
+``celery -A app.worker.celery_app:celery_app worker -Q maintenance``.
 Configuration is resolved lazily on first access to ``celery_app.conf`` so
 importing this module never validates settings or touches the broker.
 """
@@ -24,6 +26,11 @@ VISIBILITY_TIMEOUT_MARGIN_SECONDS = 600
 REAP_INTERVAL_SECONDS = 300
 PUMP_INTERVAL_SECONDS = 60
 PUMP_MAX_BELLS = 10
+SCAN_QUEUE = "scans"
+MAINTENANCE_QUEUE = "maintenance"
+MAINTENANCE_SOFT_LIMIT_SECONDS = 60
+MAINTENANCE_HARD_LIMIT_SECONDS = 120
+BROKER_SOCKET_TIMEOUT_SECONDS = 5
 
 
 def hard_time_limit_seconds() -> int:
@@ -61,6 +68,13 @@ def build_celery_config(config: BrokerSettings) -> dict[str, Any]:
         "broker_connection_retry_on_startup": True,
         "broker_transport_options": {
             "visibility_timeout": hard_limit + VISIBILITY_TIMEOUT_MARGIN_SECONDS,
+            "socket_timeout": BROKER_SOCKET_TIMEOUT_SECONDS,
+            "socket_connect_timeout": BROKER_SOCKET_TIMEOUT_SECONDS,
+        },
+        "task_default_queue": SCAN_QUEUE,
+        "task_routes": {
+            "scans.pump": {"queue": MAINTENANCE_QUEUE},
+            "scans.reap": {"queue": MAINTENANCE_QUEUE},
         },
         "task_serializer": "json",
         "result_serializer": "json",

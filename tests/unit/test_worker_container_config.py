@@ -44,6 +44,35 @@ def test_worker_and_beat_security():
     )
 
 
+def test_maintenance_is_independent_and_hardened():
+    services = yaml.safe_load((ROOT / "docker-compose.worker.yml").read_text())[
+        "services"
+    ]
+    maintenance = services["maintenance"]
+    assert maintenance["build"]["target"] == "runtime"
+    assert maintenance["user"] == "65534:65534"
+    assert maintenance["cap_drop"] == ["ALL"]
+    assert "cap_add" not in maintenance
+    assert maintenance["security_opt"] == ["no-new-privileges:true"]
+    assert maintenance["read_only"] is True
+    assert maintenance["tmpfs"] == ["/tmp"]
+    assert maintenance["init"] is True
+    assert maintenance["profiles"] == ["worker"]
+    assert maintenance["env_file"] == services["beat"]["env_file"]
+    assert maintenance["environment"] == services["beat"]["environment"]
+    assert maintenance["depends_on"] == {"redis": {"condition": "service_healthy"}}
+    assert maintenance["restart"] == "unless-stopped"
+    assert maintenance["entrypoint"] == [
+        "celery",
+        "-A",
+        "app.worker.celery_app:celery_app",
+        "worker",
+        "--loglevel=INFO",
+        "--queues=maintenance",
+        "--concurrency=1",
+    ]
+
+
 def test_worker_stage_and_default_api_target():
     dockerfile = (ROOT / "Dockerfile").read_text()
     stages = list(re.finditer(r"^FROM .+ AS (\w+)\s*$", dockerfile, re.MULTILINE))
@@ -58,3 +87,4 @@ def test_worker_stage_and_default_api_target():
     assert "-perm /6000" in worker
     assert "entrypoint.sh" not in worker
     assert "NET_ADMIN" not in worker
+    assert 'CMD ["--loglevel=INFO", "--concurrency=1", "--queues=scans"]' in worker

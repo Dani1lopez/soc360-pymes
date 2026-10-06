@@ -26,7 +26,13 @@ from app.core.database import _build_connect_args, set_tenant_context
 from app.modules.scans.models import Scan
 from app.modules.scans.executor import ScanOutcome, execute_scan
 from app.modules.scans.state import claim_next_scan, count_ready_scans, reap_stale_scans
-from app.worker.celery_app import PUMP_MAX_BELLS, STALE_SCAN_SECONDS, celery_app
+from app.worker.celery_app import (
+    MAINTENANCE_HARD_LIMIT_SECONDS,
+    MAINTENANCE_SOFT_LIMIT_SECONDS,
+    PUMP_MAX_BELLS,
+    STALE_SCAN_SECONDS,
+    celery_app,
+)
 
 logger = logging.getLogger(__name__)
 CANCEL_POLL_SECONDS = 5.0
@@ -153,12 +159,22 @@ async def _pump(
         await engine.dispose()
 
 
-@celery_app.task(name="scans.pump", ignore_result=True)
+@celery_app.task(
+    name="scans.pump",
+    ignore_result=True,
+    soft_time_limit=MAINTENANCE_SOFT_LIMIT_SECONDS,
+    time_limit=MAINTENANCE_HARD_LIMIT_SECONDS,
+)
 def pump() -> int:
     return asyncio.run(_pump())
 
 
-@celery_app.task(name="scans.reap", ignore_result=True)
+@celery_app.task(
+    name="scans.reap",
+    ignore_result=True,
+    soft_time_limit=MAINTENANCE_SOFT_LIMIT_SECONDS,
+    time_limit=MAINTENANCE_HARD_LIMIT_SECONDS,
+)
 def reap() -> int:
     return asyncio.run(_reap())
 

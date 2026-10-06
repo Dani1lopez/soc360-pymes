@@ -40,7 +40,7 @@ RUN apt-get update \
 COPY app/ ./app/
 USER scanner
 ENTRYPOINT ["celery", "-A", "app.worker.celery_app:celery_app", "worker"]
-CMD ["--loglevel=INFO", "--concurrency=1"]
+CMD ["--loglevel=INFO", "--concurrency=1", "--queues=scans"]
 
 # ---- API runtime: keep last for plain docker build ------------------------
 FROM base AS runtime

@@ -187,6 +187,17 @@ async def test_pump_disposes_on_ring_error(monkeypatch, task_engine):
     task_engine[0].dispose.assert_awaited_once_with()
 
 
+@pytest.mark.parametrize("task", [tasks.pump, tasks.reap])
+def test_maintenance_task_limits(task):
+    assert task.soft_time_limit == 60
+    assert task.time_limit == 120
+
+
+def test_wake_uses_global_limits():
+    assert tasks.wake.soft_time_limit is None
+    assert tasks.wake.time_limit is None
+
+
 def test_task_registered_through_loader():
     celery_app.loader.import_default_modules()
     assert "scans.wake" in celery_app.tasks

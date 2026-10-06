@@ -1,5 +1,5 @@
 # Use with the infrastructure file:
-# docker compose -f docker-compose.yml -f docker-compose.worker.yml --profile worker up worker beat
+# docker compose -f docker-compose.yml -f docker-compose.worker.yml --profile worker up worker maintenance beat
 # The required .env.worker overrides .env. Supply the database URL pointing at
 # Compose host postgres, port 5432, and REDIS_HOST=redis. Never commit this file.
 # Postgres/Redis hostnames are Compose service names; enable dev for local Postgres.
@@ -26,6 +26,31 @@ services:
     mem_limit: ${WORKER_MEM_LIMIT:-1g}
     cpus: ${WORKER_CPUS:-1.0}
     # Postgres belongs to optional dev; use an external DB otherwise.
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Separate from the scan worker so the reaper does not depend on the workers it watches.
+  maintenance:
+    profiles: [worker]
+    build:
+      context: .
+      target: runtime
+    user: "65534:65534"
+    entrypoint: ["celery", "-A", "app.worker.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=maintenance", "--concurrency=1"]
+    env_file:
+      - path: .env
+      - path: .env.worker
+        required: true
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    init: true
     depends_on:
       redis:
         condition: service_healthy

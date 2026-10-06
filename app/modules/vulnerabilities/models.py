@@ -41,6 +41,9 @@ class Vulnerability(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     severity: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="open")
+    closed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     cve_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     cvss_score: Mapped[float | None] = mapped_column(Numeric(4, 1), nullable=True)
     vulnerability_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

@@ -242,7 +242,13 @@ async def update_vulnerability(
     update_data = data.model_dump(exclude_unset=True)
 
     changed_fields: list[str] = []
+    closing = False
     if "status" in update_data and update_data["status"] != vulnerability.status:
+        if update_data["status"] == "open":
+            vulnerability.closed_at = None
+        elif vulnerability.status == "open":
+            vulnerability.closed_at = func.now()
+            closing = True
         vulnerability.status = update_data["status"]
         changed_fields.append("status")
     if (
@@ -269,6 +275,9 @@ async def update_vulnerability(
         changed_fields.append("vulnerability_metadata")
 
     await db.flush()
+    if closing:
+        # Materialize the SQL clock value before synchronous response serialization.
+        await db.refresh(vulnerability, attribute_names=["closed_at"])
     await db.commit()
 
     # Nothing public changed: no event. The flush and commit still ran, but a

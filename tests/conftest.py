@@ -177,6 +177,10 @@ if _xdist_worker_id():
     os.environ["REDIS_DB"] = str(_resolved_redis_db)
 else:
     os.environ.setdefault("REDIS_DB", str(_resolved_redis_db))
+# The Celery broker DB must differ from REDIS_DB (build_broker_url rejects a
+# collision), and every index 1..15 may be REDIS_DB for some worker. Tests never
+# connect to the broker, so pin it to the otherwise unused db=0.
+os.environ["CELERY_BROKER_REDIS_DB"] = "0"
 os.environ.setdefault("REDIS_PASSWORD", "soc360_redis_dev_password")
 # PR5b' distributed lock secret (must be at least 32 bytes to satisfy production
 # validation in app/core/config.py; this default is test-only).

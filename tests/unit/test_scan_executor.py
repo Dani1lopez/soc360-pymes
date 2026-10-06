@@ -60,6 +60,39 @@ async def execute(s):
     )
 
 
+async def test_preclaimed_success(setup):
+    s = setup
+    assert (
+        await executor.execute_scan(
+            s.session,
+            s.scan,
+            tenant_id=s.tenant,
+            claimed=True,
+            resolver=s.resolver,
+            run=s.run,
+        )
+        == "completed"
+    )
+    assert [call.kwargs["to"] for call in s.transition.await_args_list] == ["completed"]
+
+
+async def test_preclaimed_missing_asset(setup):
+    s = setup
+    s.load.return_value = None
+    assert (
+        await executor.execute_scan(
+            s.session,
+            s.scan,
+            tenant_id=s.tenant,
+            claimed=True,
+        )
+        == "failed"
+    )
+    s.transition.assert_awaited_once_with(
+        s.session, s.scan, to="failed", failure_reason="asset_missing"
+    )
+
+
 async def test_success(setup):
     s = setup
     assert await execute(s) == "completed"

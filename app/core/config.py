@@ -104,6 +104,15 @@ class Settings(BaseSettings):
     REDIS_STARTUP_MAX_ATTEMPTS: int = 3
     REDIS_STARTUP_BACKOFF_BASE_SECONDS: float = 1.0
 
+    # Celery broker (F2 slice 6) — same Redis server, isolated logical DB.
+    # Must differ from REDIS_DB; enforced when the broker URL is built, not here,
+    # because the test suite assigns REDIS_DB per xdist worker.
+    CELERY_BROKER_REDIS_DB: int = 1
+    # Kill switch for POST /scans/{id}/run. Stays off until asset ownership
+    # verification lands (scanning unowned targets carries legal risk).
+    SCAN_EXECUTION_ENABLED: bool = False
+    NMAP_PROCESS_SUPERVISION: bool = False
+
     # Metrics endpoint auth + outage translation (PR4 #260)
     # Lifecycle: METRICS_TOKEN is mandatory in production; METRICS_TOKEN_PREVIOUS
     # is optional and exists only to enable zero-downtime rotation overlap.
@@ -258,6 +267,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "REDIS_OUTAGE_RETRY_AFTER_SECONDS must be between 1 and 300 seconds"
             )
+        return v
+
+    @field_validator("CELERY_BROKER_REDIS_DB")
+    @classmethod
+    def celery_broker_db_in_range(cls, v: int) -> int:
+        if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 15:
+            raise ValueError("CELERY_BROKER_REDIS_DB must be between 0 and 15")
         return v
 
     @field_validator("LOCK_RETRY_AFTER_SECONDS")

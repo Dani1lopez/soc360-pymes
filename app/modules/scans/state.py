@@ -4,7 +4,7 @@ Every status change of a ``Scan`` row goes through this module (F2 slice 5,
 decisions 5-6). Two rules define it:
 
 1. The transition map is the single source of truth for which edges exist:
-   ``pending → {running, cancelled}``,
+   ``pending → {running, cancelled, failed}``,
    ``running → {completed, failed, cancelled}``, and
    ``completed``/``failed``/``cancelled`` are terminal (no outgoing edges).
    A terminal row can therefore never be revived — rescan means a new
@@ -35,17 +35,21 @@ savepoint; the outer test transaction still rolls everything back.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import set_tenant_context
 from app.modules.scans.models import Scan
 
 __all__ = [
     "SCAN_TRANSITIONS",
     "TERMINAL_STATUSES",
     "cancel_scan",
+    "claim_next_scan",
+    "count_ready_scans",
+    "reap_stale_scans",
     "transition_scan",
 ]
 
@@ -53,7 +57,7 @@ __all__ = [
 # with an empty set on purpose: they are VALID targets (and valid sources to
 # look up), they just never originate a transition.
 SCAN_TRANSITIONS: dict[str, frozenset[str]] = {
-    "pending": frozenset({"running", "cancelled"}),
+    "pending": frozenset({"running", "cancelled", "failed"}),
     "running": frozenset({"completed", "failed", "cancelled"}),
     "completed": frozenset(),
     "failed": frozenset(),
@@ -75,6 +79,70 @@ _ALLOWED_FROM: dict[str, frozenset[str]] = {
 }
 
 
+_READY = (Scan.status == "pending", Scan.dispatched_at.isnot(None))
+
+
+async def count_ready_scans(session: AsyncSession, *, limit: int) -> int:
+    """Count a bounded batch of committed ready work across tenants."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    await set_tenant_context(session, None, is_superadmin=True)
+    ready = select(Scan.id).where(*_READY).limit(limit).subquery()
+    count = await session.scalar(select(func.count()).select_from(ready))
+    await session.commit()
+    return count
+
+
+async def claim_next_scan(
+    session: AsyncSession,
+) -> tuple[uuid.UUID, uuid.UUID] | None:
+    """Claim the oldest ready row: Postgres is the queue.
+
+    SKIP LOCKED makes concurrent claimers take distinct rows. started_at uses
+    the database clock, not the worker clock. Superadmin context is only for
+    this cross-tenant claim and ends at commit; execution later runs under
+    the claimed tenant's context.
+    """
+    await set_tenant_context(session, None, is_superadmin=True)
+    ready = _READY
+    oldest = (
+        select(Scan.id)
+        .where(*ready)
+        .order_by(Scan.dispatched_at, Scan.id)
+        .with_for_update(skip_locked=True)
+        .limit(1)
+        .scalar_subquery()
+    )
+    stmt = (
+        update(Scan)
+        .where(Scan.id == oldest, *ready)
+        .values(status="running", started_at=func.now())
+        .returning(Scan.id, Scan.tenant_id)
+        .execution_options(synchronize_session=False)
+    )
+    row = (await session.execute(stmt)).one_or_none()
+    await session.commit()
+    return (row.id, row.tenant_id) if row is not None else None
+
+
+async def reap_stale_scans(session: AsyncSession, *, older_than_seconds: int) -> int:
+    """Past the Celery hard limit, no task for a stale row can still be alive."""
+    if older_than_seconds <= 0:
+        raise ValueError("older_than_seconds must be positive")
+    await set_tenant_context(session, None, is_superadmin=True)
+    result = await session.execute(
+        update(Scan)
+        .where(
+            Scan.status == "running",
+            Scan.started_at <= func.now() - timedelta(seconds=older_than_seconds),
+        )
+        .values(status="failed", failure_reason="worker_lost", completed_at=func.now())
+        .execution_options(synchronize_session=False)
+    )
+    await session.commit()
+    return result.rowcount
+
+
 async def transition_scan(
     session: AsyncSession,
     scan_id: uuid.UUID,
@@ -92,6 +160,10 @@ async def transition_scan(
     ``to="failed"``, when it is supplied for any other target or exceeds
     64 characters, or when ``raw_output`` is supplied outside completed/failed.
     With ``commit=False``, the caller owns commit/rollback of the UPDATE.
+
+    Transitioning to ``running`` also requires non-NULL ``dispatched_at``;
+    an undispatched pending scan is left unchanged and returns False.
+    Other transitions do not require dispatch.
 
     The statement is one conditional UPDATE with ``synchronize_session=False``:
     the identity map is deliberately left alone so callers must re-read the
@@ -129,6 +201,8 @@ async def transition_scan(
         .values(**values)
         .execution_options(synchronize_session=False)
     )
+    if to == "running":
+        stmt = stmt.where(Scan.dispatched_at.isnot(None))
     result = await session.execute(stmt)
     if commit:
         await session.commit()
@@ -138,8 +212,7 @@ async def transition_scan(
 async def cancel_scan(session: AsyncSession, scan_id: uuid.UUID) -> bool:
     """Move a ``pending`` or ``running`` scan to ``cancelled``; False if too late.
 
-    Service-function-only by explicit decision (Q2): the HTTP trigger and a
-    cancel endpoint land together in a later slice, so this module exposes no
-    router and ``app/main.py`` stays untouched.
+    The HTTP cancel endpoint uses the same transition via the scan service;
+    the worker watches persisted cancellation to stop a live executor.
     """
     return await transition_scan(session, scan_id, to="cancelled")

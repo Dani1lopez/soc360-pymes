@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------------
 # PR3 #260 — Multiprocess Prometheus metrics Dockerfile.
 #
-# Multi-stage build: uv-sync in the first stage, slim runtime in the second.
+# Stages: builder -> base -> worker; runtime (API) stays the default last stage.
+# Never use Docker --privileged; Nmap's --privileged flag is unrelated.
 # PROMETHEUS_MULTIPROC_DIR is a known writable path for per-worker .db files.
 # ---------------------------------------------------------------------------
 
@@ -17,14 +18,34 @@ COPY .python-version ./
 # Install production deps into a virtualenv.
 RUN uv sync --frozen --no-dev --no-install-project
 
-# ---- stage 2: runtime -----------------------------------------------------
-FROM python:3.12-slim-bookworm AS runtime
+# ---- shared virtualenv (no application code) ------------------------------
+FROM python:3.12-slim-bookworm AS base
 
 WORKDIR /app
 
 # Copy the venv from the builder stage.
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
+
+# ---- non-root scanner -----------------------------------------------------
+FROM base AS worker
+
+ENV NMAP_PROCESS_SUPERVISION=true
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nmap libcap2-bin \
+    && rm -rf /var/lib/apt/lists/* \
+    && setcap cap_net_raw+eip /usr/bin/nmap \
+    && useradd --system --no-create-home --shell /usr/sbin/nologin scanner \
+    && find / -xdev -perm /6000 -type f -exec chmod a-s {} +
+
+COPY app/ ./app/
+USER scanner
+ENTRYPOINT ["celery", "-A", "app.worker.celery_app:celery_app", "worker"]
+CMD ["--loglevel=INFO", "--concurrency=1", "--queues=scans"]
+
+# ---- API runtime: keep last for plain docker build ------------------------
+FROM base AS runtime
 
 # Copy application source and entrypoint.
 COPY app/ ./app/

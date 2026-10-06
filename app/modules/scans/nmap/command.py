@@ -11,6 +11,11 @@ import ipaddress
 from app.modules.scans.targets import ScanTarget
 
 NMAP_PROFILE: tuple[str, ...] = (
+    "--privileged",
+    "--host-timeout",
+    "55m",
+    "--script-timeout",
+    "5m",
     "-sS",
     "-sU",
     "--top-ports",

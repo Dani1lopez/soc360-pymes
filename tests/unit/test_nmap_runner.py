@@ -10,7 +10,11 @@ import pytest
 from app.modules.scans.nmap.runner import NmapRunError, _cleanup, run_nmap
 
 
-async def test_cleanup_bounds_post_kill_wait(caplog: pytest.LogCaptureFixture) -> None:
+async def test_cleanup_bounds_post_kill_wait(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    killpg = Mock()
+    monkeypatch.setattr(os, "killpg", killpg)
     process = Mock()
     process.pid = 12345
     process.stdout = asyncio.StreamReader()
@@ -23,8 +27,11 @@ async def test_cleanup_bounds_post_kill_wait(caplog: pytest.LogCaptureFixture) -
     process.wait = AsyncMock(side_effect=never_exits)
     before = set(asyncio.all_tasks())
     await asyncio.wait_for(_cleanup(process, grace_period=0.01), timeout=0.2)
-    process.terminate.assert_called_once()
-    process.kill.assert_called_once()
+    assert killpg.call_args_list == [
+        ((12345, signal.SIGTERM),),
+        ((12345, signal.SIGKILL),),
+        ((12345, signal.SIGKILL),),
+    ]
     assert process.wait.call_count == 2
     assert set(asyncio.all_tasks()) == before
     assert any(
@@ -64,6 +71,80 @@ async def test_nonzero_exit_keeps_diagnostics() -> None:
     assert caught.value.detail is not None
     assert caught.value.detail.endswith("diagnostic")
     assert len(caught.value.detail.encode()) <= 4096
+
+
+@pytest.mark.parametrize("supervise", [None, 60])
+async def test_spawn_permission_and_supervisor(monkeypatch, supervise) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: f"/bin/{name}")
+    spawn = AsyncMock(side_effect=PermissionError)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    with pytest.raises(NmapRunError, match="nmap_not_permitted"):
+        await run_nmap(
+            ["nmap", "--privileged"],
+            timeout=60,
+            max_output_bytes=100,
+            supervise_seconds=supervise,
+        )
+    expected = ["/bin/nmap", "--privileged"]
+    if supervise:
+        expected = [
+            "/bin/setpriv",
+            "--pdeathsig",
+            "TERM",
+            "/bin/timeout",
+            "--kill-after=5",
+            "60",
+            *expected,
+        ]
+    assert spawn.call_args.args == tuple(expected)
+    assert spawn.call_args.kwargs["start_new_session"] is True
+
+
+@pytest.mark.parametrize("missing", ["setpriv", "timeout"])
+async def test_supervisor_missing_fails_closed(monkeypatch, missing) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: None if name == missing else name)
+    spawn = AsyncMock()
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    with pytest.raises(NmapRunError, match="nmap_supervisor_missing"):
+        await run_nmap(["nmap"], timeout=60, max_output_bytes=100, supervise_seconds=60)
+    spawn.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("code", "reason"),
+    [(126, "nmap_not_permitted"), (124, "timeout"), (3, "nonzero_exit")],
+)
+async def test_supervisor_exit_codes(monkeypatch, tmp_path, code, reason) -> None:
+    # GNU timeout exits 126 when exec of nmap fails (missing capability) and
+    # 124 when its own wall-clock bound fires.
+    fake = tmp_path / "setpriv"
+    fake.write_text(f"#!/bin/sh\nexit {code}\n")
+    fake.chmod(0o755)
+    real_which = __import__("shutil").which
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda name: str(fake) if name in ("setpriv", "timeout") else real_which(name),
+    )
+    with pytest.raises(NmapRunError) as caught:
+        await run_nmap(
+            [sys.executable], timeout=5, max_output_bytes=100, supervise_seconds=5
+        )
+    assert caught.value.reason == reason
+
+
+async def test_unsupervised_126_stays_nonzero_exit() -> None:
+    with pytest.raises(NmapRunError, match="nonzero_exit"):
+        await run_nmap(child("raise SystemExit(126)"), timeout=2, max_output_bytes=100)
+
+
+async def test_nonzero_even_with_valid_scaninfo() -> None:
+    xml = '<nmaprun><scaninfo type="syn"/><scaninfo type="udp"/></nmaprun>'
+    with pytest.raises(NmapRunError, match="nonzero_exit"):
+        await run_nmap(
+            child(f"print({xml!r}); raise SystemExit(1)"),
+            timeout=2,
+            max_output_bytes=100,
+        )
 
 
 def test_error_detail_defaults_to_none() -> None:
@@ -137,6 +218,7 @@ async def test_cleanup_ignoring_sigterm(
         assert args[0] == sys.executable
         assert set(kwargs.pop("env")) == {"PATH", "LC_ALL"}
         assert kwargs == {
+            "start_new_session": True,
             "stdin": asyncio.subprocess.DEVNULL,
             "stdout": asyncio.subprocess.PIPE,
             "stderr": asyncio.subprocess.PIPE,

@@ -15,6 +15,7 @@ from typing import Literal, TypeVar
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import set_tenant_context
 from app.modules.assets.models import Asset
 from app.modules.scans.models import Scan
@@ -78,6 +79,7 @@ async def execute_scan(
     scan_id: uuid.UUID,
     *,
     tenant_id: uuid.UUID,
+    claimed: bool = False,
     resolver: Resolver | None = None,
     nmap_path: str = "nmap",
     timeout: float = NMAP_TIMEOUT_SECONDS,
@@ -95,22 +97,31 @@ async def execute_scan(
         await _db_phase(session, tenant_id)
         await transition_scan(session, scan_id, to="cancelled")
 
-    claimed = False
     try:
         await _db_phase(session, tenant_id)
         asset = await _load_scan(session, scan_id, tenant_id)
         if asset is None:
+            if claimed:
+                return await _shielded(fail("asset_missing"))
             return "skipped"
-        await _db_phase(session, tenant_id)
-        if not await transition_scan(session, scan_id, to="running"):
-            return "skipped"
-        claimed = True
+        if not claimed:
+            await _db_phase(session, tenant_id)
+            if not await transition_scan(session, scan_id, to="running"):
+                return "skipped"
+            claimed = True
         target = await resolve_scan_target(*asset, resolver=resolver)
         documents = []
         drafts = []
         for family in split_by_family(target):
             argv = build_nmap_command(family, nmap_path=nmap_path)
-            result = await run(argv, timeout=timeout, max_output_bytes=max_output_bytes)
+            result = await run(
+                argv,
+                timeout=timeout,
+                max_output_bytes=max_output_bytes,
+                supervise_seconds=int(timeout)
+                if settings.NMAP_PROCESS_SUPERVISION
+                else None,
+            )
             report = parse_nmap_xml(result.stdout)
             verify_scan_types(report)
             documents.append(result.stdout.decode("utf-8", errors="replace"))

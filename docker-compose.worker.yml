@@ -1,0 +1,59 @@
+# Use with the infrastructure file:
+# docker compose -f docker-compose.yml -f docker-compose.worker.yml --profile worker up worker beat
+# The required .env.worker overrides .env. Supply the database URL pointing at
+# Compose host postgres, port 5432, and REDIS_HOST=redis. Never commit this file.
+# Postgres/Redis hostnames are Compose service names; enable dev for local Postgres.
+services:
+  worker:
+    profiles: [worker]
+    build:
+      context: .
+      target: worker
+    env_file:
+      - path: .env
+      - path: .env.worker
+        required: true
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
+    # Do not enable no-new-privileges: it disables Nmap's file capabilities.
+    read_only: true
+    tmpfs: [/tmp]
+    init: true
+    pids_limit: ${WORKER_PIDS_LIMIT:-256}
+    mem_limit: ${WORKER_MEM_LIMIT:-1g}
+    cpus: ${WORKER_CPUS:-1.0}
+    # Postgres belongs to optional dev; use an external DB otherwise.
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  beat:
+    profiles: [worker]
+    build:
+      context: .
+      target: runtime
+    user: "65534:65534"
+    entrypoint: ["celery", "-A", "app.worker.celery_app:celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule", "--pidfile=/tmp/celerybeat.pid"]
+    env_file:
+      - path: .env
+      - path: .env.worker
+        required: true
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    init: true
+    # Exactly one beat: two beats double every schedule.
+    deploy:
+      replicas: 1
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped

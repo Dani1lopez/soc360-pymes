@@ -86,6 +86,9 @@ async def _wake(
     execute: ScanExecutor | None = None,
     cancel_poll_seconds: float = CANCEL_POLL_SECONDS,
 ) -> str:
+    if not settings.SCAN_EXECUTION_ENABLED:
+        logger.warning("Scan execution disabled; wake ignored")
+        return "disabled"
     engine = (engine_factory or build_task_engine)()
     try:
         maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -144,6 +147,8 @@ async def _pump(
     engine_factory: Callable[[], AsyncEngine] | None = None,
     ring: Callable[[], None] | None = None,
 ) -> int:
+    if not settings.SCAN_EXECUTION_ENABLED:
+        return 0
     engine = (engine_factory or build_task_engine)()
     try:
         maker = async_sessionmaker(engine, expire_on_commit=False)

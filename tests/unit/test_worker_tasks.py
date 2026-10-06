@@ -12,6 +12,32 @@ from app.worker.celery_app import celery_app
 from app.worker.tasks import _wait_for_cancel as real_watcher
 
 
+@pytest.fixture(autouse=True)
+def enable_execution(monkeypatch):
+    monkeypatch.setattr(tasks.settings, "SCAN_EXECUTION_ENABLED", True)
+
+
+@pytest.mark.parametrize("operation", ["_wake", "_pump"])
+async def test_disabled_no_database(monkeypatch, caplog, operation):
+    monkeypatch.setattr(tasks.settings, "SCAN_EXECUTION_ENABLED", False)
+    factory = MagicMock(side_effect=AssertionError("disabled task built engine"))
+    ring, claim, counter = MagicMock(), AsyncMock(), AsyncMock()
+    monkeypatch.setattr(tasks, "claim_next_scan", claim)
+    monkeypatch.setattr(tasks, "count_ready_scans", counter)
+    kwargs = {"engine_factory": factory}
+    if operation == "_pump":
+        kwargs["ring"] = ring
+    assert await getattr(tasks, operation)(**kwargs) == (
+        "disabled" if operation == "_wake" else 0
+    )
+    factory.assert_not_called()
+    claim.assert_not_awaited()
+    counter.assert_not_awaited()
+    ring.assert_not_called()
+    if operation == "_wake":
+        assert len(caplog.records) == 1 and caplog.records[0].levelname == "WARNING"
+
+
 @pytest.fixture
 def task_engine(monkeypatch):
     engine = MagicMock()

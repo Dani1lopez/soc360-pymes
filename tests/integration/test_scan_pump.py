@@ -12,6 +12,11 @@ from tests.integration.test_scan_claim_next import queue_rows  # noqa: F401
 pytestmark = pytest.mark.integration
 
 
+@pytest.fixture(autouse=True)
+def enable_execution(monkeypatch):
+    monkeypatch.setattr(tasks.settings, "SCAN_EXECUTION_ENABLED", True)
+
+
 async def test_ready_count_and_cap(queue_rows, isolated_db_session):  # noqa: F811
     await queue_rows()
     await queue_rows()
@@ -27,9 +32,19 @@ async def test_ready_count_and_cap(queue_rows, isolated_db_session):  # noqa: F8
                 await count_ready_scans(session, limit=limit)
 
 
-async def test_lost_bell_recovery(queue_rows, isolated_db_session):  # noqa: F811
+async def test_lost_bell_recovery(queue_rows, isolated_db_session, monkeypatch):  # noqa: F811
     scan_id, tenant_id = await queue_rows()
     bells = []
+    monkeypatch.setattr(tasks.settings, "SCAN_EXECUTION_ENABLED", False)
+    assert await tasks._wake() == "disabled"
+    assert await tasks._pump(ring=lambda: bells.append(None)) == 0
+    assert bells == []
+    async with isolated_db_session() as session:
+        await set_tenant_context(session, tenant_id)
+        assert (
+            await session.scalar(select(Scan.status).where(Scan.id == scan_id))
+        ) == "pending"
+    monkeypatch.setattr(tasks.settings, "SCAN_EXECUTION_ENABLED", True)
     assert await tasks._pump(ring=lambda: bells.append(None)) == 1
     assert len(bells) == 1
 

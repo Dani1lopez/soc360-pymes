@@ -28,6 +28,11 @@ from tests.integration.test_scan_state_transitions import (
 pytestmark = pytest.mark.integration
 
 
+@pytest.fixture(autouse=True)
+def enable_execution(monkeypatch):
+    monkeypatch.setattr(settings, "SCAN_EXECUTION_ENABLED", True)
+
+
 async def test_undispatched_row_is_untouched(isolated_db_session):
     scan_id, asset_id = await _seed_committed_scan(
         isolated_db_session, status="pending"

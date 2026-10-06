@@ -15,6 +15,13 @@ Historical review and runtime observations come from
   `app/worker/celery_app.py` (`PUMP_MAX_BELLS`); review R4-pump-amplification.
 - **Size:** small–medium; bound backlog without making Redis authoritative.
 
+### Bound multi-family execution to one task deadline
+- **Why deferred:** one Nmap per address family runs sequentially, each up to
+  `NMAP_TIMEOUT_SECONDS`; dual-stack targets can exceed the Celery hard limit.
+- **Where:** `app/worker/celery_app.py:63-64`,
+  `app/modules/scans/executor.py` (family loop); review R3-multifamily-deadline.
+- **Size:** small–medium; share a deadline across families and test dual-stack.
+
 ### Separate supervisor and runner deadlines
 - **Why deferred:** review R3-001 is non-blocking at the integral default;
   `int(timeout)` truncates fractional values and gives the supervisor the

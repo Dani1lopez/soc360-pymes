@@ -19,7 +19,8 @@ permission to scan it.
 
 `SCAN_EXECUTION_ENABLED` defaults to false (`app/core/config.py`). Keep it off
 until asset ownership verification is implemented. The switch blocks new
-HTTP dispatches, not cancellation or execution of already-dispatched rows
+HTTP dispatches, worker claims and pump bells, including already-dispatched
+pending rows. Running scans are stopped with `/cancel`; reaping is unaffected
 (`app/modules/scans/router.py`, `app/worker/tasks.py`).
 
 ## Decision

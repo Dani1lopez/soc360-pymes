@@ -30,6 +30,8 @@ ENV PATH="/app/.venv/bin:$PATH"
 # ---- non-root scanner -----------------------------------------------------
 FROM base AS worker
 
+ENV NMAP_PROCESS_SUPERVISION=true
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends nmap libcap2-bin \
     && rm -rf /var/lib/apt/lists/* \

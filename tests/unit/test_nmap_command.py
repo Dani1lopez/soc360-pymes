@@ -10,6 +10,11 @@ from app.modules.scans.nmap.command import (
 from app.modules.scans.targets import ScanTarget
 
 EXPECTED_PROFILE = (
+    "--privileged",
+    "--host-timeout",
+    "55m",
+    "--script-timeout",
+    "5m",
     "-sS",
     "-sU",
     "--top-ports",
@@ -39,7 +44,7 @@ def test_exact_argv_and_target_separator(addresses: tuple[str, ...]) -> None:
     assert argv[separator + 1 :] == list(addresses)
     assert all(argv.index(address) > separator for address in addresses)
     assert not any("exploit" in argument for argument in argv)
-    assert [argument for argument in argv if argument.startswith("--script")] == [
+    assert [argument for argument in argv if argument.startswith("--script=")] == [
         "--script=vuln"
     ]
 

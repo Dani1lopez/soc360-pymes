@@ -10,11 +10,15 @@ import logging
 import math
 import os
 import shutil
+import signal
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 
 logger = logging.getLogger(__name__)
+# GNU timeout exit codes: 126 = nmap could not be executed (e.g. missing
+# capability), 124 = the supervisor's wall-clock bound fired.
+_SUPERVISOR_EXITS = {126: "nmap_not_permitted", 124: "timeout"}
 
 
 class NmapRunError(Exception):
@@ -68,14 +72,14 @@ async def _cleanup(process: asyncio.subprocess.Process, grace_period: float) -> 
     ]
     try:
         try:
-            process.terminate()
+            os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
         try:
             await asyncio.wait_for(process.wait(), grace_period)
         except TimeoutError:
             try:
-                process.kill()
+                os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             try:
@@ -85,6 +89,11 @@ async def _cleanup(process: asyncio.subprocess.Process, grace_period: float) -> 
                     "Nmap process pid=%s did not exit after kill", process.pid
                 )
     finally:
+        # The leader may exit on TERM while a descendant ignores it.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         for task in drains:
             task.cancel()
         await asyncio.gather(*drains, return_exceptions=True)
@@ -96,6 +105,7 @@ async def run_nmap(
     timeout: float,
     max_output_bytes: int,
     grace_period: float = 5.0,
+    supervise_seconds: int | None = None,
 ) -> NmapRunResult:
     """Run one binary, discard partial results on any failure or cancellation."""
     if (
@@ -105,24 +115,41 @@ async def run_nmap(
         or max_output_bytes <= 0
         or not math.isfinite(grace_period)
         or grace_period <= 0
+        or (supervise_seconds is not None and supervise_seconds <= 0)
     ):
         raise ValueError("argv and positive finite resource limits are required")
     resolved = shutil.which(argv[0])
     if resolved is None:
         raise NmapRunError("nmap_not_found")
+    command = [resolved, *argv[1:]]
+    if supervise_seconds is not None:
+        setpriv, supervisor = shutil.which("setpriv"), shutil.which("timeout")
+        if setpriv is None or supervisor is None:
+            raise NmapRunError("nmap_supervisor_missing")
+        command = [
+            setpriv,
+            "--pdeathsig",
+            "TERM",
+            supervisor,
+            "--kill-after=5",
+            str(supervise_seconds),
+            *command,
+        ]
     process = None
     readers: list[asyncio.Task[bytes] | asyncio.Task[str]] = []
     try:
         async with asyncio.timeout(timeout):
             try:
                 process = await asyncio.create_subprocess_exec(
-                    resolved,
-                    *argv[1:],
+                    *command,
+                    start_new_session=True,
                     stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     env=_minimal_env(),
                 )
+            except PermissionError as exc:
+                raise NmapRunError("nmap_not_permitted") from exc
             except FileNotFoundError as exc:
                 raise NmapRunError("nmap_not_found") from exc
             assert process.stdout is not None and process.stderr is not None
@@ -131,6 +158,11 @@ async def run_nmap(
             readers = [stdout_task, stderr_task]
             await asyncio.gather(*readers)
             returncode = await process.wait()
+            if supervise_seconds is not None and returncode in _SUPERVISOR_EXITS:
+                # GNU timeout, not nmap, reports exec failure and its own bound.
+                raise NmapRunError(
+                    _SUPERVISOR_EXITS[returncode], detail=stderr_task.result()
+                )
             if returncode != 0:
                 raise NmapRunError("nonzero_exit", detail=stderr_task.result())
             return NmapRunResult(stdout_task.result(), stderr_task.result(), returncode)

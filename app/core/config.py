@@ -111,6 +111,7 @@ class Settings(BaseSettings):
     # Kill switch for POST /scans/{id}/run. Stays off until asset ownership
     # verification lands (scanning unowned targets carries legal risk).
     SCAN_EXECUTION_ENABLED: bool = False
+    NMAP_PROCESS_SUPERVISION: bool = False
 
     # Metrics endpoint auth + outage translation (PR4 #260)
     # Lifecycle: METRICS_TOKEN is mandatory in production; METRICS_TOKEN_PREVIOUS

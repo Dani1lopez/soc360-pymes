@@ -15,6 +15,7 @@ from typing import Literal, TypeVar
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import set_tenant_context
 from app.modules.assets.models import Asset
 from app.modules.scans.models import Scan
@@ -113,7 +114,14 @@ async def execute_scan(
         drafts = []
         for family in split_by_family(target):
             argv = build_nmap_command(family, nmap_path=nmap_path)
-            result = await run(argv, timeout=timeout, max_output_bytes=max_output_bytes)
+            result = await run(
+                argv,
+                timeout=timeout,
+                max_output_bytes=max_output_bytes,
+                supervise_seconds=int(timeout)
+                if settings.NMAP_PROCESS_SUPERVISION
+                else None,
+            )
             report = parse_nmap_xml(result.stdout)
             verify_scan_types(report)
             documents.append(result.stdout.decode("utf-8", errors="replace"))

@@ -81,6 +81,7 @@ def test_worker_stage_and_default_api_target():
         i for i, stage in enumerate(stages) if stage.group(1) == "worker"
     )
     worker = dockerfile[stages[worker_index].end() : stages[worker_index + 1].start()]
+    assert "ENV NMAP_PROCESS_SUPERVISION=true" in worker
     assert "setcap cap_net_raw+eip" in worker
     user = re.search(r"^USER (\S+)", worker, re.MULTILINE)
     assert user and user.group(1) not in {"root", "0", "0:0"}

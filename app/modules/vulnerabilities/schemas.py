@@ -114,6 +114,7 @@ class VulnerabilityResponse(BaseModel):
     vulnerability_metadata: dict | None
     created_at: datetime
     updated_at: datetime
+    closed_at: datetime | None
 
     @classmethod
     def from_orm_instance(cls, vulnerability: Vulnerability) -> VulnerabilityResponse:
@@ -135,6 +136,7 @@ class VulnerabilityResponse(BaseModel):
             "vulnerability_metadata": vulnerability.vulnerability_metadata,
             "created_at": vulnerability.created_at,
             "updated_at": vulnerability.updated_at,
+            "closed_at": vulnerability.closed_at,
         }
         return cls.model_validate(data)
 

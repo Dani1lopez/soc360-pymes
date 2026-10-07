@@ -277,6 +277,7 @@ The following endpoints are currently available:
 | `GET` | `/api/v1/tenants/{id}` | Get tenant by ID |
 | `PATCH` | `/api/v1/tenants/{id}` | Update tenant |
 | `DELETE` | `/api/v1/tenants/{id}` | Deactivate tenant |
+| `GET` | `/api/v1/dashboard/summary` | Tenant dashboard metrics (60 s cache; superadmin passes `tenant_id`) |
 | `GET` | `/health` | Liveness probe (status + version) |
 | `GET` | `/health/db/indexes` | Invalid DB index probe (k8s target) |
 | `GET` | `/metrics` | Prometheus scrape endpoint (token-authenticated, not in schema) |

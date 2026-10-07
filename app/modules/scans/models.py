@@ -88,6 +88,8 @@ class Scan(Base):
         ),
         Index("ix_scans_asset_tenant", "asset_id", "tenant_id"),
         Index("ix_scans_tenant_dispatched_at", "tenant_id", "dispatched_at"),
+        # Back dashboard aggregations by tenant and completion time.
+        Index("ix_scans_tenant_completed_at", "tenant_id", "completed_at"),
         Index(
             "ix_scans_ready",
             "dispatched_at",

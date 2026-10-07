@@ -41,6 +41,9 @@ class Vulnerability(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     severity: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="open")
+    closed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     cve_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     cvss_score: Mapped[float | None] = mapped_column(Numeric(4, 1), nullable=True)
     vulnerability_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -74,6 +77,20 @@ class Vulnerability(Base):
             name="fk_vulnerabilities_scan_tenant",
         ),
         Index("ix_vulnerabilities_scan_tenant", "scan_id", "tenant_id"),
+        # Tenant-first indexes back dashboard aggregations.
+        Index(
+            "ix_vulnerabilities_tenant_status_severity",
+            "tenant_id",
+            "status",
+            "severity",
+        ),
+        Index("ix_vulnerabilities_tenant_created_at", "tenant_id", "created_at"),
+        Index(
+            "ix_vulnerabilities_tenant_closed_at",
+            "tenant_id",
+            "closed_at",
+            postgresql_where="closed_at IS NOT NULL",
+        ),
     )
 
     def __repr__(self) -> str:

@@ -238,11 +238,11 @@ uv run pytest -v
 CI ejecuta la suite directa en dos pasos: en paralelo con pytest-xdist y después los tests `serial_only` (bases de datos de nombre fijo y migraciones) en serie:
 
 ```bash
-uv run pytest -n 2 -m "not toxiproxy and not redis_pressure and not serial_only"
+uv run pytest -n 4 -m "not toxiproxy and not redis_pressure and not serial_only"
 uv run pytest -m "serial_only and not toxiproxy and not redis_pressure"
 ```
 
-Usar `-n 2`, no `-n auto`: los índices de worker `gw13` en adelante no están soportados (una DB de Redis por worker). Los gates de Toxiproxy y `redis_pressure` siguen en serie. Rollback al paso único original:
+Usar `-n 4`, no `-n auto`: los índices de worker `gw13` en adelante no están soportados (una DB de Redis por worker). Los gates de Toxiproxy y `redis_pressure` siguen en serie. Rollback al paso único original:
 
 ```bash
 uv run pytest -m "not toxiproxy and not redis_pressure"

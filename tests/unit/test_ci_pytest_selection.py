@@ -1,6 +1,6 @@
 """CI pytest selection guard (XD-05).
 
-The CI test job splits the direct suite into a parallel step (``-n 2``) and a
+The CI test job splits the direct suite into a parallel step (``-n 4``) and a
 ``serial_only`` step. The split is only exhaustive and non-overlapping while
 the ``-m`` expressions in ``.github/workflows/ci.yml`` stay in sync, so this
 test pins them. The workflow is read with a minimal text parser (PyYAML is
@@ -146,10 +146,10 @@ def test_parser_reads_folded_and_plain_run_scalars() -> None:
     assert any(run.startswith("uv run pytest") for run in steps.values())
 
 
-def test_parallel_step_pins_two_workers_not_auto() -> None:
+def test_parallel_step_pins_four_workers_not_auto() -> None:
     tokens = _parallel_step()
     workers = tokens[tokens.index("-n") + 1] if "-n" in tokens else None
-    assert workers == "2", f"parallel step must pin -n 2 (auto breaks at gw13+): {tokens}"
+    assert workers == "4", f"parallel step must pin -n 4 (auto breaks at gw13+): {tokens}"
 
 
 def test_parallel_expression_is_direct_tests_plus_not_serial_only() -> None:

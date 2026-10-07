@@ -116,19 +116,19 @@ jobs:
       # Direct tests run in two exhaustive, non-overlapping selections
       # (guarded by tests/unit/test_ci_pytest_selection.py and
       # tests/unit/test_xdist_serial_partition.py).
-      # Workers are pinned to 2: `-n auto` is NOT safe because worker index
+      # Workers are pinned to 4 (one per runner vCPU): `-n auto` is NOT safe because worker index
       # gw13+ raises at tests/conftest.py import (one Redis DB per worker).
       # Toxiproxy and redis_pressure gates below stay serial by design.
       # ROLLBACK: replace both steps with the original single serial step:
       #   run: uv run pytest -m "not toxiproxy and not redis_pressure"
-      - name: Run direct tests (parallel, -n 2)
+      - name: Run direct tests (parallel, -n 4)
         id: direct_tests_parallel
         env:
           SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
           PG_SUPERUSER: soc360_migration
           PG_SUPERUSER_PASSWORD: soc360_test_password
         run: >
-          uv run pytest -n 2
+          uv run pytest -n 4
           -m "not toxiproxy and not redis_pressure and not serial_only"
 
       # Runs even when the parallel step failed, so one CI run reports every

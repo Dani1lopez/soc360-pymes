@@ -90,13 +90,6 @@ Historical review and runtime observations come from
 
 ## Test and tooling debt
 
-### Run CI tests with four xdist workers
-- **Why deferred:** agreed as a separate `ci:` change. Locally `-n 4` took
-  276 s vs 432 s with `-n 2`; the 4-vCPU runner shares CPU with services.
-- **Where:** `.github/workflows/ci.yml`;
-  `tests/unit/test_ci_pytest_selection.py:149-152`.
-- **Size:** small; measure on CI before keeping it.
-
 ### Key the inline-import allowlist by name, not line number
 - **Why deferred:** cheap but unrelated; any edit above the allowed imports in
   `app/main.py` shifts the line numbers and fails the test.

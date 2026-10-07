@@ -4,7 +4,7 @@ Tests that create or drop a FIXED-NAME database, or run alembic against the
 shared unscoped database, cannot run on concurrent xdist workers. They carry
 the ``serial_only`` marker and are split out of the parallel run:
 
-- parallel run:  ``pytest -n 2 -m "not serial_only"``
+- parallel run:  ``pytest -n 4 -m "not serial_only"``
 - serial run:    ``pytest -m serial_only``
 
 These tests pin the partition invariant by collecting the real suite in a

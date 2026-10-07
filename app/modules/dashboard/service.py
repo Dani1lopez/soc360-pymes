@@ -37,13 +37,24 @@ async def get_dashboard_summary(
     window_start = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
 
     # Explicit predicates remain required when a superadmin bypasses RLS.
-    assets_monitored = (
+    recently_scanned = (
+        select(Scan.id)
+        .where(
+            Scan.tenant_id == tenant_id,
+            Scan.asset_id == Asset.id,
+            Scan.status == "completed",
+            Scan.completed_at >= since_24h,
+        )
+        .exists()
+    )
+    # One statement, one snapshot: covered can never exceed the total.
+    assets_monitored, covered = (
         await db.execute(
-            select(func.count())
+            select(func.count(), func.count().filter(recently_scanned))
             .select_from(Asset)
             .where(Asset.tenant_id == tenant_id, Asset.status == "active")
         )
-    ).scalar_one()
+    ).one()
 
     severity_counts = dict(
         (
@@ -57,21 +68,6 @@ async def get_dashboard_summary(
             )
         ).all()
     )
-
-    covered = (
-        await db.execute(
-            select(func.count(func.distinct(Asset.id)))
-            .select_from(Asset)
-            .join(Scan, Scan.asset_id == Asset.id)
-            .where(
-                Asset.tenant_id == tenant_id,
-                Scan.tenant_id == tenant_id,
-                Asset.status == "active",
-                Scan.status == "completed",
-                Scan.completed_at >= since_24h,
-            )
-        )
-    ).scalar_one()
 
     opened_day = func.date(func.timezone("UTC", Vulnerability.created_at))
     opened_counts = dict(

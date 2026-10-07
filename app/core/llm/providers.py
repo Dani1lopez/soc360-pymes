@@ -156,7 +156,6 @@ class _BaseHTTPProvider:
             _redact_credentials(url),
         )
 
-        last_error: Exception | None = None
         for attempt in range(1, LLM_RETRY_MAX_ATTEMPTS + 1):
             try:
                 response = await self._client.post(url, json=payload, headers=headers)
@@ -276,7 +275,7 @@ class OpenAICompatProvider(_BaseHTTPProvider):
     """
     Async provider for OpenAI-compatible endpoints.
 
-    Covers Groq, Ollama, OpenAI, Mistral, Cohere, Together AI,
+    Covers Groq, Ollama, OpenAI, OpenRouter, Mistral, Cohere, Together AI,
     and HuggingFace Inference API — all sharing the same
     ``/v1/chat/completions`` call shape.
     """
@@ -464,7 +463,7 @@ async def llm_safe_complete(
         # Catch generic exceptions (ValueError, TypeError, ConnectionError, etc.)
         # that provider.complete() may raise but aren't LLMError subtypes.
         _llm_logger.warning(
-            "LLM unexpected error: provider=%s error=%s",
+            "LLM unexpected error: provider=%s",
             type(provider).__name__,
             exc_info=True,
         )

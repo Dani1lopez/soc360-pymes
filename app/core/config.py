@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     COHERE_API_KEY: str | None = None
     TOGETHER_API_KEY: str | None = None
     HUGGINGFACE_API_KEY: str | None = None
+    OPENROUTER_API_KEY: str | None = None
 
     # Per-provider model defaults (env-overridable via {NAME}_MODEL)
     OPENAI_MODEL: str = "gpt-4o"
@@ -78,6 +79,7 @@ class Settings(BaseSettings):
     COHERE_MODEL: str = "command-r-plus"
     TOGETHER_MODEL: str = "mistralai/Mistral-7B-Instruct-v0.3"
     HUGGINGFACE_MODEL: str = "meta-llama/Llama-3.3-70B-Instruct"
+    OPENROUTER_MODEL: str = "inclusionai/ling-flash-3.0:free"
 
     # Per-provider base URL overrides (None = use provider class default)
     ANTHROPIC_BASE_URL: str | None = None

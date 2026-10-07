@@ -15,7 +15,7 @@ class TestProviderFactorySelection:
 
     def test_factory_returns_openai_compat_for_groq(self):
         """groq → OpenAICompatProvider."""
-        from app.core.llm import get_llm_provider, _create_provider
+        from app.core.llm import _create_provider
 
         provider = _create_provider("groq")
         from app.core.llm import OpenAICompatProvider
@@ -329,3 +329,70 @@ class TestEdgeCases:
 
         result = OpenAICompatProvider._normalize_ollama_url("http://localhost:11434/v1/")
         assert result == "http://localhost:11434/v1"
+
+
+class TestOpenAICompatBaseURLs:
+    """Registry base URLs must be the documented OpenAI-compatible roots.
+
+    A wrong root does not fail loudly: the request simply 404s at call time,
+    so each one is pinned here against the provider's own documentation.
+    """
+
+    DOCUMENTED = (
+        ("groq", "https://api.groq.com/openai/v1"),
+        ("openai", "https://api.openai.com/v1"),
+        ("openrouter", "https://openrouter.ai/api/v1"),
+        ("mistral", "https://api.mistral.ai/v1"),
+        ("cohere", "https://api.cohere.ai/compatibility/v1"),
+        ("together", "https://api.together.xyz/v1"),
+        ("huggingface", "https://router.huggingface.co/v1"),
+    )
+
+    @pytest.mark.parametrize("name,expected", DOCUMENTED)
+    def test_documented_base_url(self, name: str, expected: str) -> None:
+        from app.core.llm.factory import _PROVIDER_REGISTRY, _register_providers
+
+        _register_providers()
+        assert _PROVIDER_REGISTRY[name].base_url_default == expected
+
+    def test_every_openai_compat_entry_declares_a_base_url(self) -> None:
+        from app.core.llm.factory import _PROVIDER_REGISTRY, _register_providers
+        from app.core.llm.providers import OpenAICompatProvider
+
+        _register_providers()
+        missing = [
+            name
+            for name, entry in _PROVIDER_REGISTRY.items()
+            if entry.cls is OpenAICompatProvider
+            and entry.base_url_default is None
+            and entry.base_url_attr is None
+        ]
+        assert not missing, f"OpenAI-compatible providers without a base URL: {missing}"
+
+
+class TestLLMSafeCompleteLogging:
+    """A swallowed provider error must still be reported (observability)."""
+
+    async def test_unexpected_error_is_logged_without_formatting_failure(
+        self, caplog
+    ) -> None:
+        import logging
+
+        from app.core.llm.providers import llm_safe_complete
+
+        class _Boom:
+            PROVIDER_NAME = "BoomProvider"
+
+            async def complete(
+                self, prompt, max_tokens, temperature, *, system_prompt=None
+            ):
+                raise ValueError("boom")
+
+        with caplog.at_level(logging.WARNING):
+            text, failed = await llm_safe_complete(_Boom(), "p", 16, 0.1)
+
+        assert (text, failed) == ("", True)
+        assert any("_Boom" in record.getMessage() for record in caplog.records)
+        # A format/argument mismatch would make logging print "--- Logging error ---"
+        # instead of recording the record.
+        assert not any(record.levelno == logging.ERROR for record in caplog.records)

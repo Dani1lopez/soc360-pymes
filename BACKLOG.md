@@ -64,7 +64,50 @@ Historical review and runtime observations come from
 - **Size:** small if rollout history changes; check legacy queued messages
   and agree a migration policy before deploying over an older worker.
 
+## Dashboard
+
+### Add a superadmin platform view
+- **Why deferred:** `/dashboard/summary` always describes one tenant by design;
+  a per-tenant breakdown with totals beside it is a separate endpoint.
+- **Where:** proposed `GET /api/v1/dashboard/platform`;
+  `docs/adr/f2-slice-7-dashboard.md`.
+- **Size:** small–medium; reuse the service per tenant, decide caching.
+
+### Revisit the scan success-rate failure classification
+- **Why deferred:** `scan_success_30d` counts every failure reason, so
+  infrastructure failures (`worker_lost`, `timeout`, `nonzero_exit`) lower a
+  client's rate; separating infra from target failures needs a taxonomy.
+- **Where:** `app/modules/dashboard/service.py` (scan success query);
+  failure reasons in `app/modules/scans/nmap/runner.py` and
+  `app/modules/scans/state.py`.
+- **Size:** small once the classification is decided.
+
+### Measure dashboard query plans on realistic data
+- **Why deferred:** tests only check index definitions; on empty test tables
+  every tenant-first index costs the same, so plans prove nothing.
+- **Where:** `app/modules/dashboard/service.py`; migration `9e7a3b6c1f85`.
+- **Size:** small; seed a large tenant locally and run `EXPLAIN ANALYZE`.
+
 ## Test and tooling debt
+
+### Run CI tests with four xdist workers
+- **Why deferred:** agreed as a separate `ci:` change. Locally `-n 4` took
+  276 s vs 432 s with `-n 2`; the 4-vCPU runner shares CPU with services.
+- **Where:** `.github/workflows/ci.yml`;
+  `tests/unit/test_ci_pytest_selection.py:149-152`.
+- **Size:** small; measure on CI before keeping it.
+
+### Key the inline-import allowlist by name, not line number
+- **Why deferred:** cheap but unrelated; any edit above the allowed imports in
+  `app/main.py` shifts the line numbers and fails the test.
+- **Where:** `tests/unit/test_imports.py:41` (`PR1_INDENT_IMPORT_ALLOWLIST`).
+- **Size:** small.
+
+### Set Ruff's target Python version
+- **Why deferred:** without `target-version`, Ruff reports builtins such as
+  `anext` as undefined (F821) although the project runs Python 3.12.
+- **Where:** `pyproject.toml` (no `[tool.ruff]` section yet).
+- **Size:** small; fold into the Ruff debt cleanup below.
 
 ### Resolve repository-wide Ruff lint/format debt
 - **Why deferred:** pre-existing and unrelated; the plan recorded 49 lint

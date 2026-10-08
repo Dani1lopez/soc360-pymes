@@ -19,7 +19,12 @@ XML = (
 @pytest.fixture
 def setup(monkeypatch):
     session = SimpleNamespace(
-        add=Mock(), flush=AsyncMock(), commit=AsyncMock(), rollback=AsyncMock()
+        add=Mock(),
+        flush=AsyncMock(),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+        # ``upsert_findings`` reads the findings already stored for the scan.
+        execute=AsyncMock(return_value=SimpleNamespace(all=lambda: [])),
     )
     tenant = uuid.uuid4()
     load = AsyncMock(return_value=("hostname", "example.com"))

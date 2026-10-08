@@ -29,7 +29,7 @@ Las pequeñas y medianas empresas (PyMEs) enfrentan las mismas amenazas ciberné
 |------|--------|-------------|
 | **F0** | ✅ Completado | Arquitectura y Modelo de Datos — 23 ADRs, 13 tablas DB, modelo de seguridad |
 | **F1** | ✅ Completado | Base del Backend — Auth, tenants, usuarios, RLS, eventos, LLM, Redis fail-closed, métricas, manejo de outages — 1151 tests pasando |
-| **F2** | 🔄 En Progreso | Stack de vulnerabilidades — slices CRUD verticales (Assets → Scans → Vulnerabilities → Reports), luego agentes Nmap/Celery/Dashboard/LLM (PRD v2) |
+| **F2** | ✅ Completado | Stack de vulnerabilidades — CRUD vertical (Assets → Scans → Vulnerabilities → Reports) más infra/agentes (Nmap, Celery, Dashboard, enriquecimiento LLM, grafo LangGraph) — PRD v2 |
 | **F3** | 📋 Planificado | Tiempo Real — WebSockets, ingestión de logs, detección de anomalías |
 | **F4** | 📋 Planificado | Frontend — React 18 + TypeScript + Vite (MVP Junio 2026) |
 | **F5** | 📋 Planificado | Agentes Extra — Cumplimiento, Inteligencia |
@@ -351,7 +351,7 @@ sequenceDiagram
 
 ---
 
-## Pipeline F2 (En Progreso — PRD v2)
+## Pipeline F2 (Completa — PRD v2)
 
 ```mermaid
 graph LR
@@ -364,13 +364,14 @@ F2 sigue el [PRD v2](openspec/changes/prd-v2-vertical-f2/) ("construye en vertic
 
 ---
 
-Las slices 7 (dashboard), 8 (enriquecimiento LLM) y 9 (grafo de escaneo) están
-implementadas. El pipeline de escaneo se ejecuta como un grafo LangGraph —Nmap,
-parseo, deduplicación y persistencia— dentro de la tarea Celery de escaneo que ya
-existía, y los hallazgos se deduplican dentro de un mismo escaneo. El
-enriquecimiento sigue siendo una tarea Celery por vulnerabilidad, fuera del
-grafo. El [ADR de la slice 8](docs/adr/f2-slice-8-llm-enrichment.md) describe los
-niveles y la semántica de entrega, y el
+La F2 está completa: las slices 7 (dashboard), 8 (enriquecimiento LLM) y 9
+(grafo de escaneo) están implementadas. El pipeline de escaneo se ejecuta como un
+grafo LangGraph —Nmap, parseo, deduplicación y persistencia— dentro de la tarea
+Celery de escaneo que ya existía, y los hallazgos se deduplican dentro de un
+mismo escaneo. El enriquecimiento sigue siendo una tarea Celery por
+vulnerabilidad, fuera del grafo. El
+[ADR de la slice 8](docs/adr/f2-slice-8-llm-enrichment.md) describe los niveles y
+la semántica de entrega, y el
 [ADR de la slice 9](docs/adr/f2-slice-9-scan-graph.md) los límites del grafo.
 
 ---
@@ -381,7 +382,7 @@ niveles y la semántica de entrega, y el
 |------|---------|--------|
 | F0 | Arquitectura y Modelo de Datos | ✅ Completado |
 | F1 | Base del Backend (Auth, Tenants, Users, RLS, Events, LLM, Métricas, Outages) | ✅ Completado |
-| F2 | Stack de vulnerabilidades — CRUD vertical + infra/agentes (PRD v2) | 🔄 En Progreso |
+| F2 | Stack de vulnerabilidades — CRUD vertical + infra/agentes (PRD v2) | ✅ Completado |
 | F3 | Tiempo Real (WebSockets, Ingestión, Anomalías) | 📋 Planificado |
 | F4 | Frontend (React 18 + TS + Vite) | 📋 Planificado |
 | F5 | Agentes Extra (Cumplimiento, Inteligencia) | 📋 Planificado |

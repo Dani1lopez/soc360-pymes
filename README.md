@@ -83,6 +83,7 @@ The platform follows a modular monolith pattern. FastAPI handles HTTP traffic, P
 | Redis | 7 (Alpine, client 5.2.1) |
 | Alembic | 1.14.0 |
 | Celery | 5.4.0 (scan execution, maintenance and enrichment) |
+| LangGraph | 1.2.14 (scan pipeline graph) |
 | Uvicorn | 0.32.1 |
 | Gunicorn | — (prod, `gunicorn_conf.py`) |
 | Pydantic | 2.10.4 |
@@ -361,10 +362,13 @@ F2 follows [PRD v2](openspec/changes/prd-v2-vertical-f2/) ("build vertical, clea
 
 ---
 
-Slices 7 (dashboard) and 8 (LLM enrichment) are implemented; Slice 9
-(LangGraph orchestration) remains next. Enrichment runs one task per vulnerability,
-with per-function persistence and retries. See the
-[Slice 8 ADR](docs/adr/f2-slice-8-llm-enrichment.md) for levels and delivery semantics.
+Slices 7 (dashboard), 8 (LLM enrichment) and 9 (scan graph) are implemented.
+The scan pipeline runs as a LangGraph graph — Nmap, parse, dedup, persist —
+inside the existing Celery scan task, and findings are deduplicated inside one
+scan. Enrichment stays a per-vulnerability Celery task outside the graph. See
+the [Slice 8 ADR](docs/adr/f2-slice-8-llm-enrichment.md) for enrichment levels
+and delivery semantics, and the
+[Slice 9 ADR](docs/adr/f2-slice-9-scan-graph.md) for the graph boundaries.
 
 ---
 

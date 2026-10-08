@@ -29,7 +29,7 @@ Small and medium-sized businesses (PyMEs) face the same cyber threats as enterpr
 |-------|--------|-------------|
 | **F0** | ✅ Complete | Architecture & Data Model — 23 ADRs, 13 DB tables, security model |
 | **F1** | ✅ Complete | Backend Base — Auth, tenants, users, RLS, events, LLM, fail-closed Redis, metrics, outage handling — 1151 tests passing |
-| **F2** | 🔄 In Progress | Vulnerability stack — vertical CRUD slices (Assets → Scans → Vulnerabilities → Reports), then Nmap/Celery/Dashboard/LLM agents (PRD v2) |
+| **F2** | ✅ Complete | Vulnerability stack — vertical CRUD (Assets → Scans → Vulnerabilities → Reports) plus infra/agents (Nmap, Celery, Dashboard, LLM enrichment, LangGraph scan graph) — PRD v2 |
 | **F3** | 📋 Planned | Real-time — WebSockets, log ingestion, anomaly detection |
 | **F4** | 📋 Planned | Frontend — React 18 + TypeScript + Vite (MVP June 2026) |
 | **F5** | 📋 Planned | Extra Agents — Compliance, Intelligence |
@@ -349,7 +349,7 @@ sequenceDiagram
 
 ---
 
-## F2 Pipeline (In Progress — PRD v2)
+## F2 Pipeline (Complete — PRD v2)
 
 ```mermaid
 graph LR
@@ -362,7 +362,8 @@ F2 follows [PRD v2](openspec/changes/prd-v2-vertical-f2/) ("build vertical, clea
 
 ---
 
-Slices 7 (dashboard), 8 (LLM enrichment) and 9 (scan graph) are implemented.
+F2 is complete: slices 7 (dashboard), 8 (LLM enrichment) and 9 (scan graph)
+are implemented.
 The scan pipeline runs as a LangGraph graph — Nmap, parse, dedup, persist —
 inside the existing Celery scan task, and findings are deduplicated inside one
 scan. Enrichment stays a per-vulnerability Celery task outside the graph. See
@@ -378,7 +379,7 @@ and delivery semantics, and the
 |-------|-------|--------|
 | F0 | Architecture & Data Model | ✅ Complete |
 | F1 | Backend Base (Auth, Tenants, Users, RLS, Events, LLM, Metrics, Outages) | ✅ Complete |
-| F2 | Vulnerability stack — vertical CRUD + infra/agents (PRD v2) | 🔄 In Progress |
+| F2 | Vulnerability stack — vertical CRUD + infra/agents (PRD v2) | ✅ Complete |
 | F3 | Real-time (WebSockets, Ingestion, Anomalies) | 📋 Planned |
 | F4 | Frontend (React 18 + TS + Vite) | 📋 Planned |
 | F5 | Extra Agents (Compliance, Intelligence) | 📋 Planned |

@@ -22,6 +22,7 @@ dependencies = [
     "email-validator==2.3.0",
     "prometheus-client>=0.26.0",
     "defusedxml>=0.7.1",
+    "langgraph==1.2.14",
 ]
 
 [project.optional-dependencies]

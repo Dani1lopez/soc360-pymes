@@ -1,7 +1,13 @@
-"""Library entry point with no HTTP trigger.
+"""Scan pipeline entry point for the Celery worker.
 
-DB-side cancellation is detected at atomic finish, discarding results; live
-process termination on DB cancellation belongs to slice 6.
+``POST /scans/{id}/run`` marks the scan as dispatched and rings the
+``scans.wake`` bell; the worker claims the row and calls this module. The
+pipeline itself lives in ``app.agents.scan_graph``; this module owns the scan
+state machine around it: the ``running``/``completed``/``failed``/``cancelled``
+transitions, the single commit and the shielded cleanup that survives
+cancellation. Cancelling the task running the executor (the worker's
+cancellation watcher) reaches the runner's cleanup and terminates the live Nmap
+process.
 """
 
 from __future__ import annotations
@@ -15,27 +21,29 @@ from typing import Literal, TypeVar
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
+from app.agents.runner import run_agent_safely
+from app.agents.scan_graph import (
+    NMAP_MAX_OUTPUT_BYTES,
+    NMAP_TIMEOUT_SECONDS,
+    build_scan_graph,
+)
 from app.core.database import set_tenant_context
 from app.modules.assets.models import Asset
 from app.modules.scans.models import Scan
-from app.modules.scans.nmap.command import build_nmap_command, split_by_family
-from app.modules.scans.nmap.findings import extract_findings
-from app.modules.scans.nmap.parser import (
-    NmapParseError,
-    parse_nmap_xml,
-    verify_scan_types,
-)
-from app.modules.scans.nmap.runner import NmapRunError, NmapRunResult, run_nmap
+from app.modules.scans.nmap.runner import NmapRunResult, run_nmap
 from app.modules.scans.state import transition_scan
-from app.modules.scans.targets import Resolver, TargetRejectedError, resolve_scan_target
-from app.modules.vulnerabilities.models import Vulnerability
+from app.modules.scans.targets import Resolver
 
 logger = logging.getLogger(__name__)
-NMAP_TIMEOUT_SECONDS = 3600.0
-NMAP_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 T = TypeVar("T")
 ScanOutcome = Literal["completed", "failed", "cancelled", "skipped"]
+
+__all__ = [
+    "NMAP_MAX_OUTPUT_BYTES",
+    "NMAP_TIMEOUT_SECONDS",
+    "ScanOutcome",
+    "execute_scan",
+]
 
 
 async def _db_phase(session: AsyncSession, tenant_id: uuid.UUID) -> None:
@@ -109,43 +117,33 @@ async def execute_scan(
             if not await transition_scan(session, scan_id, to="running"):
                 return "skipped"
             claimed = True
-        target = await resolve_scan_target(*asset, resolver=resolver)
-        documents = []
-        drafts = []
-        for family in split_by_family(target):
-            argv = build_nmap_command(family, nmap_path=nmap_path)
-            result = await run(
-                argv,
-                timeout=timeout,
-                max_output_bytes=max_output_bytes,
-                supervise_seconds=int(timeout)
-                if settings.NMAP_PROCESS_SUPERVISION
-                else None,
-            )
-            report = parse_nmap_xml(result.stdout)
-            verify_scan_types(report)
-            documents.append(result.stdout.decode("utf-8", errors="replace"))
-            drafts.extend(extract_findings(report))
+        # A commit anywhere inside the run expires the transaction-local RLS
+        # setting, so re-establish it before the graph touches the database.
         await _db_phase(session, tenant_id)
-        for draft in drafts:
-            session.add(
-                Vulnerability(
-                    tenant_id=tenant_id,
-                    scan_id=scan_id,
-                    title=draft.title,
-                    description=draft.description,
-                    severity=draft.severity,
-                    cve_id=draft.cve_id,
-                    cvss_score=draft.cvss_score,
-                    vulnerability_metadata=draft.metadata,
-                )
-            )
-        await session.flush()
+        graph = build_scan_graph(
+            session=session,
+            tenant_id=tenant_id,
+            resolver=resolver,
+            nmap_path=nmap_path,
+            timeout=timeout,
+            max_output_bytes=max_output_bytes,
+            run=run,
+        )
+        state = await run_agent_safely(
+            graph,
+            {
+                "scan_id": str(scan_id),
+                "tenant_id": str(tenant_id),
+                "asset": {"asset_type": asset[0], "value": asset[1]},
+            },
+        )
+        if state.get("error"):
+            return await _shielded(fail(state["error"]))
         ok = await transition_scan(
             session,
             scan_id,
             to="completed",
-            raw_output="\n".join(documents),
+            raw_output=state.get("nmap_raw_xml", ""),
             commit=False,
         )
         if not ok:
@@ -159,13 +157,6 @@ async def execute_scan(
         if claimed:
             await _shielded(cancel())
         raise
-    except NmapRunError as exc:
-        logger.warning(
-            "Nmap scan_id=%s reason=%s detail=%s", scan_id, exc.reason, exc.detail
-        )
-        return await _shielded(fail(exc.reason))
-    except (TargetRejectedError, NmapParseError) as exc:
-        return await _shielded(fail(exc.reason))
     except Exception:
         logger.exception("Unexpected scan failure scan_id=%s", scan_id)
         if not claimed:

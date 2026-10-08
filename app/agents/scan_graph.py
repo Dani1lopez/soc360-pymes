@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.state import ScanState
 from app.core.config import settings
+from app.core.database import set_tenant_context
 from app.modules.scans.nmap.command import build_nmap_command, split_by_family
 from app.modules.scans.nmap.findings import FindingDraft, extract_findings
 from app.modules.scans.nmap.parser import (
@@ -131,7 +132,14 @@ def dedup_node(state: ScanState) -> ScanState:
 async def persist_node(
     state: ScanState, *, session: AsyncSession, tenant_id: uuid.UUID
 ) -> ScanState:
-    """Store the surviving findings. The executor still owns the commit."""
+    """Store the surviving findings. The executor still owns the commit.
+
+    The node re-applies the RLS context instead of trusting the caller's: a
+    commit anywhere in the run (the cancellation path can commit) expires the
+    transaction-local setting, and without the context the insert is rejected
+    by the row-level policy.
+    """
+    await set_tenant_context(session, tenant_id, False)
     result = await upsert_findings(
         session,
         scan_id=uuid.UUID(state["scan_id"]),

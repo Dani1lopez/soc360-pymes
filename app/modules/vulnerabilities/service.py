@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Literal
 
@@ -27,6 +28,7 @@ from app.modules.vulnerabilities.models import Vulnerability
 from app.modules.vulnerabilities.schemas import VulnerabilityCreate, VulnerabilityUpdate
 
 __all__ = [
+    "UpsertVulnerabilitiesResult",
     "VULNERABILITY_EVENTS_STREAM",
     "VulnerabilityScanNotFoundError",
     "create_vulnerability",
@@ -55,6 +57,28 @@ class VulnerabilityScanNotFoundError(Exception):
 
     def __init__(self, message: str = "vulnerability scan not found") -> None:
         super().__init__(message)
+
+
+@dataclass(frozen=True, slots=True)
+class UpsertVulnerabilitiesResult:
+    """Outcome of :func:`upsert_findings`.
+
+    ``skipped`` counts the findings that were not written because the same
+    finding was already present in the scan (twice in one run, or from an
+    earlier attempt) or because the draft was not valid.
+    """
+
+    created: int
+    updated: int
+    skipped: int
+
+    @property
+    def total(self) -> int:
+        return self.created + self.updated
+
+    @property
+    def has_new_findings(self) -> bool:
+        return self.created > 0
 
 
 def _add_tenant_predicate(stmt: Any, tenant_id: uuid.UUID | None) -> Any:

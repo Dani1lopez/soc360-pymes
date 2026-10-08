@@ -141,13 +141,6 @@ Why: dictionary insertion order can change prompt rendering even though the
 input hash uses canonical JSON. Where: `app/modules/enrichment/prompts.py`
 (`_render_value`).
 
-### Align Slice 9 contracts with persistence
-What: align `VALID_VULN_STATUSES` with model statuses and resolve the orphan
-`UpsertVulnerabilitiesResult` contract. Why: contracts include `acknowledged` and
-`resolved` rather than model status `fixed`; `UpsertVulnerabilitiesResult` exists
-but its documented `upsert_findings` consumer does not. Where:
-`app/core/contracts.py` and `app/modules/vulnerabilities/`; relevant to Slice 9.
-
 ### Clean up minor enrichment inconsistencies
 What: standardize `datetime.UTC` versus `timezone.utc`, review the redundant
 single-column `vulnerability_id` index, expose a public prompt-sanitization

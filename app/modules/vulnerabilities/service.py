@@ -8,10 +8,12 @@ with no class holding mutable state.
 
 from __future__ import annotations
 
+import logging
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -21,19 +23,30 @@ from app.event_bus import EventBus
 from app.event_schemas import (
     VulnerabilityCreatedEvent,
     VulnerabilityDeletedEvent,
+    VulnerabilitySeverity,
     VulnerabilityUpdatedEvent,
 )
 from app.modules.vulnerabilities.models import Vulnerability
 from app.modules.vulnerabilities.schemas import VulnerabilityCreate, VulnerabilityUpdate
 
+if TYPE_CHECKING:
+    from app.modules.scans.nmap.findings import FindingDraft
+
+logger = logging.getLogger(__name__)
+
+VALID_SEVERITIES: frozenset[str] = frozenset(get_args(VulnerabilitySeverity))
+
 __all__ = [
+    "UpsertVulnerabilitiesResult",
     "VULNERABILITY_EVENTS_STREAM",
     "VulnerabilityScanNotFoundError",
     "create_vulnerability",
     "delete_vulnerability",
+    "finding_identity",
     "get_vulnerability",
     "list_vulnerabilities",
     "update_vulnerability",
+    "upsert_findings",
 ]
 
 VULNERABILITY_EVENTS_STREAM: Literal["vulnerability.events"] = "vulnerability.events"
@@ -55,6 +68,28 @@ class VulnerabilityScanNotFoundError(Exception):
 
     def __init__(self, message: str = "vulnerability scan not found") -> None:
         super().__init__(message)
+
+
+@dataclass(frozen=True, slots=True)
+class UpsertVulnerabilitiesResult:
+    """Outcome of :func:`upsert_findings`.
+
+    ``skipped`` counts the findings that were not written because the same
+    finding was already present in the scan (twice in one run, or from an
+    earlier attempt) or because the draft was not valid.
+    """
+
+    created: int
+    updated: int
+    skipped: int
+
+    @property
+    def total(self) -> int:
+        return self.created + self.updated
+
+    @property
+    def has_new_findings(self) -> bool:
+        return self.created > 0
 
 
 def _add_tenant_predicate(stmt: Any, tenant_id: uuid.UUID | None) -> Any:
@@ -334,3 +369,96 @@ async def delete_vulnerability(
     )
     await event_bus.publish(event, stream=VULNERABILITY_EVENTS_STREAM)
     return True
+
+
+def finding_identity(
+    *,
+    metadata: Mapping[str, object] | None,
+    cve_id: str | None,
+    title: str,
+) -> str:
+    """Identity of a finding inside one scan.
+
+    Nmap can report the same script twice in one run (host script plus port
+    script, or two addresses of the same target) and a retried scan produces the
+    same drafts again. The key is built from the fields that describe the
+    observed surface, so it stays stable across runs of the same scan; when the
+    metadata carries none of them, the title is the fallback.
+    """
+    fields = metadata or {}
+
+    def field(name: str) -> str:
+        value = fields.get(name)
+        return "" if value is None else str(value).strip()
+
+    parts = [
+        field("script_id").lower(),
+        field("host").lower(),
+        field("port"),
+        field("protocol").lower(),
+        (cve_id or "").strip().upper(),
+    ]
+    if not any(parts):
+        return title.strip().lower()
+    return "|".join(parts)
+
+
+async def upsert_findings(
+    session: AsyncSession,
+    *,
+    scan_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    drafts: Sequence[FindingDraft],
+) -> UpsertVulnerabilitiesResult:
+    """Insert the findings of a scan that are not stored for it yet.
+
+    Idempotent inside one scan: a draft whose identity repeats in the same batch
+    or already exists in the database for ``scan_id`` is skipped, and so is a
+    draft whose severity is not canonical (it would trip the severity CHECK
+    constraint at flush). The caller owns the transaction; this function only
+    flushes, so the scan executor can still roll the whole scan back.
+
+    ``updated`` stays 0: cross-scan identity is not defined yet, because
+    vulnerabilities are scan-scoped, so nothing is updated in place.
+    """
+    existing = await session.execute(
+        select(
+            Vulnerability.vulnerability_metadata,
+            Vulnerability.cve_id,
+            Vulnerability.title,
+        ).where(Vulnerability.scan_id == scan_id, Vulnerability.tenant_id == tenant_id)
+    )
+    seen = {
+        finding_identity(metadata=metadata, cve_id=cve_id, title=title)
+        for metadata, cve_id, title in existing.all()
+    }
+
+    created = skipped = 0
+    for draft in drafts:
+        if draft.severity not in VALID_SEVERITIES:
+            logger.warning("Skipping finding with severity %r", draft.severity)
+            skipped += 1
+            continue
+        key = finding_identity(
+            metadata=draft.metadata, cve_id=draft.cve_id, title=draft.title
+        )
+        if key in seen:
+            skipped += 1
+            continue
+        seen.add(key)
+        session.add(
+            Vulnerability(
+                tenant_id=tenant_id,
+                scan_id=scan_id,
+                title=draft.title,
+                description=draft.description,
+                severity=draft.severity,
+                cve_id=draft.cve_id,
+                cvss_score=draft.cvss_score,
+                vulnerability_metadata=draft.metadata,
+            )
+        )
+        created += 1
+
+    await session.flush()
+    return UpsertVulnerabilitiesResult(created=created, updated=0, skipped=skipped)

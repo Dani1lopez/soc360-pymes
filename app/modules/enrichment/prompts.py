@@ -152,7 +152,8 @@ def _render_value(value: object) -> str:
         return escape(_sanitize_prompt_user_data(value), quote=False)
     if isinstance(value, tuple):
         return ", ".join(_render_value(item) for item in value) or "None"
-    return str(value)
+    # Metadata is client-writable JSON: lists or dicts may hide delimiters too.
+    return _render_value(str(value))
 
 
 def build_prompt(function: str, finding: EnrichmentInput, language: str) -> PromptSpec:

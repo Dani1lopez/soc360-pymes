@@ -91,6 +91,30 @@ def test_partial_failure_retry(worker, monkeypatch, retries):
         task.pop_request()
 
 
+@pytest.mark.parametrize("retries", [0, 3])
+def test_unexpected_error_retries_then_raises(worker, monkeypatch, retries):
+    # A transient DB or provider-construction error must not drop the enrichment.
+    monkeypatch.setattr(settings, "ENRICHMENT_ENABLED", True)
+    task = celery_app.tasks["enrichment.vulnerability"]
+    boom = ConnectionError("database unavailable")
+    monkeypatch.setattr(worker, "_enrich", AsyncMock(side_effect=boom))
+    retry = MagicMock(side_effect=Retry())
+    monkeypatch.setattr(task, "retry", retry)
+    task.push_request(retries=retries)
+    try:
+        if retries < 3:
+            with pytest.raises(Retry):
+                task.run("vulnerability", "tenant")
+            assert retry.call_args.kwargs["exc"] is boom
+            assert retry.call_args.kwargs["countdown"] == 30
+        else:
+            with pytest.raises(ConnectionError):
+                task.run("vulnerability", "tenant")
+            retry.assert_not_called()
+    finally:
+        task.pop_request()
+
+
 @pytest.mark.parametrize("result", [None, EnrichmentRunResult(("summary",), (), ())])
 def test_terminal_result_does_not_retry(worker, monkeypatch, result):
     monkeypatch.setattr(settings, "ENRICHMENT_ENABLED", True)

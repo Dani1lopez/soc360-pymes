@@ -72,6 +72,14 @@ def enrich(
 ) -> None:
     if not settings.ENRICHMENT_ENABLED:
         return
-    result = asyncio.run(_enrich(vulnerability_id, tenant_id, only_functions))
+    try:
+        result = asyncio.run(_enrich(vulnerability_id, tenant_id, only_functions))
+    except Exception as exc:
+        # Transient DB or provider errors get the same bounded retries.
+        if self.request.retries < 3:
+            raise self.retry(
+                exc=exc, countdown=retry_countdown(self.request.retries)
+            ) from exc
+        raise
     if result is not None and result.has_failures and self.request.retries < 3:
         raise self.retry(countdown=retry_countdown(self.request.retries))

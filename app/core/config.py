@@ -5,7 +5,7 @@ from collections import Counter
 from math import log2
 from typing import ClassVar
 
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core._provider_names import _PROVIDER_NAMES
@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     LLM_TIMEOUT: int = 30
     LLM_MAX_TOKENS: int = 2048
     LLM_TEMPERATURE: float = 0.1
+
+    ENRICHMENT_ENABLED: bool = False
+    ENRICHMENT_LANGUAGE: str = "en"
+    ENRICHMENT_MAX_CONCURRENCY: int = Field(default=3, ge=1)
+    ENRICHMENT_BUDGET_SECONDS: int = Field(default=120, gt=0)
 
     # Per-provider API keys (None = not configured for that provider)
     OPENAI_API_KEY: str | None = None
@@ -230,6 +235,15 @@ class Settings(BaseSettings):
             if not self.REDIS_PASSWORD.get_secret_value():
                 raise ValueError("REDIS_PASSWORD is required in production")
         return self
+
+    @field_validator("ENRICHMENT_LANGUAGE")
+    @classmethod
+    def enrichment_language_valid(cls, value: str) -> str:
+        # Importing prompts here would cycle through providers and settings.
+        # The settings unit test keeps this set aligned with SUPPORTED_LANGUAGES.
+        if value not in {"en"}:
+            raise ValueError("Unsupported enrichment language")
+        return value
 
     @field_validator("LLM_PROVIDER")
     @classmethod

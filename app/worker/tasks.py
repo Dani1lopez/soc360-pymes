@@ -23,6 +23,8 @@ from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 from app.core.database import _build_connect_args, set_tenant_context
+from app.modules.enrichment.dispatch import enqueue_enrichment as publish_enrichment
+from app.modules.vulnerabilities.models import Vulnerability
 from app.modules.scans.models import Scan
 from app.modules.scans.executor import ScanOutcome, execute_scan
 from app.modules.scans.state import claim_next_scan, count_ready_scans, reap_stale_scans
@@ -85,6 +87,7 @@ async def _wake(
     | None = None,
     execute: ScanExecutor | None = None,
     cancel_poll_seconds: float = CANCEL_POLL_SECONDS,
+    enqueue_enrichment: Callable[[str, str], Awaitable[bool]] | None = None,
 ) -> str:
     if not settings.SCAN_EXECUTION_ENABLED:
         logger.warning("Scan execution disabled; wake ignored")
@@ -113,7 +116,23 @@ async def _wake(
                     (executor, watcher), return_when=asyncio.FIRST_COMPLETED
                 )
                 if executor in done:
-                    return await executor
+                    outcome = await executor
+                    if outcome == "completed" and settings.ENRICHMENT_ENABLED:
+                        try:
+                            async with maker() as enrichment_session:
+                                await set_tenant_context(enrichment_session, tenant_id, False)
+                                vulnerability_ids = (await enrichment_session.scalars(
+                                    select(Vulnerability.id).where(Vulnerability.scan_id == scan_id)
+                                )).all()
+                            enqueue = enqueue_enrichment or publish_enrichment
+                            for vulnerability_id in vulnerability_ids:
+                                try:
+                                    await enqueue(str(vulnerability_id), str(tenant_id))
+                                except Exception:
+                                    logger.warning("Post-scan enrichment publishing failed")
+                        except Exception:
+                            logger.warning("Post-scan enrichment lookup failed")
+                    return outcome
                 executor.cancel()
                 await asyncio.gather(executor, return_exceptions=True)
                 return "cancelled"

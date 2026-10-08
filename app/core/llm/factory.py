@@ -119,6 +119,25 @@ def _register_providers() -> None:
     )
 
 
+def _resolve_model(name: str, entry: ProviderEntry) -> str:
+    model = getattr(settings, f"{name.upper()}_MODEL", None)
+    if model is None:
+        model = entry.model_default
+    if not model:
+        raise LLMResponseError(f"Model not configured for provider {name!r}")
+    return str(model)
+
+
+def get_llm_model_name() -> str:
+    """Resolve the configured model using the provider construction rules."""
+    name = settings.LLM_PROVIDER.strip().lower()
+    _register_providers()
+    entry = _PROVIDER_REGISTRY.get(name)
+    if entry is None:
+        raise LLMResponseError(f"Unknown LLM provider: {name!r}")
+    return _resolve_model(name, entry)
+
+
 def _create_provider(provider_name: str) -> "LLMProvider":
     """Create a new (uncached) provider instance for the given provider name.
 
@@ -150,11 +169,7 @@ def _create_provider(provider_name: str) -> "LLMProvider":
     # None  → use entry.model_default (env var not set at all)
     # ""    → raise LLMResponseError  (env var explicitly set to empty)
     # value → use it as-is
-    model = getattr(settings, f"{name.upper()}_MODEL", None)
-    if model is None:
-        model = entry.model_default
-    if not model:
-        raise LLMResponseError(f"Model not configured for provider {name!r}")
+    model = _resolve_model(name, entry)
 
     # API key: None attr = skip (ollama); None value = use "" (backcompat);
     # explicitly empty string = error (spec R06b)

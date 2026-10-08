@@ -177,10 +177,21 @@ async def enrich_vulnerability(
             "attempts": VulnerabilityEnrichment.attempts + 1,
             "updated_at": func.now(),
         }
+        guard = None
         if error is None:
             updates["content"] = stmt.excluded.content
+        else:
+            # An overlapping run may have stored an identical success after
+            # this run read the rows; a late failure must not downgrade it.
+            guard = ~(
+                (VulnerabilityEnrichment.status == "ok")
+                & (VulnerabilityEnrichment.input_hash == stmt.excluded.input_hash)
+                & (VulnerabilityEnrichment.prompt_version == stmt.excluded.prompt_version)
+                & (VulnerabilityEnrichment.model == stmt.excluded.model)
+            )
         await session.execute(stmt.on_conflict_do_update(
             index_elements=["vulnerability_id", "function"], set_=updates,
+            where=guard,
         ))
     await session.flush()
     return EnrichmentRunResult(tuple(succeeded), tuple(failed), skipped)

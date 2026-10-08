@@ -162,6 +162,23 @@ async def test_provider_failure_preserves_content_and_retry_recovers(db_session,
     assert row.content == "Recovered"
 
 
+async def test_failure_never_downgrades_a_concurrent_identical_success(
+    db_session, finding, monkeypatch
+):
+    # Simulates two overlapping runs: this one read the rows before the other
+    # run stored an identical ok result, then its own call failed.
+    from app.modules.enrichment import service
+
+    function = BASIC[0]
+    await _run(db_session, finding, FakeProvider(finding), only_functions=[function])
+    monkeypatch.setattr(service, "due_functions", lambda *a, **k: (function,))
+    result = await _run(db_session, finding, FakeProvider(finding, {function: LLMError("late")}),
+                        only_functions=[function])
+    row = (await _rows(db_session, finding))[function]
+    assert result.failed == (function,)
+    assert row.status == "ok" and row.error is None and row.attempts == 1
+
+
 async def test_blank_output_is_failed(db_session, finding):
     function = BASIC[0]
     result = await _run(db_session, finding, FakeProvider(finding, {function: " \n\t"}),

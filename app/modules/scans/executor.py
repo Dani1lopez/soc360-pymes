@@ -1,11 +1,13 @@
-"""Library entry point with no HTTP trigger.
+"""Scan pipeline entry point for the Celery worker.
 
-The pipeline itself lives in ``app.agents.scan_graph``; this module owns the
-scan state machine around it: the ``running``/``completed``/``failed``/
-``cancelled`` transitions, the single commit and the shielded cleanup that
-survives cancellation. DB-side cancellation is detected at atomic finish,
-discarding results; live process termination on DB cancellation belongs to
-slice 6.
+``POST /scans/{id}/run`` marks the scan as dispatched and rings the
+``scans.wake`` bell; the worker claims the row and calls this module. The
+pipeline itself lives in ``app.agents.scan_graph``; this module owns the scan
+state machine around it: the ``running``/``completed``/``failed``/``cancelled``
+transitions, the single commit and the shielded cleanup that survives
+cancellation. Cancelling the task running the executor (the worker's
+cancellation watcher) reaches the runner's cleanup and terminates the live Nmap
+process.
 """
 
 from __future__ import annotations

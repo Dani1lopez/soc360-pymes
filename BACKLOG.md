@@ -49,13 +49,6 @@ Historical review and runtime observations come from
 - **Size:** medium; build worker and verify SYN/UDP with only `NET_RAW`,
   plus clear failure without the capability.
 
-### Refresh executor module documentation
-- **Why deferred:** cheap documentation cleanup, but outside this two-file
-  documentation task's authorized surfaces.
-- **Where:** `app/modules/scans/executor.py:1`; still says no HTTP trigger
-  and defers live cancellation to slice 6 despite the router and watcher.
-- **Size:** extra-small.
-
 ### Record Celery task compatibility before any rollout
 - **Why deferred:** informational review R3-task-compatibility; the plan says
   this branch was never deployed, so no deployed queue migration is needed.
@@ -63,6 +56,28 @@ Historical review and runtime observations come from
   `scans.run_scan`; `app/modules/scans/dispatch.py` sends argument-free bells.
 - **Size:** small if rollout history changes; check legacy queued messages
   and agree a migration policy before deploying over an older worker.
+
+## Scan graph (slice 9)
+
+### Define cross-scan vulnerability identity
+- **Why deferred:** slice 9 deduplicates findings inside one scan only.
+  `vulnerabilities.scan_id` is `NOT NULL` and nothing is unique on the observed
+  surface, so "the same vulnerability found by two scans" is a product
+  decision, not a code change. The ADR-009 fingerprint was deleted together
+  with `app/core/contracts.py` and returns when that identity exists.
+- **Where:** `app/modules/vulnerabilities/{models,service}.py`; a new column or
+  unique index needs a migration and a backfill decision.
+- **Size:** medium-large; its own slice.
+
+### Publish an event when a scan stores findings
+- **Why deferred:** `upsert_findings` inserts rows without a
+  `vulnerability.created` event, exactly as the previous direct insert did, so
+  no consumer relied on it today. With the inserts in one function the gap is
+  visible and can be closed in one place.
+- **Where:** `app/modules/vulnerabilities/service.py` (`upsert_findings`),
+  `app/event_schemas.py`.
+- **Size:** small-medium; the event has to be published after the executor's
+  commit to keep the existing ordering guarantee.
 
 ## Dashboard
 

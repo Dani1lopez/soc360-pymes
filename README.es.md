@@ -83,6 +83,7 @@ La plataforma sigue un patrón de monolito modular. FastAPI gestiona el tráfico
 | Redis | 7 (Alpine, cliente 5.2.1) |
 | Alembic | 1.14.0 |
 | Celery | 5.4.0 (escaneos, mantenimiento y enriquecimiento) |
+| LangGraph | 1.2.14 (grafo del pipeline de escaneo) |
 | Uvicorn | 0.32.1 |
 | Gunicorn | — (prod, `gunicorn_conf.py`) |
 | Pydantic | 2.10.4 |
@@ -363,11 +364,14 @@ F2 sigue el [PRD v2](openspec/changes/prd-v2-vertical-f2/) ("construye en vertic
 
 ---
 
-Las slices 7 (dashboard) y 8 (enriquecimiento LLM) están implementadas; la
-slice 9 (orquestación LangGraph) es el siguiente paso. El enriquecimiento ejecuta
-una tarea por vulnerabilidad, con persistencia y reintentos por función. El
-[ADR de la slice 8](docs/adr/f2-slice-8-llm-enrichment.md) describe los niveles y
-la semántica de entrega.
+Las slices 7 (dashboard), 8 (enriquecimiento LLM) y 9 (grafo de escaneo) están
+implementadas. El pipeline de escaneo se ejecuta como un grafo LangGraph —Nmap,
+parseo, deduplicación y persistencia— dentro de la tarea Celery de escaneo que ya
+existía, y los hallazgos se deduplican dentro de un mismo escaneo. El
+enriquecimiento sigue siendo una tarea Celery por vulnerabilidad, fuera del
+grafo. El [ADR de la slice 8](docs/adr/f2-slice-8-llm-enrichment.md) describe los
+niveles y la semántica de entrega, y el
+[ADR de la slice 9](docs/adr/f2-slice-9-scan-graph.md) los límites del grafo.
 
 ---
 

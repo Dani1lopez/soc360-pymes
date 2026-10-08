@@ -46,7 +46,8 @@ Las pequeñas y medianas empresas (PyMEs) enfrentan las mismas amenazas ciberné
 | **Multi-Tenant (RLS)** | Row-Level Security vía PostgreSQL `SET LOCAL`. Contexto de tenant por transacción. 4 planes: Free (10 assets), Starter (25), Pro (100), Enterprise (500). FKs compuestas refuerzan referencias scoped a tenant (scans → assets). |
 | **RBAC** | Roles jerárquicos: viewer < analyst/ingestor < admin < superadmin. CHECK constraints refuerzan reglas de tenant. Autoprotección evita escalada de privilegios. |
 | **Event Bus** | Redis Streams con eventos tipados Pydantic, consumer groups, XACK, Dead Letter Queue con ack durable, auto-reconexión, lecturas bloqueantes (XREADGROUP) y monitoreo de lag. Consumer async en proceso — sin dependencia de workers externos. |
-| **Abstracción LLM** | Provider Protocol con 9 proveedores (Groq, OpenAI, Anthropic, Gemini, Mistral, Cohere, Together, HuggingFace, Ollama). Groq (llama-3.3-70b) por defecto. Caché singleton. `llm_safe_complete()` nunca lanza excepciones. Redacción de credenciales. Sanitización anti-inyección de datos de escaneo. |
+| **Abstracción LLM** | Provider Protocol con 10 proveedores (Groq, OpenRouter, OpenAI, Anthropic, Gemini, Mistral, Cohere, Together, HuggingFace, Ollama). Groq (llama-3.3-70b) por defecto. Caché singleton. `llm_safe_complete()` nunca lanza excepciones. Redacción de credenciales. Sanitización anti-inyección de datos de escaneo. |
+| **Enriquecimiento LLM** | Nueve funciones por vulnerabilidad según el nivel del tenant (basic 3 / standard 6 / full 9). Estado y procedencia persistidos por función, reintentos idempotentes, concurrencia y presupuesto de llamadas acotados. Cola Celery dedicada; deshabilitado por defecto para controlar costes. Salida en inglés y filtrado de citas CVE/CWE según el hallazgo. |
 | **Observabilidad** | Registry Prometheus seguro para multiproceso (`prometheus-client`). Endpoint `/metrics` autenticado por token. Hook `child_exit` de gunicorn para limpieza de workers. Catálogo tipado de outages (25 FlowIds) que traduce fallos a respuestas 503 sanitizadas con `Retry-After`. |
 | **Resiliencia** | Locks distribuidos (Redis) con retry/backoff y aislamiento de outages. Retry de Redis al arranque. Auto-recuperación de índices DB vía `CREATE INDEX CONCURRENTLY`. Harness de inyección de fallos con Toxiproxy (fallos de revocación, scan-lock, rate-limit). |
 
@@ -66,7 +67,7 @@ graph TB
     Scraper["Prometheus Scraper"] -->|auth por token| API
 ```
 
-La plataforma sigue un patrón de monolito modular. FastAPI gestiona el tráfico HTTP, PostgreSQL impone aislamiento de tenant a nivel de fila, y Redis actúa como sistema nervioso central para denylist de sesiones, caché, locks distribuidos y streaming de eventos asíncronos. Los eventos se consumen con una tarea asyncio en proceso con lecturas bloqueantes — no se requiere worker Celery externo hoy (Celery está planeado para F2 slices 5–6, junto al executor Nmap).
+La plataforma sigue un patrón de monolito modular. FastAPI gestiona el tráfico HTTP, PostgreSQL impone aislamiento de tenant a nivel de fila, y Redis actúa como sistema nervioso central para denylist de sesiones, caché, locks distribuidos y streaming de eventos asíncronos. Los eventos se consumen con una tarea asyncio en proceso con lecturas bloqueantes. La ejecución de escaneos y el enriquecimiento LLM utilizan workers Celery separados; Beat gestiona el mantenimiento de escaneos, no la recuperación del enriquecimiento.
 
 ---
 
@@ -81,7 +82,7 @@ La plataforma sigue un patrón de monolito modular. FastAPI gestiona el tráfico
 | PostgreSQL | 16 (Alpine) |
 | Redis | 7 (Alpine, cliente 5.2.1) |
 | Alembic | 1.14.0 |
-| Celery | 5.4.0 (planeado para F2 slices 5–6) |
+| Celery | 5.4.0 (escaneos, mantenimiento y enriquecimiento) |
 | Uvicorn | 0.32.1 |
 | Gunicorn | — (prod, `gunicorn_conf.py`) |
 | Pydantic | 2.10.4 |
@@ -200,6 +201,35 @@ curl http://localhost:8000/health
 
 ---
 
+### Servicios de workers
+
+Configurar un archivo local `.env.worker`, fuera del control de versiones, con
+la URL de base de datos dirigida al host Compose `postgres`, puerto 5432 (o a
+la base de datos externa). Iniciar los workers, incluido el servicio dedicado
+de enriquecimiento:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.worker.yml --profile dev --profile worker up -d worker maintenance enrichment beat
+```
+
+### Configuración del enriquecimiento
+
+Definir estas variables de entorno en la API y los workers. El enriquecimiento
+utiliza el proveedor LLM global configurado; OpenRouter es opcional y Groq sigue
+siendo el proveedor predeterminado.
+
+| Variable | Valor predeterminado | Propósito |
+|----------|----------------------|-----------|
+| `ENRICHMENT_ENABLED` | `False` | Habilitar publicación tras el escaneo, endpoints de relanzado y ejecución del worker |
+| `ENRICHMENT_LANGUAGE` | `en` | Idioma de salida; actualmente solo se admite inglés |
+| `ENRICHMENT_MAX_CONCURRENCY` | `3` | Llamadas concurrentes al proveedor por vulnerabilidad (mínimo 1) |
+| `ENRICHMENT_BUDGET_SECONDS` | `120` | Presupuesto global de llamadas, incluida la espera por concurrencia |
+| `LLM_PROVIDER` | `groq` | Usar `openrouter` para seleccionar OpenRouter |
+| `OPENROUTER_API_KEY` | Sin configurar | Proporcionar la credencial de OpenRouter localmente; nunca incluirla en Git |
+| `OPENROUTER_MODEL` | `inclusionai/ling-flash-3.0:free` | Identificador del modelo de OpenRouter |
+
+---
+
 ## Flujo de Desarrollo
 
 1. **Branch**: Crear branches de feature desde `main`.
@@ -278,9 +308,20 @@ Los siguientes endpoints están disponibles actualmente:
 | `PATCH` | `/api/v1/tenants/{id}` | Actualizar tenant |
 | `DELETE` | `/api/v1/tenants/{id}` | Desactivar tenant |
 | `GET` | `/api/v1/dashboard/summary` | Métricas del dashboard del tenant (caché de 60 s; el superadmin indica `tenant_id`) |
+| `GET` | `/api/v1/vulnerabilities/{id}/enrichment` | Consultar las funciones del nivel del tenant (admin/analyst/viewer/superadmin) |
+| `POST` | `/api/v1/vulnerabilities/{id}/enrichment` | Encolar funciones ausentes, fallidas o desactualizadas (admin/analyst/superadmin) |
+| `POST` | `/api/v1/scans/{id}/enrichment` | Encolar hallazgos con cobertura incompleta de funciones exitosas (admin/analyst/superadmin) |
 | `GET` | `/health` | Probe de liveness (estado + versión) |
 | `GET` | `/health/db/indexes` | Probe de índices DB inválidos (target k8s) |
 | `GET` | `/metrics` | Endpoint de scrape Prometheus (autenticado por token, fuera del schema) |
+
+Los POST de enriquecimiento devuelven 202 con el número de tareas encoladas, o
+503 si está deshabilitado o falla la publicación; no hay barrido periódico de
+enriquecimiento. GET sigue disponible cuando está deshabilitado y representa las
+filas ausentes como `missing`. El relanzado por escaneo cuenta filas `ok` y no
+detecta éxitos desactualizados; el relanzado por vulnerabilidad comprueba datos,
+versión del prompt y modelo al ejecutar la tarea. Un fallo de publicación a mitad
+del lote puede dejar tareas encoladas sin informar de su número.
 
 La documentación OpenAPI completa está disponible en `/api/docs` cuando el servidor está corriendo (deshabilitado en producción).
 
@@ -318,7 +359,15 @@ graph LR
     C --> D["Slices 7-9: Agentes<br/>Dashboard · Enriquecimiento LLM · LangGraph"]
 ```
 
-F2 sigue el [PRD v2](openspec/changes/prd-v2-vertical-f2/) ("construye en vertical, primero limpio"). Cada módulo (Assets, Scans, Vulnerabilities, Reports) recibe schemas Pydantic, servicios asíncronos con tenant scoping, routers RBAC y tests antes de pasar a infraestructura (ejecución segura de Nmap, workers Celery) y agentes (dashboard con métricas, pipeline de enriquecimiento LLM de 8 tareas, agente LangGraph). Los modelos y migraciones de los cuatro módulos ya están implementados con FKs compuestas para aislamiento de tenant.
+F2 sigue el [PRD v2](openspec/changes/prd-v2-vertical-f2/) ("construye en vertical, primero limpio"). Cada módulo (Assets, Scans, Vulnerabilities, Reports) recibe schemas Pydantic, servicios asíncronos con tenant scoping, routers RBAC y tests antes de pasar a infraestructura (ejecución segura de Nmap, workers Celery) y agentes (dashboard con métricas, enriquecimiento LLM de nueve funciones, agente LangGraph). Los modelos y migraciones de los cuatro módulos ya están implementados con FKs compuestas para aislamiento de tenant.
+
+---
+
+Las slices 7 (dashboard) y 8 (enriquecimiento LLM) están implementadas; la
+slice 9 (orquestación LangGraph) es el siguiente paso. El enriquecimiento ejecuta
+una tarea por vulnerabilidad, con persistencia y reintentos por función. El
+[ADR de la slice 8](docs/adr/f2-slice-8-llm-enrichment.md) describe los niveles y
+la semántica de entrega.
 
 ---
 

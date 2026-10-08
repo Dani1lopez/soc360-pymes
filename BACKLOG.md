@@ -88,11 +88,81 @@ Historical review and runtime observations come from
 - **Where:** `app/modules/dashboard/service.py`; migration `9e7a3b6c1f85`.
 - **Size:** small; seed a large tenant locally and run `EXPLAIN ANALYZE`.
 
+## LLM enrichment
+
+### Replace generated references with deterministic lookup
+What: resolve supplied identifiers through NVD/MITRE instead of generating
+reference prose with the LLM. Why: citation filtering does not verify record
+contents. Where: `app/modules/enrichment/prompts.py` and `service.py`.
+
+### Measure cost and bound tenant relaunch usage
+What: measure token usage/cost per run and add a per-tenant budget or rate limit
+on relaunch endpoints. Why: concurrency and time limits do not cap monetary
+cost or repeated requests. Where: `app/modules/enrichment/service.py` and
+`router.py`.
+
+### Account for publishing threads after timeout
+What: address the fact that a publishing timeout does not cancel the
+`apply_async` thread. Why: a request can report failure while publication later
+succeeds. Where: `app/modules/enrichment/dispatch.py`; the same pattern exists
+in `app/modules/scans/dispatch.py`.
+
+### Report partial scan relaunch publication
+What: report how many tasks were queued before a mid-loop publish failure.
+Why: scan relaunch currently returns 503 without that count, obscuring partial
+progress. Where: `app/modules/enrichment/router.py`.
+
+### Scan relaunch misses stale successes
+What: include stale successful rows in scan relaunch selection. Why:
+`POST /scans/{id}/enrichment` only counts `ok` rows, so findings whose input,
+prompt version or model changed are not queued when successful coverage is
+complete; task-level identity checks only help if the task runs. Where:
+`app/modules/enrichment/queries.py` (`scan_pending`, around line 65).
+
+### Make the budget test robust on slow CI
+What: revisit the 0.2-second budget in the integration test. Why: scheduling
+on slow CI may exhaust it before fast outputs finish. Where:
+`tests/integration/test_enrichment_service.py`.
+
+### Cover the enrichment updated_at trigger
+What: add a database-level test of timestamp updates. Why: the
+`vulnerability_enrichments` trigger has no covering test recorded in the Slice 8
+review. Where: migration `20261008_1200_add_vulnerability_enrichments_af8b4c7d2e96.py`
+and enrichment integration tests.
+
+### Add Spanish prompts
+What: add `es` to the prompt language map and keep the settings validator literal
+in sync. Why: language is parameterized but only English is accepted today.
+Where: `app/modules/enrichment/prompts.py` and `app/core/config.py`.
+
+### Render nested metadata deterministically
+What: consider canonical JSON for nested metadata rather than `str()`.
+Why: dictionary insertion order can change prompt rendering even though the
+input hash uses canonical JSON. Where: `app/modules/enrichment/prompts.py`
+(`_render_value`).
+
+### Align Slice 9 contracts with persistence
+What: align `VALID_VULN_STATUSES` with model statuses and resolve the orphan
+`UpsertVulnerabilitiesResult` contract. Why: contracts include `acknowledged` and
+`resolved` rather than model status `fixed`; `UpsertVulnerabilitiesResult` exists
+but its documented `upsert_findings` consumer does not. Where:
+`app/core/contracts.py` and `app/modules/vulnerabilities/`; relevant to Slice 9.
+
+### Clean up minor enrichment inconsistencies
+What: standardize `datetime.UTC` versus `timezone.utc`, review the redundant
+single-column `vulnerability_id` index, expose a public prompt-sanitization
+helper instead of importing `_sanitize_prompt_user_data`, and normalize CWE
+metadata without the `CWE-` prefix. Why: reduce convention drift and avoid
+removing otherwise relevant CWE citations. Where:
+`app/modules/vulnerabilities/enrichment_models.py`, its migration,
+`app/modules/enrichment/prompts.py` and `app/core/llm/providers.py`.
+
 ## Test and tooling debt
 
 ### Key the inline-import allowlist by name, not line number
 - **Why deferred:** cheap but unrelated; any edit above the allowed imports in
-  `app/main.py` shifts the line numbers and fails the test.
+  `app/main.py` shifts the line numbers and fails the test. This broke again
+  in Slice 8 when `app/main.py` gained a router import.
 - **Where:** `tests/unit/test_imports.py:41` (`PR1_INDENT_IMPORT_ALLOWLIST`).
 - **Size:** small.
 

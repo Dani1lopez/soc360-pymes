@@ -46,7 +46,8 @@ Small and medium-sized businesses (PyMEs) face the same cyber threats as enterpr
 | **Multi-Tenant (RLS)** | Row-Level Security via PostgreSQL `SET LOCAL`. Transaction-scoped tenant context. 4 plans: Free (10 assets), Starter (25), Pro (100), Enterprise (500). Composite FKs enforce tenant-scoped references (scans → assets). |
 | **RBAC** | Hierarchical roles: viewer < analyst/ingestor < admin < superadmin. CHECK constraints enforce tenant rules. Self-protection prevents privilege escalation. |
 | **Event Bus** | Redis Streams with typed Pydantic events, consumer groups, XACK, Dead Letter Queue with durable ack, auto-reconnect, blocking reads (XREADGROUP), and lag monitoring. In-process async consumer — no external worker dependency. |
-| **LLM Abstraction** | Provider Protocol with 9 providers (Groq, OpenAI, Anthropic, Gemini, Mistral, Cohere, Together, HuggingFace, Ollama). Groq (llama-3.3-70b) default. Singleton caching. `llm_safe_complete()` never raises. Credential redaction. Prompt-injection sanitization for scan data. |
+| **LLM Abstraction** | Provider Protocol with 10 providers (Groq, OpenRouter, OpenAI, Anthropic, Gemini, Mistral, Cohere, Together, HuggingFace, Ollama). Groq (llama-3.3-70b) default. Singleton caching. `llm_safe_complete()` never raises. Credential redaction. Prompt-injection sanitization for scan data. |
+| **LLM Enrichment** | Nine vulnerability functions, scoped by tenant level (basic 3 / standard 6 / full 9). Persisted per-function status and provenance, idempotent retries, bounded concurrency and call budget. Dedicated Celery queue; disabled by default for cost safety. English output; finding-bound CVE/CWE citation filtering. |
 | **Observability** | Multiprocess-safe Prometheus registry (`prometheus-client`). Token-authenticated `/metrics` endpoint. `child_exit` gunicorn hook for worker cleanup. Typed outage catalog (25 FlowIds) mapping failures to sanitized 503 responses with `Retry-After`. |
 | **Resilience** | Distributed locks (Redis) with retry/backoff and outage isolation. Startup Redis retry. DB index auto-recovery via `CREATE INDEX CONCURRENTLY`. Toxiproxy fault-injection test harness (revocation, scan-lock, rate-limit faults). |
 
@@ -66,7 +67,7 @@ graph TB
     Scraper["Prometheus Scraper"] -->|token auth| API
 ```
 
-The platform follows a modular monolith pattern. FastAPI handles HTTP traffic, PostgreSQL enforces tenant isolation at the row level, and Redis serves as the central nervous system for session denylisting, caching, distributed locks, and asynchronous event streaming. Events are consumed by an in-process asyncio task with blocking reads — no external Celery worker is required today (Celery is planned for F2 slices 5–6, alongside the Nmap executor).
+The platform follows a modular monolith pattern. FastAPI handles HTTP traffic, PostgreSQL enforces tenant isolation at the row level, and Redis serves as the central nervous system for session denylisting, caching, distributed locks, and asynchronous event streaming. Events are consumed by an in-process asyncio task with blocking reads. Scan execution and LLM enrichment use separate Celery workers; Beat handles scan maintenance, not enrichment recovery.
 
 ---
 
@@ -81,7 +82,7 @@ The platform follows a modular monolith pattern. FastAPI handles HTTP traffic, P
 | PostgreSQL | 16 (Alpine) |
 | Redis | 7 (Alpine, client 5.2.1) |
 | Alembic | 1.14.0 |
-| Celery | 5.4.0 (planned for F2 slices 5–6) |
+| Celery | 5.4.0 (scan execution, maintenance and enrichment) |
 | Uvicorn | 0.32.1 |
 | Gunicorn | — (prod, `gunicorn_conf.py`) |
 | Pydantic | 2.10.4 |
@@ -200,6 +201,34 @@ curl http://localhost:8000/health
 
 ---
 
+### Worker services
+
+Configure a local, untracked `.env.worker` with the database URL targeting
+Compose host `postgres` on port 5432 (or your external database). Start the
+worker overlay, including the dedicated enrichment service:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.worker.yml --profile dev --profile worker up -d worker maintenance enrichment beat
+```
+
+### Enrichment configuration
+
+Set these environment variables in the API and worker environments. Enrichment
+uses the configured global LLM provider; OpenRouter is optional and Groq remains
+the default.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ENRICHMENT_ENABLED` | `False` | Enable post-scan publishing, relaunch endpoints and worker execution |
+| `ENRICHMENT_LANGUAGE` | `en` | Output language; only English is currently supported |
+| `ENRICHMENT_MAX_CONCURRENCY` | `3` | Concurrent provider calls per vulnerability (minimum 1) |
+| `ENRICHMENT_BUDGET_SECONDS` | `120` | Overall provider-call budget, including concurrency waiting |
+| `LLM_PROVIDER` | `groq` | Set `openrouter` to select OpenRouter |
+| `OPENROUTER_API_KEY` | Not configured | Supply your OpenRouter credential locally; never commit it |
+| `OPENROUTER_MODEL` | `inclusionai/ling-flash-3.0:free` | OpenRouter model identifier |
+
+---
+
 ## Development Workflow
 
 1. **Branch**: Create feature branches from `main`.
@@ -278,9 +307,19 @@ The following endpoints are currently available:
 | `PATCH` | `/api/v1/tenants/{id}` | Update tenant |
 | `DELETE` | `/api/v1/tenants/{id}` | Deactivate tenant |
 | `GET` | `/api/v1/dashboard/summary` | Tenant dashboard metrics (60 s cache; superadmin passes `tenant_id`) |
+| `GET` | `/api/v1/vulnerabilities/{id}/enrichment` | Read functions for the tenant's level (admin/analyst/viewer/superadmin) |
+| `POST` | `/api/v1/vulnerabilities/{id}/enrichment` | Queue missing, failed or stale functions (admin/analyst/superadmin) |
+| `POST` | `/api/v1/scans/{id}/enrichment` | Queue findings with incomplete successful function coverage (admin/analyst/superadmin) |
 | `GET` | `/health` | Liveness probe (status + version) |
 | `GET` | `/health/db/indexes` | Invalid DB index probe (k8s target) |
 | `GET` | `/metrics` | Prometheus scrape endpoint (token-authenticated, not in schema) |
+
+Enrichment POSTs return 202 with queued counts, or 503 if disabled or publishing
+fails; there is no periodic enrichment sweep. GET remains available when disabled
+and reports absent rows as `missing`. Scan relaunch counts `ok` rows and does not
+detect stale successes; vulnerability relaunch checks input, prompt version and
+model when the task runs. A mid-loop publish failure may leave some tasks queued
+without reporting their count.
 
 Full OpenAPI documentation is available at `/api/docs` when the server is running (disabled in production).
 
@@ -318,7 +357,14 @@ graph LR
     C --> D["Slice 7-9: Agents<br/>Dashboard · LLM enrichment · LangGraph"]
 ```
 
-F2 follows [PRD v2](openspec/changes/prd-v2-vertical-f2/) ("build vertical, clean first"). Each module (Assets, Scans, Vulnerabilities, Reports) gets Pydantic schemas, async tenant-scoped services, RBAC routers, and tests before moving to infrastructure (safe Nmap execution, Celery workers) and agents (dashboard metrics, 8-task LLM enrichment pipeline, LangGraph agent pipeline). Models and migrations for all four modules are already implemented with composite FKs for tenant isolation.
+F2 follows [PRD v2](openspec/changes/prd-v2-vertical-f2/) ("build vertical, clean first"). Each module (Assets, Scans, Vulnerabilities, Reports) gets Pydantic schemas, async tenant-scoped services, RBAC routers, and tests before moving to infrastructure (safe Nmap execution, Celery workers) and agents (dashboard metrics, nine-function LLM enrichment, LangGraph agent pipeline). Models and migrations for all four modules are already implemented with composite FKs for tenant isolation.
+
+---
+
+Slices 7 (dashboard) and 8 (LLM enrichment) are implemented; Slice 9
+(LangGraph orchestration) remains next. Enrichment runs one task per vulnerability,
+with per-function persistence and retries. See the
+[Slice 8 ADR](docs/adr/f2-slice-8-llm-enrichment.md) for levels and delivery semantics.
 
 ---
 

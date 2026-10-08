@@ -21,6 +21,9 @@ from app.modules.reports.models import Report  # noqa: F401
 from app.modules.scans.models import Scan  # noqa: F401
 from app.modules.tenants.models import Tenant  # noqa: F401
 from app.modules.users.models import User  # noqa: F401
+from app.modules.vulnerabilities.enrichment_models import (
+    VulnerabilityEnrichment,  # noqa: F401
+)
 from app.modules.vulnerabilities.models import Vulnerability  # noqa: F401
 
 

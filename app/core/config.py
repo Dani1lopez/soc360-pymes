@@ -5,7 +5,7 @@ from collections import Counter
 from math import log2
 from typing import ClassVar
 
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core._provider_names import _PROVIDER_NAMES
@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     LLM_MAX_TOKENS: int = 2048
     LLM_TEMPERATURE: float = 0.1
 
+    ENRICHMENT_ENABLED: bool = False
+    ENRICHMENT_LANGUAGE: str = "en"
+    ENRICHMENT_MAX_CONCURRENCY: int = Field(default=3, ge=1)
+    ENRICHMENT_BUDGET_SECONDS: int = Field(default=120, gt=0)
+
     # Per-provider API keys (None = not configured for that provider)
     OPENAI_API_KEY: str | None = None
     ANTHROPIC_API_KEY: str | None = None
@@ -69,6 +74,7 @@ class Settings(BaseSettings):
     COHERE_API_KEY: str | None = None
     TOGETHER_API_KEY: str | None = None
     HUGGINGFACE_API_KEY: str | None = None
+    OPENROUTER_API_KEY: str | None = None
 
     # Per-provider model defaults (env-overridable via {NAME}_MODEL)
     OPENAI_MODEL: str = "gpt-4o"
@@ -78,6 +84,7 @@ class Settings(BaseSettings):
     COHERE_MODEL: str = "command-r-plus"
     TOGETHER_MODEL: str = "mistralai/Mistral-7B-Instruct-v0.3"
     HUGGINGFACE_MODEL: str = "meta-llama/Llama-3.3-70B-Instruct"
+    OPENROUTER_MODEL: str = "inclusionai/ling-flash-3.0:free"
 
     # Per-provider base URL overrides (None = use provider class default)
     ANTHROPIC_BASE_URL: str | None = None
@@ -228,6 +235,15 @@ class Settings(BaseSettings):
             if not self.REDIS_PASSWORD.get_secret_value():
                 raise ValueError("REDIS_PASSWORD is required in production")
         return self
+
+    @field_validator("ENRICHMENT_LANGUAGE")
+    @classmethod
+    def enrichment_language_valid(cls, value: str) -> str:
+        # Importing prompts here would cycle through providers and settings.
+        # The settings unit test keeps this set aligned with SUPPORTED_LANGUAGES.
+        if value not in {"en"}:
+            raise ValueError("Unsupported enrichment language")
+        return value
 
     @field_validator("LLM_PROVIDER")
     @classmethod

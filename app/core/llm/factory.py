@@ -7,10 +7,10 @@ from typing import Callable
 from app.core._provider_names import _PROVIDER_NAMES
 from app.core.config import settings
 from app.core.exceptions import LLMResponseError
-from app.core.llm.config import _llm_logger
 from app.core.llm.providers import (
     AnthropicProvider,
     GeminiProvider,
+    LLMProvider,
     OpenAICompatProvider,
 )
 
@@ -34,12 +34,12 @@ class ProviderEntry:
 
 
 def _register_providers() -> None:
-    """Build the provider registry with all 9 supported providers.
+    """Build the provider registry with all 10 supported providers.
 
     Called lazily on first ``_create_provider()`` invocation.
     Includes a drift assertion that catches mismatches between
     ``_PROVIDER_NAMES`` (in ``_provider_names.py``) and the
-    registry keys at import time.
+    registry keys, on this first call rather than at import time.
     """
     if _PROVIDER_REGISTRY:
         return
@@ -48,7 +48,7 @@ def _register_providers() -> None:
         "groq": ProviderEntry(
             cls=OpenAICompatProvider, api_key_attr="GROQ_API_KEY",
             model_default="llama-3.3-70b-versatile",
-            base_url_attr=None, base_url_default="https://api.groq.com/v1",
+            base_url_attr=None, base_url_default="https://api.groq.com/openai/v1",
             url_normalizer=None,
         ),
         "ollama": ProviderEntry(
@@ -61,6 +61,12 @@ def _register_providers() -> None:
             cls=OpenAICompatProvider, api_key_attr="OPENAI_API_KEY",
             model_default="gpt-4o",
             base_url_attr=None, base_url_default="https://api.openai.com/v1",
+            url_normalizer=None,
+        ),
+        "openrouter": ProviderEntry(
+            cls=OpenAICompatProvider, api_key_attr="OPENROUTER_API_KEY",
+            model_default="inclusionai/ling-flash-3.0:free",
+            base_url_attr=None, base_url_default="https://openrouter.ai/api/v1",
             url_normalizer=None,
         ),
         "anthropic": ProviderEntry(
@@ -84,7 +90,7 @@ def _register_providers() -> None:
         "cohere": ProviderEntry(
             cls=OpenAICompatProvider, api_key_attr="COHERE_API_KEY",
             model_default="command-r-plus",
-            base_url_attr=None, base_url_default="https://api.cohere.ai/v1",
+            base_url_attr=None, base_url_default="https://api.cohere.ai/compatibility/v1",
             url_normalizer=None,
         ),
         "together": ProviderEntry(
@@ -96,7 +102,7 @@ def _register_providers() -> None:
         "huggingface": ProviderEntry(
             cls=OpenAICompatProvider, api_key_attr="HUGGINGFACE_API_KEY",
             model_default="meta-llama/Llama-3.3-70B-Instruct",
-            base_url_attr=None, base_url_default="https://api-inference.huggingface.co/v1",
+            base_url_attr=None, base_url_default="https://router.huggingface.co/v1",
             url_normalizer=None,
         ),
     })
@@ -111,6 +117,25 @@ def _register_providers() -> None:
         f"_PROVIDER_NAMES: {sorted(_PROVIDER_NAMES)}. "
         f"Update app/core/_provider_names.py to match."
     )
+
+
+def _resolve_model(name: str, entry: ProviderEntry) -> str:
+    model = getattr(settings, f"{name.upper()}_MODEL", None)
+    if model is None:
+        model = entry.model_default
+    if not model:
+        raise LLMResponseError(f"Model not configured for provider {name!r}")
+    return str(model)
+
+
+def get_llm_model_name() -> str:
+    """Resolve the configured model using the provider construction rules."""
+    name = settings.LLM_PROVIDER.strip().lower()
+    _register_providers()
+    entry = _PROVIDER_REGISTRY.get(name)
+    if entry is None:
+        raise LLMResponseError(f"Unknown LLM provider: {name!r}")
+    return _resolve_model(name, entry)
 
 
 def _create_provider(provider_name: str) -> "LLMProvider":
@@ -144,11 +169,7 @@ def _create_provider(provider_name: str) -> "LLMProvider":
     # None  → use entry.model_default (env var not set at all)
     # ""    → raise LLMResponseError  (env var explicitly set to empty)
     # value → use it as-is
-    model = getattr(settings, f"{name.upper()}_MODEL", None)
-    if model is None:
-        model = entry.model_default
-    if not model:
-        raise LLMResponseError(f"Model not configured for provider {name!r}")
+    model = _resolve_model(name, entry)
 
     # API key: None attr = skip (ollama); None value = use "" (backcompat);
     # explicitly empty string = error (spec R06b)

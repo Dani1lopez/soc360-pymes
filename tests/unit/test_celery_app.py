@@ -101,6 +101,7 @@ def test_reaper_schedule_and_threshold():
         ("scans.pump", "maintenance"),
         ("scans.reap", "maintenance"),
         ("scans.wake", "scans"),
+        ("enrichment.vulnerability", "enrichment"),
     ],
 )
 def test_task_routing(task_name, queue):

@@ -28,6 +28,7 @@ PUMP_INTERVAL_SECONDS = 60
 PUMP_MAX_BELLS = 10
 SCAN_QUEUE = "scans"
 MAINTENANCE_QUEUE = "maintenance"
+ENRICHMENT_QUEUE = "enrichment"
 MAINTENANCE_SOFT_LIMIT_SECONDS = 60
 MAINTENANCE_HARD_LIMIT_SECONDS = 120
 BROKER_SOCKET_TIMEOUT_SECONDS = 5
@@ -75,6 +76,7 @@ def build_celery_config(config: BrokerSettings) -> dict[str, Any]:
         "task_routes": {
             "scans.pump": {"queue": MAINTENANCE_QUEUE},
             "scans.reap": {"queue": MAINTENANCE_QUEUE},
+            "enrichment.vulnerability": {"queue": ENRICHMENT_QUEUE},
         },
         "task_serializer": "json",
         "result_serializer": "json",
@@ -96,7 +98,10 @@ def build_celery_config(config: BrokerSettings) -> dict[str, Any]:
 
 
 def create_celery_app(config: BrokerSettings) -> Celery:
-    app = Celery("soc360", set_as_current=False, include=["app.worker.tasks"])
+    app = Celery(
+        "soc360", set_as_current=False,
+        include=["app.worker.tasks", "app.worker.enrichment_tasks"],
+    )
     app.add_defaults(lambda: build_celery_config(config))
     return app
 

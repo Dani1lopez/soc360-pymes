@@ -3,11 +3,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Integer, String, func, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+
+AI_ENRICHMENT_LEVELS = ("basic", "standard", "full")
 
 
 class Tenant(Base):
@@ -44,6 +46,15 @@ class Tenant(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-    
+
+    __table_args__ = (
+        CheckConstraint(
+            "ai_enrichment_level IN ("
+            + ", ".join(repr(v) for v in AI_ENRICHMENT_LEVELS)
+            + ")",
+            name="chk_tenants_ai_enrichment_level",
+        ),
+    )
+
     def __repr__(self) -> str:
         return f"<Tenant id={self.id} slug={self.slug!r}>"

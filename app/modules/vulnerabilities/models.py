@@ -12,6 +12,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -62,6 +63,7 @@ class Vulnerability(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("id", "tenant_id", name="uq_vulnerabilities_id_tenant_id"),
         CheckConstraint(
             "severity IN ('critical', 'high', 'medium', 'low', 'info')",
             name="chk_vulnerabilities_severity",

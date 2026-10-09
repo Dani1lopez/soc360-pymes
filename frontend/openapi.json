@@ -1,0 +1,4431 @@
+{
+  "components": {
+    "schemas": {
+      "AssetResponse": {
+        "additionalProperties": false,
+        "description": "The public Assets response.\n\nOnly six fields are exposed. The ``from_orm_instance`` helper performs\nthe explicit ``asset_type`` → ``type`` mapping so the ORM column name\nnever leaks (D-009).",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "ip",
+              "domain",
+              "hostname",
+              "web_app",
+              "subnet",
+              "cloud_resource"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "value",
+          "tenant_id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AssetResponse",
+        "type": "object"
+      },
+      "AssetUpdate": {
+        "additionalProperties": false,
+        "description": "Partial update payload.\n\nBoth fields are optional; the service combines the supplied values\nwith the persisted state and validates the resulting pair. Unknown\nkeys are rejected.",
+        "properties": {
+          "type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ip",
+                  "domain",
+                  "hostname",
+                  "web_app",
+                  "subnet",
+                  "cloud_resource"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "title": "AssetUpdate",
+        "type": "object"
+      },
+      "ChangePasswordRequest": {
+        "properties": {
+          "current_password": {
+            "title": "Current Password",
+            "type": "string"
+          },
+          "new_password": {
+            "title": "New Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "title": "ChangePasswordRequest",
+        "type": "object"
+      },
+      "CloudResourceAssetCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "cloud_resource",
+            "default": "cloud_resource",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "value"
+        ],
+        "title": "CloudResourceAssetCreate",
+        "type": "object"
+      },
+      "CoverageMetric": {
+        "additionalProperties": false,
+        "description": "Recent scan coverage of active assets.",
+        "properties": {
+          "covered": {
+            "title": "Covered",
+            "type": "integer"
+          },
+          "ratio": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "0..1 fraction rounded to 4 decimals; None when total is 0 (no data, not 0 %).",
+            "title": "Ratio"
+          },
+          "since": {
+            "format": "date-time",
+            "title": "Since",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "covered",
+          "total",
+          "ratio",
+          "since"
+        ],
+        "title": "CoverageMetric",
+        "type": "object"
+      },
+      "DashboardSummary": {
+        "additionalProperties": false,
+        "description": "Tenant-scoped dashboard metrics at the database clock time.",
+        "properties": {
+          "assets_monitored": {
+            "title": "Assets Monitored",
+            "type": "integer"
+          },
+          "coverage_24h": {
+            "$ref": "#/components/schemas/CoverageMetric"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "open_by_severity": {
+            "$ref": "#/components/schemas/SeverityCounts"
+          },
+          "scan_success_30d": {
+            "$ref": "#/components/schemas/ScanSuccessMetric"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "trend_30d": {
+            "items": {
+              "$ref": "#/components/schemas/TrendDay"
+            },
+            "title": "Trend 30D",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "generated_at",
+          "assets_monitored",
+          "open_by_severity",
+          "coverage_24h",
+          "trend_30d",
+          "scan_success_30d"
+        ],
+        "title": "DashboardSummary",
+        "type": "object"
+      },
+      "DiscoveryConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "host_discovery": {
+            "title": "Host Discovery",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "host_discovery"
+        ],
+        "title": "DiscoveryConfig",
+        "type": "object"
+      },
+      "DiscoveryScanCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "format": "uuid",
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "config": {
+            "$ref": "#/components/schemas/DiscoveryConfig"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "discovery",
+            "default": "discovery",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "asset_id",
+          "name",
+          "config"
+        ],
+        "title": "DiscoveryScanCreate",
+        "type": "object"
+      },
+      "DomainAssetCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "domain",
+            "default": "domain",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "value"
+        ],
+        "title": "DomainAssetCreate",
+        "type": "object"
+      },
+      "EnrichmentItemRead": {
+        "properties": {
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "function": {
+            "title": "Function",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "prompt_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Version"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "failed",
+              "pending",
+              "missing"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "function",
+          "status"
+        ],
+        "title": "EnrichmentItemRead",
+        "type": "object"
+      },
+      "EnrichmentQueued": {
+        "properties": {
+          "queued": {
+            "title": "Queued",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "queued"
+        ],
+        "title": "EnrichmentQueued",
+        "type": "object"
+      },
+      "FullConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "checks": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Checks",
+            "type": "array"
+          },
+          "host_discovery": {
+            "title": "Host Discovery",
+            "type": "boolean"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Paths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "host_discovery",
+          "checks",
+          "paths"
+        ],
+        "title": "FullConfig",
+        "type": "object"
+      },
+      "FullScanCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "format": "uuid",
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "config": {
+            "$ref": "#/components/schemas/FullConfig"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "full",
+            "default": "full",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "asset_id",
+          "name",
+          "config"
+        ],
+        "title": "FullScanCreate",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HostnameAssetCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "hostname",
+            "default": "hostname",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "value"
+        ],
+        "title": "HostnameAssetCreate",
+        "type": "object"
+      },
+      "IpAssetCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "ip",
+            "default": "ip",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "value"
+        ],
+        "title": "IpAssetCreate",
+        "type": "object"
+      },
+      "LoginRequest": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "LoginRequest",
+        "type": "object"
+      },
+      "ReportCreate": {
+        "additionalProperties": false,
+        "description": "Create payload.\n\n``status`` and ``generated_at`` are deliberately absent: the server forces\n``status=\"pending\"`` and ``generated_at=None`` regardless of client input.",
+        "properties": {
+          "asset_id": {
+            "format": "uuid",
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "report_metadata": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Metadata"
+          },
+          "report_type": {
+            "enum": [
+              "vulnerability",
+              "executive",
+              "technical",
+              "compliance"
+            ],
+            "title": "Report Type",
+            "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "asset_id",
+          "name",
+          "report_type"
+        ],
+        "title": "ReportCreate",
+        "type": "object"
+      },
+      "ReportListResponse": {
+        "description": "Paginated list response: items plus the page metadata.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReportResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "ReportListResponse",
+        "type": "object"
+      },
+      "ReportResponse": {
+        "additionalProperties": false,
+        "description": "The public Reports response.",
+        "properties": {
+          "asset_id": {
+            "format": "uuid",
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "generated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "report_metadata": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Metadata"
+          },
+          "report_type": {
+            "enum": [
+              "vulnerability",
+              "executive",
+              "technical",
+              "compliance"
+            ],
+            "title": "Report Type",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "generating",
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "asset_id",
+          "name",
+          "report_type",
+          "status",
+          "summary",
+          "report_metadata",
+          "generated_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ReportResponse",
+        "type": "object"
+      },
+      "ReportUpdate": {
+        "additionalProperties": false,
+        "description": "Partial update payload.\n\nOnly ``name``, ``status``, ``summary``, ``report_metadata`` and\n``generated_at`` are accepted. ``tenant_id``, ``asset_id`` and\n``report_type`` identify the report and never change once recorded.\n``name`` and ``status`` are NOT NULL columns, so an explicit ``null`` is\nrejected with 422 instead of reaching the database.",
+        "properties": {
+          "generated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "report_metadata": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Metadata"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pending",
+                  "generating",
+                  "completed",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          }
+        },
+        "title": "ReportUpdate",
+        "type": "object"
+      },
+      "RoleEnum": {
+        "enum": [
+          "viewer",
+          "analyst",
+          "ingestor",
+          "admin",
+          "superadmin"
+        ],
+        "title": "RoleEnum",
+        "type": "string"
+      },
+      "ScanEnrichmentQueued": {
+        "properties": {
+          "queued": {
+            "title": "Queued",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "queued",
+          "total"
+        ],
+        "title": "ScanEnrichmentQueued",
+        "type": "object"
+      },
+      "ScanLimits": {
+        "additionalProperties": false,
+        "properties": {
+          "concurrent_max": {
+            "default": 1,
+            "exclusiveMinimum": 0.0,
+            "title": "Concurrent Max",
+            "type": "integer"
+          },
+          "daily_max": {
+            "default": 5,
+            "exclusiveMinimum": 0.0,
+            "title": "Daily Max",
+            "type": "integer"
+          }
+        },
+        "title": "ScanLimits",
+        "type": "object"
+      },
+      "ScanListResponse": {
+        "description": "Paginated list response: items plus the page metadata.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ScanResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "ScanListResponse",
+        "type": "object"
+      },
+      "ScanResponse": {
+        "additionalProperties": false,
+        "description": "The public Scans response.\n\nExactly eleven fields. ``from_orm_instance`` performs the explicit\n``scan_type`` -> ``type`` mapping so the column name never reaches the wire\nand no other ORM attribute is serialised implicitly.",
+        "properties": {
+          "asset_id": {
+            "format": "uuid",
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "discovery",
+              "vulnerability",
+              "web",
+              "full"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "asset_id",
+          "name",
+          "type",
+          "status",
+          "config",
+          "started_at",
+          "completed_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ScanResponse",
+        "type": "object"
+      },
+      "ScanSuccessMetric": {
+        "additionalProperties": false,
+        "description": "Completed and failed scans within the rolling window.",
+        "properties": {
+          "completed": {
+            "title": "Completed",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "ratio": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "0..1 fraction rounded to 4 decimals; None when completed + failed is 0 (no data, not 0 %).",
+            "title": "Ratio"
+          },
+          "since": {
+            "format": "date-time",
+            "title": "Since",
+            "type": "string"
+          }
+        },
+        "required": [
+          "completed",
+          "failed",
+          "ratio",
+          "since"
+        ],
+        "title": "ScanSuccessMetric",
+        "type": "object"
+      },
+      "ScanUpdate": {
+        "additionalProperties": false,
+        "description": "Partial update payload.\n\nOnly the mutable public fields are accepted. ``tenant_id``, ``asset_id``,\n``status``, ``started_at`` and ``completed_at`` cannot appear here: the\nidentity of a scan never changes, and its lifecycle is owned by the\nexecution slices, never by an HTTP client.",
+        "properties": {
+          "config": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "discovery",
+                  "vulnerability",
+                  "web",
+                  "full"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          }
+        },
+        "title": "ScanUpdate",
+        "type": "object"
+      },
+      "SeverityCounts": {
+        "additionalProperties": false,
+        "description": "Open findings by severity, including zero counts.",
+        "properties": {
+          "critical": {
+            "default": 0,
+            "title": "Critical",
+            "type": "integer"
+          },
+          "high": {
+            "default": 0,
+            "title": "High",
+            "type": "integer"
+          },
+          "info": {
+            "default": 0,
+            "title": "Info",
+            "type": "integer"
+          },
+          "low": {
+            "default": 0,
+            "title": "Low",
+            "type": "integer"
+          },
+          "medium": {
+            "default": 0,
+            "title": "Medium",
+            "type": "integer"
+          }
+        },
+        "title": "SeverityCounts",
+        "type": "object"
+      },
+      "SubnetAssetCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "subnet",
+            "default": "subnet",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "value"
+        ],
+        "title": "SubnetAssetCreate",
+        "type": "object"
+      },
+      "TenantCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "max_assets": {
+            "default": 10,
+            "title": "Max Assets",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "plan": {
+            "default": "free",
+            "enum": [
+              "free",
+              "starter",
+              "pro",
+              "enterprise"
+            ],
+            "title": "Plan",
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/TenantSettings",
+            "default": {
+              "baseline_reset_requested": false,
+              "log_buffer_max": 500,
+              "scan_limits": {
+                "concurrent_max": 1,
+                "daily_max": 5
+              },
+              "scan_schedule": "0 2 * * *",
+              "severity_threshold": "medium",
+              "timezone": "Europe/Madrid"
+            }
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "TenantCreate",
+        "type": "object"
+      },
+      "TenantResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "max_assets": {
+            "title": "Max Assets",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "plan": {
+            "title": "Plan",
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/TenantSettings"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "plan",
+          "is_active",
+          "max_assets",
+          "settings",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "TenantResponse",
+        "type": "object"
+      },
+      "TenantSettings": {
+        "properties": {
+          "baseline_reset_requested": {
+            "default": false,
+            "title": "Baseline Reset Requested",
+            "type": "boolean"
+          },
+          "log_buffer_max": {
+            "default": 500,
+            "exclusiveMinimum": 0.0,
+            "title": "Log Buffer Max",
+            "type": "integer"
+          },
+          "notification_email": {
+            "anyOf": [
+              {
+                "format": "email",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notification Email"
+          },
+          "scan_limits": {
+            "$ref": "#/components/schemas/ScanLimits",
+            "default": {
+              "concurrent_max": 1,
+              "daily_max": 5
+            }
+          },
+          "scan_schedule": {
+            "default": "0 2 * * *",
+            "title": "Scan Schedule",
+            "type": "string"
+          },
+          "severity_threshold": {
+            "default": "medium",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Severity Threshold",
+            "type": "string"
+          },
+          "timezone": {
+            "default": "Europe/Madrid",
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "title": "TenantSettings",
+        "type": "object"
+      },
+      "TenantUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          },
+          "max_assets": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Assets"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "enum": [
+                  "free",
+                  "starter",
+                  "pro",
+                  "enterprise"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan"
+          },
+          "settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TenantSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "TenantUpdate",
+        "type": "object"
+      },
+      "TokenResponse": {
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          },
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "token_type": {
+            "default": "bearer",
+            "title": "Token Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "expires_in"
+        ],
+        "title": "TokenResponse",
+        "type": "object"
+      },
+      "TrendDay": {
+        "additionalProperties": false,
+        "description": "Findings opened and closed on one UTC calendar day.",
+        "properties": {
+          "closed": {
+            "title": "Closed",
+            "type": "integer"
+          },
+          "day": {
+            "format": "date",
+            "title": "Day",
+            "type": "string"
+          },
+          "opened": {
+            "title": "Opened",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "day",
+          "opened",
+          "closed"
+        ],
+        "title": "TrendDay",
+        "type": "object"
+      },
+      "UserCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "description": "Email unico del usuario",
+            "title": "Email",
+            "type": "string"
+          },
+          "full_name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Full Name",
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 128,
+            "minLength": 12,
+            "title": "Password",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/RoleEnum",
+            "description": "Rol del usuario"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Tenant requerido para creación pública",
+            "title": "Tenant Id"
+          }
+        },
+        "required": [
+          "email",
+          "password",
+          "full_name",
+          "role",
+          "tenant_id"
+        ],
+        "title": "UserCreate",
+        "type": "object"
+      },
+      "UserResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "full_name": {
+            "title": "Full Name",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "is_superadmin": {
+            "title": "Is Superadmin",
+            "type": "boolean"
+          },
+          "role": {
+            "$ref": "#/components/schemas/RoleEnum"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant Id"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "email",
+          "full_name",
+          "role",
+          "is_active",
+          "is_superadmin",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "UserResponse",
+        "type": "object"
+      },
+      "UserUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "full_name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Full Name"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoleEnum"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "UserUpdate",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "VulnerabilityConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "checks": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Checks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "checks"
+        ],
+        "title": "VulnerabilityConfig",
+        "type": "object"
+      },
+      "VulnerabilityCreate": {
+        "additionalProperties": false,
+        "description": "Create payload.\n\n``status`` is deliberately absent: the server forces it to ``\"open\"``\nregardless of client input, matching the Scans pattern of owning the\nlifecycle server-side.",
+        "properties": {
+          "cve_id": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cve Id"
+          },
+          "cvss_score": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cvss Score"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "scan_id": {
+            "format": "uuid",
+            "title": "Scan Id",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "info"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "vulnerability_metadata": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vulnerability Metadata"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "scan_id",
+          "title",
+          "severity"
+        ],
+        "title": "VulnerabilityCreate",
+        "type": "object"
+      },
+      "VulnerabilityEnrichmentRead": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EnrichmentItemRead"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "level": {
+            "title": "Level",
+            "type": "string"
+          },
+          "vulnerability_id": {
+            "format": "uuid",
+            "title": "Vulnerability Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "vulnerability_id",
+          "level",
+          "items"
+        ],
+        "title": "VulnerabilityEnrichmentRead",
+        "type": "object"
+      },
+      "VulnerabilityListResponse": {
+        "description": "Paginated list response: items plus the page metadata.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/VulnerabilityResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "VulnerabilityListResponse",
+        "type": "object"
+      },
+      "VulnerabilityResponse": {
+        "additionalProperties": false,
+        "description": "The public Vulnerabilities response.",
+        "properties": {
+          "closed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "cve_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cve Id"
+          },
+          "cvss_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cvss Score"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "scan_id": {
+            "format": "uuid",
+            "title": "Scan Id",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "info"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "fixed",
+              "accepted_risk",
+              "false_positive"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "vulnerability_metadata": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vulnerability Metadata"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "scan_id",
+          "title",
+          "description",
+          "severity",
+          "status",
+          "cve_id",
+          "cvss_score",
+          "vulnerability_metadata",
+          "created_at",
+          "updated_at",
+          "closed_at"
+        ],
+        "title": "VulnerabilityResponse",
+        "type": "object"
+      },
+      "VulnerabilityScanCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "format": "uuid",
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "config": {
+            "$ref": "#/components/schemas/VulnerabilityConfig"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "vulnerability",
+            "default": "vulnerability",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "asset_id",
+          "name",
+          "config"
+        ],
+        "title": "VulnerabilityScanCreate",
+        "type": "object"
+      },
+      "VulnerabilityUpdate": {
+        "additionalProperties": false,
+        "description": "Partial update payload.\n\nOnly ``status``, ``description``, ``cvss_score`` and\n``vulnerability_metadata`` are accepted. ``title``, ``scan_id``,\n``tenant_id``, ``severity`` and ``cve_id`` cannot appear here: they\nidentify the finding and where it came from, and never change once\nrecorded — matching Scans' pattern of keeping identity fields out of\nPATCH.",
+        "properties": {
+          "cvss_score": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cvss Score"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "open",
+                  "fixed",
+                  "accepted_risk",
+                  "false_positive"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "vulnerability_metadata": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vulnerability Metadata"
+          }
+        },
+        "title": "VulnerabilityUpdate",
+        "type": "object"
+      },
+      "WebAppAssetCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "web_app",
+            "default": "web_app",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "value"
+        ],
+        "title": "WebAppAssetCreate",
+        "type": "object"
+      },
+      "WebConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Paths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "title": "WebConfig",
+        "type": "object"
+      },
+      "WebScanCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "format": "uuid",
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "config": {
+            "$ref": "#/components/schemas/WebConfig"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "web",
+            "default": "web",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "asset_id",
+          "name",
+          "config"
+        ],
+        "title": "WebScanCreate",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "OAuth2PasswordBearer": {
+        "flows": {
+          "password": {
+            "scopes": {},
+            "tokenUrl": "/auth/login"
+          }
+        },
+        "type": "oauth2"
+      }
+    }
+  },
+  "info": {
+    "description": "SOC as a Service para pequeñas y medianas empresas",
+    "title": "SOC 360 PYMEs",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/assets/": {
+      "get": {
+        "description": "List assets visible to ``current_user``.\n\nWith ``export=csv`` an unpaginated ``text/csv`` stream is returned;\notherwise a paginated :class:`AssetListResponse` is returned.",
+        "operationId": "list_assets_api_v1_assets__get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "export",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "csv",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Export"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List assets (paginated) or export them as CSV",
+        "tags": [
+          "assets"
+        ]
+      },
+      "post": {
+        "description": "Create a new asset within a tenant.\n\nTenant rules (D-007):\n\n* Non-superadmin: ``payload.tenant_id`` MUST equal\n  ``current_user.tenant_id``; otherwise 422 ``tenant_id mismatch``.\n* Superadmin: ``payload.tenant_id`` MUST be present and must resolve\n  to an existing tenant; otherwise 422.",
+        "operationId": "create_asset_api_v1_assets__post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "discriminator": {
+                  "mapping": {
+                    "cloud_resource": "#/components/schemas/CloudResourceAssetCreate",
+                    "domain": "#/components/schemas/DomainAssetCreate",
+                    "hostname": "#/components/schemas/HostnameAssetCreate",
+                    "ip": "#/components/schemas/IpAssetCreate",
+                    "subnet": "#/components/schemas/SubnetAssetCreate",
+                    "web_app": "#/components/schemas/WebAppAssetCreate"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/IpAssetCreate"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DomainAssetCreate"
+                  },
+                  {
+                    "$ref": "#/components/schemas/HostnameAssetCreate"
+                  },
+                  {
+                    "$ref": "#/components/schemas/WebAppAssetCreate"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SubnetAssetCreate"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CloudResourceAssetCreate"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create a new asset",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/v1/assets/{asset_id}": {
+      "delete": {
+        "description": "Delete an asset. 404 if it doesn't exist in the visible scope.",
+        "operationId": "delete_asset_api_v1_assets__asset_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Delete an asset",
+        "tags": [
+          "assets"
+        ]
+      },
+      "get": {
+        "description": "Return the asset, or 404 if it doesn't exist in the visible scope.",
+        "operationId": "get_asset_api_v1_assets__asset_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Get an asset by id",
+        "tags": [
+          "assets"
+        ]
+      },
+      "patch": {
+        "description": "Apply a partial update to an asset.",
+        "operationId": "update_asset_api_v1_assets__asset_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update an asset",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/v1/auth/change-password": {
+      "post": {
+        "operationId": "change_password_api_v1_auth_change_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Change Password Api V1 Auth Change Password Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Change Password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "login_api_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "logout_api_v1_auth_logout_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "refresh_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Refresh Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Logout Api V1 Auth Logout Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Logout",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "operationId": "refresh_api_v1_auth_refresh_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "refresh_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Refresh Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/dashboard/summary": {
+      "get": {
+        "description": "Return metrics for the caller's tenant or an explicit superadmin target.",
+        "operationId": "get_summary_api_v1_dashboard_summary_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Get Summary",
+        "tags": [
+          "dashboard"
+        ]
+      }
+    },
+    "/api/v1/reports/": {
+      "get": {
+        "description": "List reports visible to ``current_user``, newest first.\n\nWith ``asset_id`` the SAME asset resolution as POST runs first, so an\ninvisible or missing asset is 404 rather than an empty page.",
+        "operationId": "list_reports_api_v1_reports__get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "asset_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Asset Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "report_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "vulnerability",
+                    "executive",
+                    "technical",
+                    "compliance"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Report Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pending",
+                    "generating",
+                    "completed",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List reports (paginated), optionally filtered",
+        "tags": [
+          "reports"
+        ]
+      },
+      "post": {
+        "description": "Create a new report for a visible asset of the effective target tenant.\n\nThe asset must resolve as ``Asset.id == asset_id`` AND\n``Asset.tenant_id == effective tenant`` (even for a superadmin — this\nvalidates the report/asset coherence, not global visibility). A miss is\n404 ``report asset not found`` and nothing is persisted.",
+        "operationId": "create_report_api_v1_reports__post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create a new report",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/api/v1/reports/{report_id}": {
+      "delete": {
+        "description": "Delete a report. 404 if it doesn't exist in the visible scope.",
+        "operationId": "delete_report_api_v1_reports__report_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Delete a report",
+        "tags": [
+          "reports"
+        ]
+      },
+      "get": {
+        "description": "Return the report, or 404 if it doesn't exist in the visible scope.",
+        "operationId": "get_report_api_v1_reports__report_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Get a report by id",
+        "tags": [
+          "reports"
+        ]
+      },
+      "patch": {
+        "description": "Apply a partial update to a report.",
+        "operationId": "update_report_api_v1_reports__report_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update a report",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/api/v1/scans/": {
+      "get": {
+        "description": "List scans visible to ``current_user``, newest first.\n\nWith ``asset_id`` the SAME asset resolution as POST runs first, so an\ninvisible or missing asset is 404 rather than an empty page.",
+        "operationId": "list_scans_api_v1_scans__get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "asset_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Asset Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List scans (paginated), optionally filtered by asset",
+        "tags": [
+          "scans"
+        ]
+      },
+      "post": {
+        "description": "Create a new scan for a visible asset of the effective target tenant.\n\nThe asset must resolve as ``Asset.id == asset_id`` AND\n``Asset.tenant_id == effective tenant`` (even for a superadmin — this\nvalidates the scan/asset coherence, not global visibility). A miss is\n404 ``scan asset not found`` and nothing is persisted.",
+        "operationId": "create_scan_api_v1_scans__post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "discriminator": {
+                  "mapping": {
+                    "discovery": "#/components/schemas/DiscoveryScanCreate",
+                    "full": "#/components/schemas/FullScanCreate",
+                    "vulnerability": "#/components/schemas/VulnerabilityScanCreate",
+                    "web": "#/components/schemas/WebScanCreate"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/DiscoveryScanCreate"
+                  },
+                  {
+                    "$ref": "#/components/schemas/VulnerabilityScanCreate"
+                  },
+                  {
+                    "$ref": "#/components/schemas/WebScanCreate"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FullScanCreate"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create a new scan definition",
+        "tags": [
+          "scans"
+        ]
+      }
+    },
+    "/api/v1/scans/{scan_id}": {
+      "delete": {
+        "description": "Delete a scan. 404 if it doesn't exist in the visible scope.",
+        "operationId": "delete_scan_api_v1_scans__scan_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Delete a scan",
+        "tags": [
+          "scans"
+        ]
+      },
+      "get": {
+        "description": "Return the scan, or 404 if it doesn't exist in the visible scope.",
+        "operationId": "get_scan_api_v1_scans__scan_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Get a scan by id",
+        "tags": [
+          "scans"
+        ]
+      },
+      "patch": {
+        "description": "Apply a partial update to a scan.",
+        "operationId": "update_scan_api_v1_scans__scan_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update a scan",
+        "tags": [
+          "scans"
+        ]
+      }
+    },
+    "/api/v1/scans/{scan_id}/cancel": {
+      "post": {
+        "description": "Stop an open scan, regardless of the execution kill switch.\n\nTerminal scans return 409; missing or invisible scans return 404.\nThe worker observes cancellation and terminates the running subprocess.",
+        "operationId": "cancel_scan_api_v1_scans__scan_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Cancel a pending or running scan",
+        "tags": [
+          "scans"
+        ]
+      }
+    },
+    "/api/v1/scans/{scan_id}/enrichment": {
+      "post": {
+        "operationId": "request_scan_enrichment_api_v1_scans__scan_id__enrichment_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanEnrichmentQueued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Request Scan Enrichment",
+        "tags": [
+          "enrichment"
+        ]
+      }
+    },
+    "/api/v1/scans/{scan_id}/run": {
+      "post": {
+        "description": "Commit the dispatch as the source of truth, then ring a best-effort bell.\n\nBroker delivery is only a hint to the worker: failure still returns 202\nand preserves the committed dispatch. The periodic pump recovers a lost\nbell by waking the worker to claim pending work from PostgreSQL.",
+        "operationId": "run_scan_api_v1_scans__scan_id__run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Dispatch a pending scan for asynchronous execution",
+        "tags": [
+          "scans"
+        ]
+      }
+    },
+    "/api/v1/tenants/": {
+      "get": {
+        "description": "Lista paginada de tenants",
+        "operationId": "list_tenants_api_v1_tenants__get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_inactive",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Inactive",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TenantResponse"
+                  },
+                  "title": "Response List Tenants Api V1 Tenants  Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Listar todos los tenants",
+        "tags": [
+          "tenants"
+        ]
+      },
+      "post": {
+        "description": "Crea una nueva organizacion- Solo superadmin",
+        "operationId": "create_tenant_api_v1_tenants__post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Crear nuevo tenant",
+        "tags": [
+          "tenants"
+        ]
+      }
+    },
+    "/api/v1/tenants/{tenant_id}": {
+      "delete": {
+        "description": "Desactiva un tenant, sus usuarios, y revoca todas las sesiones",
+        "operationId": "deactivate_tenant_api_v1_tenants__tenant_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Desactivar tenant",
+        "tags": [
+          "tenants"
+        ]
+      },
+      "get": {
+        "description": "Obtiene un tenant por id.\n\nThe cross-tenant pre-check fires inside the Depends (R01 tenants,\nRK-6 unified 403 contract). Cross-tenant access returns 403 with\na `cross_tenant_access_blocked` log line. The Depends handles both\nthe pre-check and the 404-on-missing-row case.",
+        "operationId": "get_tenant_api_v1_tenants__tenant_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Obtener tenant por id",
+        "tags": [
+          "tenants"
+        ]
+      },
+      "patch": {
+        "description": "Actualiza campos de un tenant",
+        "operationId": "update_tenant_api_v1_tenants__tenant_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Actualizar tenant",
+        "tags": [
+          "tenants"
+        ]
+      }
+    },
+    "/api/v1/users/": {
+      "get": {
+        "description": "Lista de usuarios",
+        "operationId": "list_users_api_v1_users__get",
+        "parameters": [
+          {
+            "description": "Filtrar por tenant (solo superadmin)",
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtrar por tenant (solo superadmin)",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_inactive",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Inactive",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/UserResponse"
+                  },
+                  "title": "Response List Users Api V1 Users  Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Users",
+        "tags": [
+          "users"
+        ]
+      },
+      "post": {
+        "description": "Crea un nuevo usuario",
+        "operationId": "create_user_api_v1_users__post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create User",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/users/me": {
+      "get": {
+        "description": "Devuelve el perfil del usuario autenticado",
+        "operationId": "get_me_api_v1_users_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Get Me",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/users/{user_id}": {
+      "delete": {
+        "description": "Desactiva un usuario y revoca todas sus sesiones.\n\nThe cross-tenant pre-check fires inside the Depends (R03, R04, R05).\nThe in-router policy checks (self-deactivation 409, superadmin\ndeactivation 403, admin-deactivates-admin 403) STAY HERE — they\nare policy rules, not tenant rules.",
+        "operationId": "deactivate_user_api_v1_users__user_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Deactivate User",
+        "tags": [
+          "users"
+        ]
+      },
+      "get": {
+        "description": "Obtiene un usuario por ID.\n\nThe cross-tenant pre-check fires inside the Depends (R01, R04, R05).\nA same-tenant admin or the user themselves can read; cross-tenant\naccess returns 403 with a `cross_tenant_access_blocked` log line.",
+        "operationId": "get_user_api_v1_users__user_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Get User",
+        "tags": [
+          "users"
+        ]
+      },
+      "patch": {
+        "description": "Actualiza un usuario.\n\nThe cross-tenant pre-check fires inside the Depends (R02, R04, R05).\nThe in-router policy checks (self-deactivation 409, role hierarchy\n403, admin-modifies-superadmin 403) STAY HERE — they are policy\nrules, not tenant rules.",
+        "operationId": "update_user_api_v1_users__user_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update User",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/vulnerabilities/": {
+      "get": {
+        "description": "List vulnerabilities visible to ``current_user``, newest first.\n\nWith ``scan_id`` the SAME scan resolution as POST runs first, so an\ninvisible or missing scan is 404 rather than an empty page.",
+        "operationId": "list_vulnerabilities_api_v1_vulnerabilities__get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scan_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VulnerabilityListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List vulnerabilities (paginated), optionally filtered by scan",
+        "tags": [
+          "vulnerabilities"
+        ]
+      },
+      "post": {
+        "description": "Create a new vulnerability for a visible scan of the effective target tenant.\n\nThe scan must resolve as ``Scan.id == scan_id`` AND\n``Scan.tenant_id == effective tenant`` (even for a superadmin — this\nvalidates the vulnerability/scan coherence, not global visibility). A\nmiss is 404 ``vulnerability scan not found`` and nothing is persisted.",
+        "operationId": "create_vulnerability_api_v1_vulnerabilities__post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VulnerabilityCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VulnerabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create a new vulnerability",
+        "tags": [
+          "vulnerabilities"
+        ]
+      }
+    },
+    "/api/v1/vulnerabilities/{vulnerability_id}": {
+      "delete": {
+        "description": "Delete a vulnerability. 404 if it doesn't exist in the visible scope.",
+        "operationId": "delete_vulnerability_api_v1_vulnerabilities__vulnerability_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "vulnerability_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Vulnerability Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Delete a vulnerability",
+        "tags": [
+          "vulnerabilities"
+        ]
+      },
+      "get": {
+        "description": "Return the vulnerability, or 404 if it doesn't exist in the visible scope.",
+        "operationId": "get_vulnerability_api_v1_vulnerabilities__vulnerability_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "vulnerability_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Vulnerability Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VulnerabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Get a vulnerability by id",
+        "tags": [
+          "vulnerabilities"
+        ]
+      },
+      "patch": {
+        "description": "Apply a partial update to a vulnerability.",
+        "operationId": "update_vulnerability_api_v1_vulnerabilities__vulnerability_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "vulnerability_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Vulnerability Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VulnerabilityUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VulnerabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update a vulnerability",
+        "tags": [
+          "vulnerabilities"
+        ]
+      }
+    },
+    "/api/v1/vulnerabilities/{vulnerability_id}/enrichment": {
+      "get": {
+        "operationId": "get_enrichment_api_v1_vulnerabilities__vulnerability_id__enrichment_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "vulnerability_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Vulnerability Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VulnerabilityEnrichmentRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Get Enrichment",
+        "tags": [
+          "enrichment"
+        ]
+      },
+      "post": {
+        "operationId": "request_enrichment_api_v1_vulnerabilities__vulnerability_id__enrichment_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "vulnerability_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Vulnerability Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrichmentQueued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Request Enrichment",
+        "tags": [
+          "enrichment"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/health/db/indexes": {
+      "get": {
+        "operationId": "db_index_health_health_db_indexes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List invalid public-schema indexes (k8s probe target).",
+        "tags": [
+          "system"
+        ]
+      }
+    }
+  }
+}

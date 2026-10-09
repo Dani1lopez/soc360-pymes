@@ -17,7 +17,24 @@ export default defineConfig([
     ],
     languageOptions: {
       ecmaVersion: "latest",
-      globals: { ...globals.browser, ...globals.node },
+    },
+  },
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: globals.browser,
+    },
+  },
+  {
+    files: ["vite.config.ts", "vitest.config.ts", "eslint.config.js"],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
+  {
+    files: ["src/components/ui/**/*.{ts,tsx}"],
+    rules: {
+      "react-refresh/only-export-components": "off",
     },
   },
 ]);

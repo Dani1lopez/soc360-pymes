@@ -118,8 +118,31 @@ feature guards and pages. Run dev/build to regenerate and commit the route tree.
   serialized across tabs with the Web Locks API and the new token is shared
   through a `BroadcastChannel`, so two tabs never race on the same rotating
   cookie.
-- `SESSION_CLEARED_EVENT` fires on the `window` when the session is gone, which
-  is where the login redirect hangs once the shell exists (FT1).
+- After a page reload the bearer is gone from memory, so the authenticated
+  layout calls `restoreSession()`, which refreshes through the cookie before
+  deciding whether there is a session.
+- `SESSION_CLEARED_EVENT` fires on the `window` when the session is gone, in this
+  tab or a sibling one. `SessionWatcher` then clears the query cache and sends
+  the user to `/login?redirect=<current path>`.
+- After login, the `redirect` destination is kept only when it resolves to the
+  same origin (`sanitizeRedirect`); anything else falls back to `/`.
+
+## Routes and roles
+
+Role checks mirror the backend `require_any_role` allowlists: exact role match,
+no hierarchy, and no `is_superadmin` shortcut.
+
+| Route group              | Guard                                            | Pages                                                    |
+| ------------------------ | ------------------------------------------------ | -------------------------------------------------------- |
+| `/login`                 | redirects signed-in users away                   | Login                                                    |
+| `_authenticated`         | session + `/users/me` (`requireSession`)         | shell, `/forbidden`                                      |
+| `_authenticated/_reader` | `READ_ROLES`: viewer, analyst, admin, superadmin | `/`, `/assets`, `/scans`, `/vulnerabilities`, `/reports` |
+| `_authenticated/_admin`  | `ADMIN_ROLES`: admin, superadmin                 | `/users`, `/settings`                                    |
+
+A role outside a group's allowlist lands on `/forbidden`. The `ingestor` role is
+for machines and reaches no page. Sections from FT2 to FT6 render a placeholder
+until their feature exists. The sidebar comes from `features/shell/lib/navigation.ts`,
+which filters entries with the same allowlists.
 
 ## Conventions
 

@@ -16,7 +16,8 @@
     "format": "prettier --write . --ignore-path .prettierignore",
     "format:check": "prettier --check . --ignore-path .prettierignore",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@radix-ui/react-slot": "1.4.0",
@@ -24,12 +25,15 @@
     "@tanstack/react-router": "1.170.42",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
+    "lucide-react": "^1.54.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "recharts": "^2.15.4",
     "tailwind-merge": "3.7.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.0",
     "@tailwindcss/vite": "4.3.3",
     "@tanstack/router-plugin": "^1.168.43",
     "@testing-library/jest-dom": "^7.0.1",

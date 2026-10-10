@@ -47,6 +47,9 @@ frontend/dist/
 frontend/.env
 frontend/.env.*
 !frontend/.env.example
+# Artefactos del smoke E2E de Playwright
+frontend/test-results/
+frontend/playwright-report/
 
 # Resultados de scans — pueden contener datos sensibles de clientes
 *.xml

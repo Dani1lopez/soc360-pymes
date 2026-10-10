@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { sanitizeRedirect, requireRoles } from "./guards";
 import { ADMIN_ROLES } from "./roles";
-import { makeUser } from "./test-fixtures";
+import { makeUser } from "@/test/fixtures/auth";
 
 test.each([
   "//evil.com",

@@ -2,8 +2,8 @@ import { useState, type FormEvent } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { isApiError } from "@/api/errors";
 import { Button } from "@/components/ui/button";
-import { sanitizeRedirect } from "./guards";
-import { useLogin } from "./use-login";
+import { sanitizeRedirect } from "../lib/guards";
+import { useLogin } from "../hooks/use-login";
 
 export function LoginPage() {
   const [email, setEmail] = useState("");

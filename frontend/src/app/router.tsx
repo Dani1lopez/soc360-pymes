@@ -7,13 +7,13 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import type { QueryClient } from "@tanstack/react-query";
-import App from "@/App";
+import { HomePage } from "@/features/home";
 import { restoreSession } from "@/api/session";
-import { sanitizeRedirect } from "@/features/auth/guards";
-import { LoginPage } from "@/features/auth/login-page";
-import { SessionWatcher } from "@/features/auth/session-watcher";
-import { currentUserQueryOptions } from "@/features/auth/use-current-user";
-import { ForbiddenPage } from "./forbidden-page";
+import { sanitizeRedirect } from "@/features/auth";
+import { LoginPage } from "@/features/auth";
+import { SessionWatcher } from "@/features/auth";
+import { currentUserQueryOptions } from "@/features/auth";
+import { ForbiddenPage } from "@/features/auth";
 
 export const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   component: () => (
@@ -48,7 +48,7 @@ export const authenticatedRoute = createRoute({
 export const indexRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/",
-  component: App,
+  component: HomePage,
 });
 export const forbiddenRoute = createRoute({
   getParentRoute: () => authenticatedRoute,

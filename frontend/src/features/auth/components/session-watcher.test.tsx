@@ -1,8 +1,7 @@
-import { act, render } from "@testing-library/react";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { act } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import { SESSION_CLEARED_EVENT } from "@/api/session";
-import { createQueryClient } from "@/app/query-client";
+import { createTestQueryClient, renderWithQueryClient } from "@/test/render";
 import { SessionWatcher } from "./session-watcher";
 
 const router = vi.hoisted(() => ({
@@ -15,14 +14,10 @@ beforeEach(() => {
   router.state.location = { pathname: "/login", href: "/login" };
 });
 function mount() {
-  const queryClient = createQueryClient();
+  const queryClient = createTestQueryClient();
   queryClient.setQueryData(["sample"], "cached");
-  const view = render(
-    <QueryClientProvider client={queryClient}>
-      <SessionWatcher />
-    </QueryClientProvider>,
-  );
-  return { queryClient, ...view };
+  const view = renderWithQueryClient(<SessionWatcher />, queryClient);
+  return view;
 }
 test("clears queries without navigating when already on login", () => {
   const { queryClient } = mount();

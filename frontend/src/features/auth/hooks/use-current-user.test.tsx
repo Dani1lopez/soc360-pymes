@@ -3,8 +3,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
-import { makeUser } from "@/features/auth/test-fixtures";
-import { currentUserQueryKey, useCurrentUser } from "@/features/auth/use-current-user";
+import { makeUser } from "@/test/fixtures/auth";
+import { currentUserQueryKey, useCurrentUser } from "./use-current-user";
 import { server } from "@/test/msw";
 
 function wrapper(client: QueryClient) {

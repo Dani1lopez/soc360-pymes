@@ -2,8 +2,8 @@ import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ApiError } from "@/api/errors";
 import { __resetSession, getBearer } from "@/api/session";
-import { fetchCurrentUser, login } from "@/features/auth/api";
-import { makeUser, sampleCredentials, tokenBody } from "@/features/auth/test-fixtures";
+import { fetchCurrentUser, login } from "./auth-api";
+import { makeUser, sampleCredentials, tokenBody } from "@/test/fixtures/auth";
 import { server } from "@/test/msw";
 
 const credentials = sampleCredentials();

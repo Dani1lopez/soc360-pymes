@@ -6,8 +6,8 @@ import { AppProviders } from "./providers";
 import { createAppRouter } from "./router";
 import { createQueryClient } from "./query-client";
 import { __resetSession, SESSION_CLEARED_EVENT } from "@/api/session";
-import { makeUser, tokenBody } from "@/features/auth/test-fixtures";
-import { currentUserQueryKey } from "@/features/auth/use-current-user";
+import { makeUser, tokenBody } from "@/test/fixtures/auth";
+import { currentUserQueryKey } from "@/features/auth";
 import { server } from "@/test/msw";
 
 beforeEach(() => {

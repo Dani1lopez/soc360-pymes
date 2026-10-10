@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Role } from "@/api/schema";
-import { ADMIN_ROLES, READ_ROLES, hasAnyRole } from "@/features/auth/roles";
+import { ADMIN_ROLES, READ_ROLES, hasAnyRole } from "./roles";
 
 describe("hasAnyRole", () => {
   it.each<[Role, boolean, boolean]>([

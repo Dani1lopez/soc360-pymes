@@ -1,4 +1,4 @@
-export default function App() {
+export function HomePage() {
   return (
     <main>
       <h1>SOC360 PyMEs</h1>

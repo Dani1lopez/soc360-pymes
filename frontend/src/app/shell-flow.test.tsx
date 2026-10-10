@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Role } from "@/api/schema";
 import { __resetSession } from "@/api/session";
 import { makeUser, tokenBody } from "@/test/fixtures/auth";
+import { makeDashboardSummary } from "@/test/fixtures/dashboard";
 import { server } from "@/test/msw";
 import { AppProviders } from "./providers";
 import { createAppRouter } from "./router";
@@ -24,6 +25,8 @@ function mount(path: string, role: Role, failed = false) {
     http.get("*/api/v1/users/me", () =>
       failed ? new HttpResponse(null, { status: 500 }) : HttpResponse.json(makeUser({ role })),
     ),
+    // La portada de `_reader` es el panel: sin datos, la ruta no monta.
+    http.get("*/api/v1/dashboard/summary", () => HttpResponse.json(makeDashboardSummary())),
   );
   const queryClient = createQueryClient();
   const router = createAppRouter({
@@ -68,5 +71,5 @@ test("session failure can be retried", async () => {
   ).toBeInTheDocument();
   server.use(http.get("*/api/v1/users/me", () => HttpResponse.json(makeUser({ role: "viewer" }))));
   fireEvent.click(screen.getByRole("button", { name: "Reintentar" }));
-  expect(await screen.findByRole("heading", { name: "SOC360 PyMEs" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: /Hola, Ana/ })).toBeInTheDocument();
 });

@@ -48,10 +48,22 @@ Start the backend (with PostgreSQL and Redis) from the repository root with
 | `pnpm lint`                         | ESLint over the workspace                         |
 | `pnpm format` / `pnpm format:check` | Prettier write / verify                           |
 | `pnpm test` / `pnpm test:watch`     | Vitest once / in watch mode                       |
+| `pnpm e2e`                          | Playwright smoke against the real API and Vite    |
 | `pnpm gen:api`                      | Regenerate `src/api/types.ts` from `openapi.json` |
 
 The router plugin regenerates committed `src/routeTree.gen.ts` during dev/build.
 Do not edit it by hand; CI checks for route-tree drift after the build.
+
+`pnpm e2e` runs the Playwright smoke under `e2e/`. It expects the backend and the
+Vite dev server to be running already (it does not start them). The full journey
+signs in with the development credentials, passed in a single environment variable
+that is never stored in the repository:
+
+```bash
+cd frontend
+E2E_LOGIN='correo:valor' pnpm e2e   # panel, activos, escaneos, vulnerabilidades, informes
+pnpm e2e                            # without it, only the boot-and-theme check runs
+```
 
 The gate before pushing is:
 

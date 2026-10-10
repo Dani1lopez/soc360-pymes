@@ -52,11 +52,15 @@ test("redirects authenticated login visitors to the requested destination", asyn
   expect(await screen.findByRole("heading", { name: "Acceso denegado" })).toBeInTheDocument();
   expect(router.state.location.pathname).toBe("/forbidden");
 });
-test("rejects external login destinations", async () => {
-  const { router } = mount("/login?redirect=//evil.com", true);
-  expect(await screen.findByRole("heading", { name: "SOC360 PyMEs" })).toBeInTheDocument();
-  expect(router.state.location.pathname).toBe("/");
-});
+test.each(["//evil.com", "/a/..//evil.com"])(
+  "rejects the external login destination %s",
+  async (destination) => {
+    const { router } = mount(`/login?redirect=${encodeURIComponent(destination)}`, true);
+    expect(await screen.findByRole("heading", { name: "SOC360 PyMEs" })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/");
+    expect(router.state.location.href).not.toContain("evil.com");
+  },
+);
 test("clears cached users and navigates on session loss", async () => {
   const { router, queryClient } = mount("/", true);
   await screen.findByRole("heading", { name: "SOC360 PyMEs" });

@@ -17,6 +17,25 @@ beforeAll(() => {
       dispatchEvent: vi.fn(() => true),
     })),
   });
+  // Recharts mide su contenedor con ResizeObserver, que jsdom no implementa: el
+  // stub informa de un tamaño fijo para que el gráfico se dibuje en los tests.
+  class ResizeObserverStub implements ResizeObserver {
+    constructor(private readonly callback: ResizeObserverCallback) {}
+    observe(target: Element): void {
+      this.callback(
+        [
+          {
+            target,
+            contentRect: { width: 800, height: 320 } as DOMRectReadOnly,
+          } as ResizeObserverEntry,
+        ],
+        this,
+      );
+    }
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  vi.stubGlobal("ResizeObserver", ResizeObserverStub);
   server.listen({ onUnhandledFrame: "error" });
 });
 afterEach(() => {

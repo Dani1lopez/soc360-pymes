@@ -50,6 +50,9 @@ Start the backend (with PostgreSQL and Redis) from the repository root with
 | `pnpm test` / `pnpm test:watch`     | Vitest once / in watch mode                       |
 | `pnpm gen:api`                      | Regenerate `src/api/types.ts` from `openapi.json` |
 
+The router plugin regenerates committed `src/routeTree.gen.ts` during dev/build.
+Do not edit it by hand; CI checks for route-tree drift after the build.
+
 The gate before pushing is:
 
 ```bash
@@ -82,13 +85,30 @@ place.
 
 ```
 src/
-  api/          client.ts (apiFetch), session.ts (in-memory bearer), errors.ts,
-                schema.ts (type aliases), types.ts (generated)
-  app/          providers.tsx (QueryClient), query-client.ts, router.tsx
-  components/   ui/ (shadcn/ui)
-  lib/          utils.ts (cn helper)
-  main.tsx      entry point
+  main.tsx           entry point
+  app/               providers, query client, router composition
+  routes/            file-based routes: thin adapters
+  routeTree.gen.ts   generated route tree (committed)
+  features/<f>/      api/, hooks/, components/, lib/, index.ts (public API)
+  api/               HTTP client, session, errors, schema aliases, generated types
+  components/ui/     shared shadcn components
+  lib/               shared utilities
+  test/              setup, MSW server, fixtures, render helpers
 ```
+
+- App and routes depend on features only through `@/features/<f>` public indexes.
+  Routes are thin adapters; guards and pages live in features.
+- Features depend on shared `api/`, `components/`, and `lib/`, never app, routes,
+  or another feature's internals. Use relative imports inside a feature.
+- Shared code never depends on features, app, or routes. Test helpers may use
+  shared code and feature public indexes, never app or routes. App integration
+  tests live in `src/app/*.test.tsx` and may import any layer.
+- Import API types from `@/api/schema`; only that module imports generated types.
+  ESLint enforces alias-based layer boundaries.
+
+To add a feature, create `src/features/<f>/` with its implementation and expose
+its public API through `index.ts`. Then add a file under `src/routes/` that wires
+feature guards and pages. Run dev/build to regenerate and commit the route tree.
 
 ## Sessions
 

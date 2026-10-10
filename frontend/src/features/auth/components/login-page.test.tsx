@@ -60,6 +60,17 @@ test("shows the retry delay", async () => {
     "Demasiados intentos. Vuelve a intentarlo en 30 s.",
   );
 });
+test("blocks the button while the retry delay runs", async () => {
+  server.use(
+    http.post("*/api/v1/auth/login", () =>
+      HttpResponse.json({}, { status: 429, headers: { "Retry-After": "30" } }),
+    ),
+  );
+  mount();
+  await submit();
+
+  expect(await screen.findByRole("button", { name: "Espera 30 s" })).toBeDisabled();
+});
 test("disables submission while pending", async () => {
   let finish: (() => void) | undefined;
   const pending = new Promise<void>((resolve) => {

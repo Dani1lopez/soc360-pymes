@@ -63,7 +63,8 @@ export function AssetForm({ asset, tenantId, onSaved, onCancel }: AssetFormProps
       <h2 id="asset-form-heading" className="text-lg font-semibold">
         {isEdit ? "Editar activo" : "Nuevo activo"}
       </h2>
-      <form onSubmit={handleSubmit} className="space-y-4">
+      {/* noValidate: los mensajes en español los pone la validación propia. */}
+      <form onSubmit={handleSubmit} noValidate className="space-y-4">
         <FormField id="asset-type" label="Tipo">
           <Select
             id="asset-type"

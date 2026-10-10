@@ -1,24 +1,15 @@
-import {
-  createRootRoute,
-  createRoute,
-  createRouter,
-  Outlet,
-  type RouterHistory,
-} from "@tanstack/react-router";
-import App from "@/App";
+import { createRouter, type RouterHistory } from "@tanstack/react-router";
+import type { QueryClient } from "@tanstack/react-query";
+import { routeTree } from "@/routeTree.gen";
 
-export function createAppRouter(history?: RouterHistory) {
-  const rootRoute = createRootRoute({ component: () => <Outlet /> });
-  const indexRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: "/",
-    component: App,
-  });
-
-  return createRouter({
-    routeTree: rootRoute.addChildren([indexRoute]),
-    history,
-  });
+export function createAppRouter({
+  queryClient,
+  history,
+}: {
+  queryClient: QueryClient;
+  history?: RouterHistory;
+}) {
+  return createRouter({ routeTree, history, context: { queryClient } });
 }
 
 declare module "@tanstack/react-router" {

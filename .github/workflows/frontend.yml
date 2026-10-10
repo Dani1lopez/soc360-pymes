@@ -60,3 +60,7 @@ jobs:
       - name: Build
         working-directory: frontend
         run: pnpm build
+
+      - name: Check the generated route tree is up to date
+        working-directory: frontend
+        run: git diff --exit-code -- src/routeTree.gen.ts

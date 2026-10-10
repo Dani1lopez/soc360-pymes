@@ -41,7 +41,11 @@ function channelOrNull(): BroadcastChannel | null {
     const data = event.data as ChannelMessage | null;
     if (!data) return;
     if (data.type === "token" && typeof data.token === "string") adopt(data.token);
-    else if (data.type === "cleared") drop();
+    else if (data.type === "cleared") {
+      // Another tab already broadcast the logout: notify this tab's UI only.
+      drop();
+      notifyCleared();
+    }
   });
   return channel;
 }
@@ -68,6 +72,10 @@ export function setBearer(value: string): void {
 export function clearSession(): void {
   drop();
   publish({ type: "cleared" });
+  notifyCleared();
+}
+
+function notifyCleared(): void {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(SESSION_CLEARED_EVENT));
   }
@@ -100,6 +108,15 @@ async function performRefresh(): Promise<string | null> {
     // failure: keep the session and let the next request decide.
     return null;
   }
+  return acceptTokenResponse(body);
+}
+
+/**
+ * Adopt the bearer carried by a token response (login or refresh) and share it
+ * with the other tabs. Returns null, keeping the current state, when the body
+ * is not a token response.
+ */
+export function acceptTokenResponse(body: unknown): string | null {
   const issued =
     typeof body === "object" && body !== null ? (body as Record<string, unknown>)[KEY] : undefined;
   if (typeof issued !== "string" || issued === "") return null;
@@ -126,6 +143,15 @@ export function refreshSession(): Promise<string | null> {
     inFlight = null;
   });
   return inFlight;
+}
+
+/**
+ * Resolve the current bearer, refreshing through the cookie when memory is
+ * empty (a page reload). Null means there is no session to restore.
+ */
+export function restoreSession(): Promise<string | null> {
+  if (bearer !== null) return Promise.resolve(bearer);
+  return refreshSession();
 }
 
 /** Revoke the session on the backend, then forget it locally no matter what. */

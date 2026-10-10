@@ -50,6 +50,9 @@ Start the backend (with PostgreSQL and Redis) from the repository root with
 | `pnpm test` / `pnpm test:watch`     | Vitest once / in watch mode                       |
 | `pnpm gen:api`                      | Regenerate `src/api/types.ts` from `openapi.json` |
 
+The router plugin regenerates committed `src/routeTree.gen.ts` during dev/build.
+Do not edit it by hand; CI checks for route-tree drift after the build.
+
 The gate before pushing is:
 
 ```bash
@@ -82,13 +85,30 @@ place.
 
 ```
 src/
-  api/          client.ts (apiFetch), session.ts (in-memory bearer), errors.ts,
-                schema.ts (type aliases), types.ts (generated)
-  app/          providers.tsx (QueryClient), query-client.ts, router.tsx
-  components/   ui/ (shadcn/ui)
-  lib/          utils.ts (cn helper)
-  main.tsx      entry point
+  main.tsx           entry point
+  app/               providers, query client, router composition
+  routes/            file-based routes: thin adapters
+  routeTree.gen.ts   generated route tree (committed)
+  features/<f>/      api/, hooks/, components/, lib/, index.ts (public API)
+  api/               HTTP client, session, errors, schema aliases, generated types
+  components/ui/     shared shadcn components
+  lib/               shared utilities
+  test/              setup, MSW server, fixtures, render helpers
 ```
+
+- App and routes depend on features only through `@/features/<f>` public indexes.
+  Routes are thin adapters; guards and pages live in features.
+- Features depend on shared `api/`, `components/`, and `lib/`, never app, routes,
+  or another feature's internals. Use relative imports inside a feature.
+- Shared code never depends on features, app, or routes. Test helpers may use
+  shared code and feature public indexes, never app or routes. App integration
+  tests live in `src/app/*.test.tsx` and may import any layer.
+- Import API types from `@/api/schema`; only that module imports generated types.
+  ESLint enforces alias-based layer boundaries.
+
+To add a feature, create `src/features/<f>/` with its implementation and expose
+its public API through `index.ts`. Then add a file under `src/routes/` that wires
+feature guards and pages. Run dev/build to regenerate and commit the route tree.
 
 ## Sessions
 
@@ -98,8 +118,31 @@ src/
   serialized across tabs with the Web Locks API and the new token is shared
   through a `BroadcastChannel`, so two tabs never race on the same rotating
   cookie.
-- `SESSION_CLEARED_EVENT` fires on the `window` when the session is gone, which
-  is where the login redirect hangs once the shell exists (FT1).
+- After a page reload the bearer is gone from memory, so the authenticated
+  layout calls `restoreSession()`, which refreshes through the cookie before
+  deciding whether there is a session.
+- `SESSION_CLEARED_EVENT` fires on the `window` when the session is gone, in this
+  tab or a sibling one. `SessionWatcher` then clears the query cache and sends
+  the user to `/login?redirect=<current path>`.
+- After login, the `redirect` destination is kept only when it resolves to the
+  same origin (`sanitizeRedirect`); anything else falls back to `/`.
+
+## Routes and roles
+
+Role checks mirror the backend `require_any_role` allowlists: exact role match,
+no hierarchy, and no `is_superadmin` shortcut.
+
+| Route group              | Guard                                            | Pages                                                    |
+| ------------------------ | ------------------------------------------------ | -------------------------------------------------------- |
+| `/login`                 | redirects signed-in users away                   | Login                                                    |
+| `_authenticated`         | session + `/users/me` (`requireSession`)         | shell, `/forbidden`                                      |
+| `_authenticated/_reader` | `READ_ROLES`: viewer, analyst, admin, superadmin | `/`, `/assets`, `/scans`, `/vulnerabilities`, `/reports` |
+| `_authenticated/_admin`  | `ADMIN_ROLES`: admin, superadmin                 | `/users`, `/settings`                                    |
+
+A role outside a group's allowlist lands on `/forbidden`. The `ingestor` role is
+for machines and reaches no page. Sections from FT2 to FT6 render a placeholder
+until their feature exists. The sidebar comes from `features/shell/lib/navigation.ts`,
+which filters entries with the same allowlists.
 
 ## Conventions
 

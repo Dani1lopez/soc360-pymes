@@ -51,3 +51,31 @@ export type ScanUpdateInput = Omit<ApiSchemas["ScanUpdate"], "config"> & {
 };
 export type ScanCreateInput =
   ApiPaths["/api/v1/scans/"]["post"]["requestBody"]["content"]["application/json"];
+
+// Vulnerabilities and enrichment. `vulnerability_metadata` is `object | null` in
+// FastAPI, so the generator renders it as `Record<string, never>`; the aliases
+// below widen it (see the scans note above).
+export type VulnerabilityStatus = ApiSchemas["VulnerabilityResponse"]["status"];
+export type VulnerabilityResponse = Omit<
+  ApiSchemas["VulnerabilityResponse"],
+  "vulnerability_metadata"
+> & { vulnerability_metadata: Record<string, unknown> | null };
+export type VulnerabilityList = Paginated<VulnerabilityResponse>;
+export type VulnerabilityCreateInput = Omit<
+  ApiSchemas["VulnerabilityCreate"],
+  "vulnerability_metadata"
+> & { vulnerability_metadata?: Record<string, unknown> | null };
+export type VulnerabilityUpdateInput = Omit<
+  ApiSchemas["VulnerabilityUpdate"],
+  "vulnerability_metadata"
+> & { vulnerability_metadata?: Record<string, unknown> | null };
+
+/**
+ * Enrichment. `GET /vulnerabilities/{id}/enrichment` returns one item per
+ * function of the tenant's level; `POST` on the vulnerability or on the scan
+ * only queues work and answers with how much was queued.
+ */
+export type EnrichmentItem = ApiSchemas["EnrichmentItemRead"];
+export type VulnerabilityEnrichment = ApiSchemas["VulnerabilityEnrichmentRead"];
+export type EnrichmentQueued = ApiSchemas["EnrichmentQueued"];
+export type ScanEnrichmentQueued = ApiSchemas["ScanEnrichmentQueued"];

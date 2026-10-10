@@ -79,3 +79,10 @@ export type EnrichmentItem = ApiSchemas["EnrichmentItemRead"];
 export type VulnerabilityEnrichment = ApiSchemas["VulnerabilityEnrichmentRead"];
 export type EnrichmentQueued = ApiSchemas["EnrichmentQueued"];
 export type ScanEnrichmentQueued = ApiSchemas["ScanEnrichmentQueued"];
+
+// Dashboard. One call per tenant returns the four metrics and the 30-day trend.
+export type DashboardSummary = ApiSchemas["DashboardSummary"];
+export type SeverityCounts = ApiSchemas["SeverityCounts"];
+export type TrendDay = ApiSchemas["TrendDay"];
+export type CoverageMetric = ApiSchemas["CoverageMetric"];
+export type ScanSuccessMetric = ApiSchemas["ScanSuccessMetric"];

@@ -86,3 +86,27 @@ export type SeverityCounts = ApiSchemas["SeverityCounts"];
 export type TrendDay = ApiSchemas["TrendDay"];
 export type CoverageMetric = ApiSchemas["CoverageMetric"];
 export type ScanSuccessMetric = ApiSchemas["ScanSuccessMetric"];
+
+// Reports. Metadata only: there is no PDF generation in this phase (D9), and
+// `report_metadata` is another `object | null` that needs widening.
+export type ReportType = ApiSchemas["ReportResponse"]["report_type"];
+export type ReportStatus = ApiSchemas["ReportResponse"]["status"];
+export type ReportResponse = Omit<ApiSchemas["ReportResponse"], "report_metadata"> & {
+  report_metadata: Record<string, unknown> | null;
+};
+export type ReportList = Paginated<ReportResponse>;
+export type ReportCreateInput = Omit<ApiSchemas["ReportCreate"], "report_metadata"> & {
+  report_metadata?: Record<string, unknown> | null;
+};
+export type ReportUpdateInput = Omit<ApiSchemas["ReportUpdate"], "report_metadata"> & {
+  report_metadata?: Record<string, unknown> | null;
+};
+
+// Administration. `GET /users/` and `GET /tenants/` answer with a plain array
+// (no pagination envelope), unlike every other list in the API.
+export type UserCreateInput = ApiSchemas["UserCreate"];
+export type UserUpdateInput = ApiSchemas["UserUpdate"];
+export type TenantResponse = ApiSchemas["TenantResponse"];
+export type TenantSettings = ApiSchemas["TenantSettings"];
+export type TenantUpdateInput = ApiSchemas["TenantUpdate"];
+export type ChangePasswordInput = ApiSchemas["ChangePasswordRequest"];

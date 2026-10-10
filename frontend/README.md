@@ -132,17 +132,25 @@ feature guards and pages. Run dev/build to regenerate and commit the route tree.
 Role checks mirror the backend `require_any_role` allowlists: exact role match,
 no hierarchy, and no `is_superadmin` shortcut.
 
-| Route group              | Guard                                            | Pages                                                    |
-| ------------------------ | ------------------------------------------------ | -------------------------------------------------------- |
-| `/login`                 | redirects signed-in users away                   | Login                                                    |
-| `_authenticated`         | session + `/users/me` (`requireSession`)         | shell, `/forbidden`                                      |
-| `_authenticated/_reader` | `READ_ROLES`: viewer, analyst, admin, superadmin | `/`, `/assets`, `/scans`, `/vulnerabilities`, `/reports` |
-| `_authenticated/_admin`  | `ADMIN_ROLES`: admin, superadmin                 | `/users`, `/settings`                                    |
+| Route group              | Guard                                            | Pages                                                                                                  |
+| ------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `/login`                 | redirects signed-in users away                   | Login                                                                                                  |
+| `_authenticated`         | session + `/users/me` (`requireSession`)         | shell, `/forbidden`                                                                                    |
+| `_authenticated/_reader` | `READ_ROLES`: viewer, analyst, admin, superadmin | `/` (panel), `/assets`, `/scans`, `/scans/$id`, `/vulnerabilities`, `/vulnerabilities/$id`, `/reports` |
+| `_authenticated/_admin`  | `ADMIN_ROLES`: admin, superadmin                 | `/users`, `/settings`                                                                                  |
 
 A role outside a group's allowlist lands on `/forbidden`. The `ingestor` role is
-for machines and reaches no page. Sections from FT2 to FT6 render a placeholder
-until their feature exists. The sidebar comes from `features/shell/lib/navigation.ts`,
-which filters entries with the same allowlists.
+for machines and reaches no page. Every page is real: the panel aggregates
+`/dashboard/summary`, the reader pages manage assets, scans, findings (with their
+enrichment panel) and report metadata, and the admin group manages users, the
+tenant configuration and the password change. Each group has its own
+`errorComponent`, so a page failure no longer looks like a session failure, and
+the sidebar comes from `features/shell/lib/navigation.ts`, which filters entries
+with the same allowlists.
+
+Write actions follow the backend allowlists: they are hidden — not just refused —
+when the signed-in role cannot perform them, and a superadmin without a tenant is
+asked to pick an organisation instead of being offered a form that cannot work.
 
 ## Conventions
 

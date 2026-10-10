@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { ShieldCheck } from "lucide-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { isApiError } from "@/api/errors";
 import { Button } from "@/components/ui/button";
@@ -48,7 +49,10 @@ export function LoginPage() {
         aria-labelledby="login-heading"
         className="w-full max-w-sm rounded-lg border border-border bg-card p-6 shadow-sm"
       >
-        <p className="mb-2 text-sm text-muted-foreground">SOC360 PyMEs</p>
+        <p className="mb-6 flex items-center gap-2 text-lg font-semibold tracking-tight">
+          <ShieldCheck aria-hidden="true" className="size-7 text-primary" />
+          SOC360 PyMEs
+        </p>
         <h1 id="login-heading" className="mb-6 text-2xl font-semibold">
           Iniciar sesión
         </h1>

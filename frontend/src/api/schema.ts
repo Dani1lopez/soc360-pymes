@@ -5,3 +5,8 @@ import type { components, paths } from "@/api/types";
 // the generated file, so a regeneration only has to be reconciled in one place.
 export type ApiPaths = paths;
 export type ApiSchemas = components["schemas"];
+
+export type TokenResponse = ApiSchemas["TokenResponse"];
+export type UserResponse = ApiSchemas["UserResponse"];
+export type Role = ApiSchemas["RoleEnum"];
+export type LoginRequest = ApiSchemas["LoginRequest"];

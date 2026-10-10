@@ -98,6 +98,19 @@ describe("session state", () => {
     expect(listener).toHaveBeenCalledTimes(1);
     window.removeEventListener(SESSION_CLEARED_EVENT, listener);
   });
+
+  it("notifies listeners when another tab clears the session, without re-broadcasting", () => {
+    setBearer("aaa");
+    const channel = lastChannel();
+    const sentBefore = channel.sent.length;
+    const listener = vi.fn();
+    window.addEventListener(SESSION_CLEARED_EVENT, listener);
+    channel.emit({ type: "cleared" });
+    expect(getBearer()).toBeNull();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(channel.sent).toHaveLength(sentBefore);
+    window.removeEventListener(SESSION_CLEARED_EVENT, listener);
+  });
 });
 
 describe("refreshSession", () => {

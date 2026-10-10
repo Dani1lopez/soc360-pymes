@@ -41,7 +41,11 @@ function channelOrNull(): BroadcastChannel | null {
     const data = event.data as ChannelMessage | null;
     if (!data) return;
     if (data.type === "token" && typeof data.token === "string") adopt(data.token);
-    else if (data.type === "cleared") drop();
+    else if (data.type === "cleared") {
+      // Another tab already broadcast the logout: notify this tab's UI only.
+      drop();
+      notifyCleared();
+    }
   });
   return channel;
 }
@@ -68,6 +72,10 @@ export function setBearer(value: string): void {
 export function clearSession(): void {
   drop();
   publish({ type: "cleared" });
+  notifyCleared();
+}
+
+function notifyCleared(): void {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(SESSION_CLEARED_EVENT));
   }

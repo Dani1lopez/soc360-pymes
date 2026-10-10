@@ -10,6 +10,21 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 
+export function renderShell(ui: ReactElement, queryKey: readonly unknown[], user: unknown) {
+  const queryClient = createTestQueryClient();
+  queryClient.setQueryData(queryKey, user);
+  const root = createRootRoute({ component: () => ui });
+  const paths = ["/", "/assets", "/scans", "/vulnerabilities", "/reports", "/users", "/settings"];
+  const routes = paths.map((path) =>
+    createRoute({ getParentRoute: () => root, path, component: () => <h1>Content</h1> }),
+  );
+  const router = createRouter({
+    routeTree: root.addChildren(routes),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+  return { router, ...renderWithQueryClient(<RouterProvider router={router} />, queryClient) };
+}
+
 export function createTestQueryClient() {
   return new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

@@ -1,7 +1,7 @@
 export function HomePage() {
   return (
-    <main>
+    <section>
       <h1>SOC360 PyMEs</h1>
-    </main>
+    </section>
   );
 }

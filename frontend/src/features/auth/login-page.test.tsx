@@ -52,6 +52,19 @@ test("caches the user before navigating to the requested destination", async () 
   expect(router.state.location.pathname).toBe("/forbidden");
   expect(queryClient.getQueryData(currentUserQueryKey)).toEqual(makeUser());
 });
+test("leaves login without re-authenticating when the user lookup fails", async () => {
+  const loginHandler = vi.fn(() => HttpResponse.json(tokenBody("login-session")));
+  server.use(
+    http.post("*/api/v1/auth/login", loginHandler),
+    http.get("*/api/v1/users/me", () => new HttpResponse(null, { status: 500 })),
+  );
+  const { router, queryClient } = mount();
+  queryClient.setQueryDefaults(currentUserQueryKey, { retry: false });
+  await submit();
+  await waitFor(() => expect(router.state.location.pathname).not.toBe("/login"));
+  expect(loginHandler).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
 test("shows unauthorized feedback without leaving login", async () => {
   server.use(
     http.post("*/api/v1/auth/login", () =>

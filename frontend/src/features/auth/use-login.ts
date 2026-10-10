@@ -8,7 +8,7 @@ export function useLogin() {
   return useMutation({
     mutationFn: async (credentials: LoginRequest) => {
       await login(credentials);
-      return queryClient.fetchQuery(currentUserQueryOptions());
+      await queryClient.prefetchQuery(currentUserQueryOptions());
     },
   });
 }

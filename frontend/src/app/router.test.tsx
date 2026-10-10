@@ -7,6 +7,7 @@ import { createAppRouter } from "./router";
 import { createQueryClient } from "./query-client";
 import { __resetSession, SESSION_CLEARED_EVENT } from "@/api/session";
 import { makeUser, tokenBody } from "@/test/fixtures/auth";
+import { makeDashboardSummary } from "@/test/fixtures/dashboard";
 import { currentUserQueryKey } from "@/features/auth";
 import { server } from "@/test/msw";
 
@@ -24,6 +25,8 @@ function mount(path: string, authenticated: boolean) {
       authenticated ? HttpResponse.json(tokenBody("t1")) : new HttpResponse(null, { status: 401 }),
     ),
     http.get("*/api/v1/users/me", () => HttpResponse.json(makeUser())),
+    // La portada de `_reader` es el panel: sin datos, la ruta no monta.
+    http.get("*/api/v1/dashboard/summary", () => HttpResponse.json(makeDashboardSummary())),
   );
   const queryClient = createQueryClient();
   const router = createAppRouter({
@@ -43,9 +46,10 @@ test("sends anonymous visitors to login with their destination", async () => {
   expect(router.state.location.pathname).toBe("/login");
   expect(router.state.location.search).toEqual({ redirect: "/" });
 });
-test("renders the authenticated home", async () => {
+test("renders the authenticated dashboard", async () => {
   mount("/", true);
-  expect(await screen.findByRole("heading", { name: "SOC360 PyMEs" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: /Hola, Ana/ })).toBeInTheDocument();
+  expect(await screen.findByText("Activos vigilados")).toBeInTheDocument();
 });
 test("redirects authenticated login visitors to the requested destination", async () => {
   const { router } = mount("/login?redirect=/forbidden", true);
@@ -56,14 +60,14 @@ test.each(["//evil.com", "/a/..//evil.com"])(
   "rejects the external login destination %s",
   async (destination) => {
     const { router } = mount(`/login?redirect=${encodeURIComponent(destination)}`, true);
-    expect(await screen.findByRole("heading", { name: "SOC360 PyMEs" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Hola, Ana/ })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/");
     expect(router.state.location.href).not.toContain("evil.com");
   },
 );
 test("clears cached users and navigates on session loss", async () => {
   const { router, queryClient } = mount("/", true);
-  await screen.findByRole("heading", { name: "SOC360 PyMEs" });
+  await screen.findByRole("heading", { name: /Hola, Ana/ });
   expect(queryClient.getQueryData(currentUserQueryKey)).toBeDefined();
   __resetSession();
   server.use(http.post("*/api/v1/auth/refresh", () => new HttpResponse(null, { status: 401 })));

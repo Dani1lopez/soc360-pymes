@@ -14,6 +14,9 @@ test.each(["viewer", "admin"] as const)("renders %s navigation and identity", as
   renderShell(<AppShell />, currentUserQueryKey, makeUser({ role }));
   const nav = await screen.findByRole("navigation", { name: "Navegación principal" });
   expect(within(nav).getAllByRole("link")).toHaveLength(role === "viewer" ? 5 : 7);
+  expect(
+    within(screen.getByRole("banner")).getByRole("button", { name: /^Tema:/ }),
+  ).toBeInTheDocument();
   expect(screen.getByText("Ana Demo")).toBeInTheDocument();
   expect(screen.getByText(role === "viewer" ? "Lector" : "Administrador")).toBeInTheDocument();
   if (role === "viewer") expect(within(nav).queryByText("Usuarios")).not.toBeInTheDocument();

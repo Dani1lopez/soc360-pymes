@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SESSION_CLEARED_EVENT,
   __resetSession,
+  acceptTokenResponse,
   clearSession,
   getBearer,
   refreshSession,
+  restoreSession,
   setBearer,
   signOut,
 } from "./session";
@@ -110,6 +112,47 @@ describe("session state", () => {
     expect(listener).toHaveBeenCalledTimes(1);
     expect(channel.sent).toHaveLength(sentBefore);
     window.removeEventListener(SESSION_CLEARED_EVENT, listener);
+  });
+});
+
+describe("acceptTokenResponse", () => {
+  it("adopts and shares the bearer from a token response", () => {
+    expect(acceptTokenResponse(issued("login"))).toBe("login");
+    expect(getBearer()).toBe("login");
+    expect(lastChannel().sent).toEqual([{ type: "token", token: "login" }]);
+  });
+
+  it.each([null, "text", {}, issued("")])(
+    "rejects a body that is not a token response (%j)",
+    (body) => {
+      expect(acceptTokenResponse(body)).toBeNull();
+      expect(getBearer()).toBeNull();
+    },
+  );
+});
+
+describe("restoreSession", () => {
+  it("reuses the in-memory bearer without calling the backend", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    setBearer("aaa");
+
+    await expect(restoreSession()).resolves.toBe("aaa");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes through the cookie after a page reload", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json(issued("fresh")));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(restoreSession()).resolves.toBe("fresh");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves null when there is no session to restore", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ detail: "x" }, 401)));
+
+    await expect(restoreSession()).resolves.toBeNull();
   });
 });
 

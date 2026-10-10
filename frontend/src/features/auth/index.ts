@@ -9,3 +9,4 @@ export {
   useCurrentUser,
 } from "./hooks/use-current-user";
 export { login, fetchCurrentUser } from "./api/auth-api";
+export { redirectIfAuthenticated, requireSession, validateLoginSearch } from "./lib/route-guards";

@@ -3,3 +3,4 @@ dist/
 pnpm-lock.yaml
 openapi.json
 src/api/types.ts
+src/routeTree.gen.ts

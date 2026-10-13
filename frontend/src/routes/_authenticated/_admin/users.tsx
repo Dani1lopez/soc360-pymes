@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PlaceholderPage } from "@/features/shell";
+import { UsersPage } from "@/features/users";
+
 export const Route = createFileRoute("/_authenticated/_admin/users")({
-  component: () => <PlaceholderPage title="Usuarios" />,
+  component: UsersPage,
 });

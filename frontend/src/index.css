@@ -3,12 +3,15 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
@@ -21,48 +24,120 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-sev-critical: var(--sev-critical);
+  --color-sev-critical-tint: var(--sev-critical-tint);
+  --color-sev-critical-foreground: var(--sev-critical-foreground);
+  --color-sev-high: var(--sev-high);
+  --color-sev-high-tint: var(--sev-high-tint);
+  --color-sev-high-foreground: var(--sev-high-foreground);
+  --color-sev-medium: var(--sev-medium);
+  --color-sev-medium-tint: var(--sev-medium-tint);
+  --color-sev-medium-foreground: var(--sev-medium-foreground);
+  --color-sev-low: var(--sev-low);
+  --color-sev-low-tint: var(--sev-low-tint);
+  --color-sev-low-foreground: var(--sev-low-foreground);
+  --color-sev-info: var(--sev-info);
+  --color-sev-info-tint: var(--sev-info-tint);
+  --color-sev-info-foreground: var(--sev-info-foreground);
+  --color-sev-ok: var(--sev-ok);
+  --color-sev-ok-tint: var(--sev-ok-tint);
+  --color-sev-ok-foreground: var(--sev-ok-foreground);
 }
 
+/*
+ * "Medianoche" palette: neutrals on hue 250 with low chroma, primary on hue 225.
+ * Severity colours keep wide lightness separation from their tints so badge
+ * text stays above WCAG AA (worst measured case 6.0:1). Severity is never
+ * conveyed by colour alone: badges also carry an icon and a label.
+ */
 :root {
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --background: oklch(0.97 0.035 250);
+  --foreground: oklch(0.22 0.035 250);
+  --card: oklch(1 0.035 250);
+  --card-foreground: oklch(0.22 0.035 250);
+  --primary: oklch(0.46 0.13 225);
+  --primary-foreground: oklch(0.99 0.035 250);
+  --secondary: oklch(0.92 0.035 250);
+  --secondary-foreground: oklch(0.22 0.035 250);
+  --muted: oklch(0.94 0.035 250);
+  --muted-foreground: oklch(0.44 0.035 250);
+  --accent: oklch(0.9 0.035 250);
+  --accent-foreground: oklch(0.22 0.035 250);
+  --destructive: oklch(0.53 0.19 25);
+  --border: oklch(0.85 0.035 250);
+  --input: oklch(0.78 0.035 250);
+  --ring: oklch(0.46 0.13 225);
+
+  --sev-critical: oklch(0.48 0.12 25);
+  --sev-critical-tint: oklch(0.94 0.0267 25);
+  --sev-critical-foreground: oklch(0.22 0.015 25);
+  --sev-high: oklch(0.48 0.12 55);
+  --sev-high-tint: oklch(0.94 0.0267 55);
+  --sev-high-foreground: oklch(0.22 0.015 55);
+  --sev-medium: oklch(0.48 0.12 85);
+  --sev-medium-tint: oklch(0.94 0.0267 85);
+  --sev-medium-foreground: oklch(0.22 0.015 85);
+  --sev-low: oklch(0.48 0.12 250);
+  --sev-low-tint: oklch(0.94 0.0267 250);
+  --sev-low-foreground: oklch(0.22 0.015 250);
+  --sev-info: oklch(0.48 0.025 240);
+  --sev-info-tint: oklch(0.94 0.0267 240);
+  --sev-info-foreground: oklch(0.22 0.015 240);
+  --sev-ok: oklch(0.48 0.12 155);
+  --sev-ok-tint: oklch(0.94 0.0267 155);
+  --sev-ok-foreground: oklch(0.22 0.015 155);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --background: oklch(0.16 0.035 250);
+  --foreground: oklch(0.96 0.035 250);
+  --card: oklch(0.21 0.035 250);
+  --card-foreground: oklch(0.96 0.035 250);
+  --primary: oklch(0.8 0.13 225);
+  --primary-foreground: oklch(0.16 0.035 250);
+  --secondary: oklch(0.28 0.035 250);
+  --secondary-foreground: oklch(0.96 0.035 250);
+  --muted: oklch(0.25 0.035 250);
+  --muted-foreground: oklch(0.76 0.035 250);
+  --accent: oklch(0.32 0.035 250);
+  --accent-foreground: oklch(0.96 0.035 250);
+  --destructive: oklch(0.53 0.19 25);
+  --border: oklch(0.32 0.035 250);
+  --input: oklch(0.36 0.035 250);
+  --ring: oklch(0.8 0.13 225);
+
+  --sev-critical: oklch(0.78 0.12 25);
+  --sev-critical-tint: oklch(0.28 0.0267 25);
+  --sev-critical-foreground: oklch(0.96 0.015 25);
+  --sev-high: oklch(0.78 0.12 55);
+  --sev-high-tint: oklch(0.28 0.0267 55);
+  --sev-high-foreground: oklch(0.96 0.015 55);
+  --sev-medium: oklch(0.78 0.12 85);
+  --sev-medium-tint: oklch(0.28 0.0267 85);
+  --sev-medium-foreground: oklch(0.96 0.015 85);
+  --sev-low: oklch(0.78 0.12 250);
+  --sev-low-tint: oklch(0.28 0.0267 250);
+  --sev-low-foreground: oklch(0.96 0.015 250);
+  --sev-info: oklch(0.78 0.025 240);
+  --sev-info-tint: oklch(0.28 0.0267 240);
+  --sev-info-foreground: oklch(0.96 0.015 240);
+  --sev-ok: oklch(0.78 0.12 155);
+  --sev-ok-tint: oklch(0.28 0.0267 155);
+  --sev-ok-foreground: oklch(0.96 0.015 155);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background font-sans text-foreground antialiased;
   }
 }

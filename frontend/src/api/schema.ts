@@ -10,3 +10,4 @@ export type TokenResponse = ApiSchemas["TokenResponse"];
 export type UserResponse = ApiSchemas["UserResponse"];
 export type Role = ApiSchemas["RoleEnum"];
 export type LoginRequest = ApiSchemas["LoginRequest"];
+export type Severity = ApiSchemas["VulnerabilityResponse"]["severity"];

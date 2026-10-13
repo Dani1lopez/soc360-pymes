@@ -6,11 +6,15 @@ import type {
   UserResponse,
   Role,
   LoginRequest,
+  Severity,
 } from "@/api/schema";
 
 // Compile-time contract checks: `pnpm typecheck` fails when the generated
 // types stop matching the shapes the client depends on.
 describe("generated API types", () => {
+  it("exposes the vulnerability severity alias", () => {
+    expectTypeOf<Severity>().toEqualTypeOf<ApiSchemas["VulnerabilityResponse"]["severity"]>();
+  });
   it("exposes stable aliases for authentication schemas", () => {
     expectTypeOf<TokenResponse>().toEqualTypeOf<ApiSchemas["TokenResponse"]>();
     expectTypeOf<UserResponse>().toEqualTypeOf<ApiSchemas["UserResponse"]>();

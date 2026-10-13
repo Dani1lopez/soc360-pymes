@@ -20,6 +20,7 @@ export function renderShell(ui: ReactElement, queryKey: readonly unknown[], user
     "/scans",
     "/scans/$id",
     "/vulnerabilities",
+    "/vulnerabilities/$id",
     "/reports",
     "/users",
     "/settings",

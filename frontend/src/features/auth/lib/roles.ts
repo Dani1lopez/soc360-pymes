@@ -4,6 +4,8 @@ import type { Role, UserResponse } from "@/api/schema";
 // hierarchy and no `is_superadmin` shortcut. `ingestor` is a machine role.
 export const READ_ROLES: readonly Role[] = ["viewer", "analyst", "admin", "superadmin"];
 export const ADMIN_ROLES: readonly Role[] = ["admin", "superadmin"];
+/** Relanzar enriquecimiento: admin, analyst o superadmin (el viewer solo lee). */
+export const ENRICH_ROLES: readonly Role[] = ["admin", "analyst", "superadmin"];
 
 export function roleLabel(role: Role): string {
   const labels: Record<Role, string> = {

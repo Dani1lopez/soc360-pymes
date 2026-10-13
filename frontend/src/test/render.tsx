@@ -14,7 +14,16 @@ export function renderShell(ui: ReactElement, queryKey: readonly unknown[], user
   const queryClient = createTestQueryClient();
   queryClient.setQueryData(queryKey, user);
   const root = createRootRoute({ component: () => ui });
-  const paths = ["/", "/assets", "/scans", "/vulnerabilities", "/reports", "/users", "/settings"];
+  const paths = [
+    "/",
+    "/assets",
+    "/scans",
+    "/scans/$id",
+    "/vulnerabilities",
+    "/reports",
+    "/users",
+    "/settings",
+  ];
   const routes = paths.map((path) =>
     createRoute({ getParentRoute: () => root, path, component: () => <h1>Content</h1> }),
   );

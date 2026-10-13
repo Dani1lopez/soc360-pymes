@@ -21,6 +21,8 @@ import { Route as AuthenticatedReaderAssetsRouteImport } from './routes/_authent
 import { Route as AuthenticatedReaderReportsRouteImport } from './routes/_authenticated/_reader/reports'
 import { Route as AuthenticatedReaderScansRouteImport } from './routes/_authenticated/_reader/scans'
 import { Route as AuthenticatedReaderVulnerabilitiesRouteImport } from './routes/_authenticated/_reader/vulnerabilities'
+import { Route as AuthenticatedReaderScansIndexRouteImport } from './routes/_authenticated/_reader/scans.index'
+import { Route as AuthenticatedReaderScansIdRouteImport } from './routes/_authenticated/_reader/scans.$id'
 
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: '/_authenticated',
@@ -85,6 +87,18 @@ const AuthenticatedReaderVulnerabilitiesRoute =
     path: '/vulnerabilities',
     getParentRoute: () => AuthenticatedReaderRoute,
   } as any)
+const AuthenticatedReaderScansIndexRoute =
+  AuthenticatedReaderScansIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AuthenticatedReaderScansRoute,
+  } as any)
+const AuthenticatedReaderScansIdRoute =
+  AuthenticatedReaderScansIdRouteImport.update({
+    id: '/$id',
+    path: '/$id',
+    getParentRoute: () => AuthenticatedReaderScansRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedReaderIndexRoute
@@ -94,8 +108,10 @@ export interface FileRoutesByFullPath {
   '/users': typeof AuthenticatedAdminUsersRoute
   '/assets': typeof AuthenticatedReaderAssetsRoute
   '/reports': typeof AuthenticatedReaderReportsRoute
-  '/scans': typeof AuthenticatedReaderScansRoute
+  '/scans': typeof AuthenticatedReaderScansRouteWithChildren
   '/vulnerabilities': typeof AuthenticatedReaderVulnerabilitiesRoute
+  '/scans/$id': typeof AuthenticatedReaderScansIdRoute
+  '/scans/': typeof AuthenticatedReaderScansIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AuthenticatedReaderIndexRoute
@@ -105,8 +121,9 @@ export interface FileRoutesByTo {
   '/users': typeof AuthenticatedAdminUsersRoute
   '/assets': typeof AuthenticatedReaderAssetsRoute
   '/reports': typeof AuthenticatedReaderReportsRoute
-  '/scans': typeof AuthenticatedReaderScansRoute
   '/vulnerabilities': typeof AuthenticatedReaderVulnerabilitiesRoute
+  '/scans/$id': typeof AuthenticatedReaderScansIdRoute
+  '/scans': typeof AuthenticatedReaderScansIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -119,9 +136,11 @@ export interface FileRoutesById {
   '/_authenticated/_admin/users': typeof AuthenticatedAdminUsersRoute
   '/_authenticated/_reader/assets': typeof AuthenticatedReaderAssetsRoute
   '/_authenticated/_reader/reports': typeof AuthenticatedReaderReportsRoute
-  '/_authenticated/_reader/scans': typeof AuthenticatedReaderScansRoute
+  '/_authenticated/_reader/scans': typeof AuthenticatedReaderScansRouteWithChildren
   '/_authenticated/_reader/vulnerabilities': typeof AuthenticatedReaderVulnerabilitiesRoute
   '/_authenticated/_reader/': typeof AuthenticatedReaderIndexRoute
+  '/_authenticated/_reader/scans/$id': typeof AuthenticatedReaderScansIdRoute
+  '/_authenticated/_reader/scans/': typeof AuthenticatedReaderScansIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -135,6 +154,8 @@ export interface FileRouteTypes {
     | '/reports'
     | '/scans'
     | '/vulnerabilities'
+    | '/scans/$id'
+    | '/scans/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -144,8 +165,9 @@ export interface FileRouteTypes {
     | '/users'
     | '/assets'
     | '/reports'
-    | '/scans'
     | '/vulnerabilities'
+    | '/scans/$id'
+    | '/scans'
   id:
     | '__root__'
     | '/_authenticated'
@@ -160,6 +182,8 @@ export interface FileRouteTypes {
     | '/_authenticated/_reader/scans'
     | '/_authenticated/_reader/vulnerabilities'
     | '/_authenticated/_reader/'
+    | '/_authenticated/_reader/scans/$id'
+    | '/_authenticated/_reader/scans/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -253,6 +277,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedReaderVulnerabilitiesRouteImport
       parentRoute: typeof AuthenticatedReaderRoute
     }
+    '/_authenticated/_reader/scans/': {
+      id: '/_authenticated/_reader/scans/'
+      path: '/'
+      fullPath: '/scans/'
+      preLoaderRoute: typeof AuthenticatedReaderScansIndexRouteImport
+      parentRoute: typeof AuthenticatedReaderScansRoute
+    }
+    '/_authenticated/_reader/scans/$id': {
+      id: '/_authenticated/_reader/scans/$id'
+      path: '/$id'
+      fullPath: '/scans/$id'
+      preLoaderRoute: typeof AuthenticatedReaderScansIdRouteImport
+      parentRoute: typeof AuthenticatedReaderScansRoute
+    }
   }
 }
 
@@ -269,10 +307,26 @@ const AuthenticatedAdminRouteChildren: AuthenticatedAdminRouteChildren = {
 const AuthenticatedAdminRouteWithChildren =
   AuthenticatedAdminRoute._addFileChildren(AuthenticatedAdminRouteChildren)
 
+interface AuthenticatedReaderScansRouteChildren {
+  AuthenticatedReaderScansIdRoute: typeof AuthenticatedReaderScansIdRoute
+  AuthenticatedReaderScansIndexRoute: typeof AuthenticatedReaderScansIndexRoute
+}
+
+const AuthenticatedReaderScansRouteChildren: AuthenticatedReaderScansRouteChildren =
+  {
+    AuthenticatedReaderScansIdRoute: AuthenticatedReaderScansIdRoute,
+    AuthenticatedReaderScansIndexRoute: AuthenticatedReaderScansIndexRoute,
+  }
+
+const AuthenticatedReaderScansRouteWithChildren =
+  AuthenticatedReaderScansRoute._addFileChildren(
+    AuthenticatedReaderScansRouteChildren,
+  )
+
 interface AuthenticatedReaderRouteChildren {
   AuthenticatedReaderAssetsRoute: typeof AuthenticatedReaderAssetsRoute
   AuthenticatedReaderReportsRoute: typeof AuthenticatedReaderReportsRoute
-  AuthenticatedReaderScansRoute: typeof AuthenticatedReaderScansRoute
+  AuthenticatedReaderScansRoute: typeof AuthenticatedReaderScansRouteWithChildren
   AuthenticatedReaderVulnerabilitiesRoute: typeof AuthenticatedReaderVulnerabilitiesRoute
   AuthenticatedReaderIndexRoute: typeof AuthenticatedReaderIndexRoute
 }
@@ -280,7 +334,7 @@ interface AuthenticatedReaderRouteChildren {
 const AuthenticatedReaderRouteChildren: AuthenticatedReaderRouteChildren = {
   AuthenticatedReaderAssetsRoute: AuthenticatedReaderAssetsRoute,
   AuthenticatedReaderReportsRoute: AuthenticatedReaderReportsRoute,
-  AuthenticatedReaderScansRoute: AuthenticatedReaderScansRoute,
+  AuthenticatedReaderScansRoute: AuthenticatedReaderScansRouteWithChildren,
   AuthenticatedReaderVulnerabilitiesRoute:
     AuthenticatedReaderVulnerabilitiesRoute,
   AuthenticatedReaderIndexRoute: AuthenticatedReaderIndexRoute,

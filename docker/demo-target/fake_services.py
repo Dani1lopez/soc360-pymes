@@ -52,7 +52,8 @@ async def ssh(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> Non
 async def http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     request = await reader.readuntil(b"\r\n\r\n")
     lines = request.decode("iso-8859-1").split("\r\n")
-    method = lines[0].split(" ")[0]
+    method, _, rest = lines[0].partition(" ")
+    path = rest.split(" ")[0]
     headers = dict(
         (key.lower(), value.strip())
         for line in lines[1:] if ":" in line
@@ -63,7 +64,12 @@ async def http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> No
     body = b"<!doctype html><title>Demo target</title><p>Harmless scan fixture.</p>\n"
     status = "206 Partial Content" if partial else "200 OK"
     content_type = "text/html"
-    if partial and "," in headers["range"]:
+    if path not in ("/", "/index.html"):
+        # Anything but the front page is missing, so path-based NSE checks such as
+        # http-phpmyadmin-dir-traversal do not report phantom findings.
+        status = "404 Not Found"
+        body = b"<!doctype html><title>Not found</title>\n"
+    elif partial and "," in headers["range"]:
         content_type = "multipart/byteranges; boundary=demo"
         body = (b"--demo\r\nContent-Type: text/html\r\n"
                 b"Content-Range: bytes 0-0/69\r\n\r\n<\r\n--demo--\r\n")

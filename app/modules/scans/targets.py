@@ -50,6 +50,19 @@ async def _resolve_host(host: str) -> list[str]:
     return list(dict.fromkeys(str(address[0]) for _, _, _, _, address in results))
 
 
+# Demo mode adds only these private ranges on top of global addresses; documentation,
+# benchmarking and similar "private" blocks are deliberately not demo targets.
+_DEMO_PRIVATE_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+)
+# IPv6 forms that embed an IPv4 address and could smuggle a forbidden one past the filter.
+_DEMO_TRANSITION_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in ("2002::/16", "64:ff9b::/96", "2001::/32")
+)
+
+
 def _allowed_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     if not settings.SCAN_DEMO_MODE:
         return address.is_global
@@ -59,9 +72,12 @@ def _allowed_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> 
         or address.is_multicast
         or address.is_unspecified
         or address.is_reserved
+        or any(address in network for network in _DEMO_TRANSITION_NETWORKS)
     ):
         return False
-    return address.is_global or address.is_private
+    return address.is_global or any(
+        address in network for network in _DEMO_PRIVATE_NETWORKS
+    )
 
 
 def _public_ip(value: str) -> str:

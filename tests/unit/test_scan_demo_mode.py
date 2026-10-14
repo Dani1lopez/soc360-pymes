@@ -135,3 +135,24 @@ async def test_private_url_literal_is_accepted_without_dns() -> None:
         "web_app", "http://172.18.0.7/path", resolver=resolver
     )
     assert target.addresses == ("172.18.0.7",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "address",
+    [
+        "192.0.2.1", "198.51.100.7", "203.0.113.5", "198.18.0.1",
+        "2001:db8::1", "::ffff:10.0.0.5",
+        "2002:7f00:1::1", "2002:a9fe:a9fe::1", "64:ff9b::a9fe:a9fe", "2001:0:4136:e378::1",
+    ],
+)
+async def test_demo_mode_only_adds_rfc1918_and_unique_local(address: str) -> None:
+    """Documentation, benchmarking and IPv6 transition forms are not demo targets."""
+    with pytest.raises(TargetRejectedError, match="^target_not_global$"):
+        await resolve_scan_target("ip", address)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("address", ["fc00::1", "fd00::5"])
+async def test_demo_mode_accepts_ipv6_unique_local(address: str) -> None:
+    assert (await resolve_scan_target("ip", address)).addresses == (address,)

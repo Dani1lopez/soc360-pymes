@@ -269,6 +269,36 @@ describe("signOut", () => {
     expect(getBearer()).toBeNull();
   });
 
+  it("authenticates the logout with the current bearer", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({ detail: "ok" }));
+    vi.stubGlobal("fetch", fetchMock);
+    setBearer("aaa");
+
+    await signOut();
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer aaa");
+  });
+
+  it("refreshes an expired bearer and retries the logout once", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ detail: "Not authenticated" }, 401))
+      .mockResolvedValueOnce(json(issued("bbb")))
+      .mockResolvedValueOnce(json({ detail: "ok" }));
+    vi.stubGlobal("fetch", fetchMock);
+    setBearer("aaa");
+
+    await signOut();
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/auth/refresh");
+    const retry = fetchMock.mock.calls[2]?.[1] as RequestInit;
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain("/auth/logout");
+    expect(new Headers(retry.headers).get("Authorization")).toBe("Bearer bbb");
+    expect(getBearer()).toBeNull();
+  });
+
   it("clears the local session even when the backend call fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
     setBearer("aaa");

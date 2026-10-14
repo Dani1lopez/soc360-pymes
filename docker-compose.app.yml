@@ -1,0 +1,199 @@
+# Product stack — the whole system in one file.
+#
+#   ./scripts/demo_bootstrap.py                                        # once
+#   docker compose -f docker-compose.app.yml up --build
+#
+# Why a separate file instead of docker-compose.yml: that one keeps local
+# infrastructure behind profiles (postgres for dev, postgres-test and toxiproxy
+# for tests) and docker-compose.worker.yml is the development worker overlay,
+# which requires .env.worker. Keeping this stack apart leaves both workflows
+# untouched, at the cost of repeating the postgres and redis definitions.
+#
+# No credential is written in this file. The passwords and the application
+# secret come from .env, and `scripts/demo_bootstrap.py` generates them once.
+#
+# TWO DATABASE ROLES, AND THIS IS NOT OPTIONAL:
+#   soc360_migration — owns the schema and runs the migrations
+#   soc360_app       — the application role, NOSUPERUSER NOBYPASSRLS
+# PostgreSQL skips row level security for a superuser or for a role with
+# BYPASSRLS. If the application connected as the owner, every policy would be
+# ignored, tenant isolation would silently stop protecting anything, and
+# nothing would fail visibly.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: soc360_app_postgres
+    environment:
+      POSTGRES_USER: soc360_migration
+      POSTGRES_PASSWORD:<redacted-by-secret-guard>}
+      POSTGRES_DB: ${APP_DB_NAME:-soc360}
+      # Consumed by docker/postgres-init/10-roles.sh on first start only.
+      APP_DB_USER: soc360_app
+      APP_DB_PASSWORD:<redacted-by-secret-guard>}
+    volumes:
+      - soc360_app_postgres:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U soc360_migration -d ${APP_DB_NAME:-soc360}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: soc360_app_redis
+    command: >
+      redis-server
+      --maxmemory ${REDIS_MAXMEMORY:-256mb}
+      --maxmemory-policy noeviction
+      --requirepass ${APP_REDIS_PASSWORD:?run scripts/demo_bootstrap.py first}
+    healthcheck:
+      test:
+        ["CMD", "redis-cli", "-a", "${APP_REDIS_PASSWORD:?run scripts/demo_bootstrap.py first}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  # Applies the schema and exits. The API and the worker never serve or consume
+  # work before this completes, so the schema can never be half applied, and a
+  # broken migration is a failed service instead of an API crash loop.
+  migrate:
+    build:
+      context: .
+      target: runtime
+    entrypoint: ["alembic", "upgrade", "head"]
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DATABASE_URL:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
+      DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_migration:${POSTGRES_PASSWORD:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
+      POSTGRES_USER: soc360_migration
+      POSTGRES_DB: ${APP_DB_NAME:-soc360}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      target: runtime
+    # entrypoint.sh runs `gunicorn app.main:app --config gunicorn_conf.py "$@"`,
+    # so these are appended to that command. Binding 0.0.0.0 is required: the
+    # Gunicorn default (127.0.0.1) would be unreachable from the nginx container.
+    command: ["--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "60"]
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DATABASE_URL:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
+      DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_migration:${POSTGRES_PASSWORD:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
+      POSTGRES_USER: soc360_migration
+      POSTGRES_DB: ${APP_DB_NAME:-soc360}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${APP_REDIS_PASSWORD:?run scripts/demo_bootstrap.py first}
+    ports:
+      # Debug convenience only, and bound to the loopback interface: the browser
+      # reaches the API through nginx, on the same origin.
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      target: worker
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DATABASE_URL:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
+      DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_migration:${POSTGRES_PASSWORD:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
+      POSTGRES_USER: soc360_migration
+      POSTGRES_DB: ${APP_DB_NAME:-soc360}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${APP_REDIS_PASSWORD:?run scripts/demo_bootstrap.py first}
+      # Secure by default. Turn these on in .env only for a local demo: see
+      # docs/operations/demo-scan.md.
+      SCAN_EXECUTION_ENABLED: ${SCAN_EXECUTION_ENABLED:-false}
+      SCAN_DEMO_MODE: ${SCAN_DEMO_MODE:-false}
+      ENRICHMENT_ENABLED: ${ENRICHMENT_ENABLED:-false}
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
+    # Do not enable no-new-privileges: it disables Nmap's file capabilities.
+    read_only: true
+    tmpfs: [/tmp]
+    init: true
+    pids_limit: ${WORKER_PIDS_LIMIT:-256}
+    mem_limit: ${WORKER_MEM_LIMIT:-1g}
+    cpus: ${WORKER_CPUS:-1.0}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Reaps scans that outlived their deadline and pumps the queue. Without it a
+  # scan interrupted by a restart stays "running" forever.
+  beat:
+    build:
+      context: .
+      target: runtime
+    user: "65534:65534"
+    entrypoint:
+      ["celery", "-A", "app.worker.celery_app:celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule", "--pidfile=/tmp/celerybeat.pid"]
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DATABASE_URL:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
+      DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_migration:${POSTGRES_PASSWORD:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
+      POSTGRES_USER: soc360_migration
+      POSTGRES_DB: ${APP_DB_NAME:-soc360}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${APP_REDIS_PASSWORD:?run scripts/demo_bootstrap.py first}
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    init: true
+    # Exactly one beat: two beats double every schedule.
+    deploy:
+      replicas: 1
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  soc360_app_postgres:

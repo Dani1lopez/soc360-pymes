@@ -109,6 +109,12 @@ services:
       DATABASE_URL_MIGRATION: ${STACK_DB_MIGRATION_DSN}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      # The API gates POST /scans/{id}/run on these, so it must read the same
+      # values as the worker instead of depending on whatever .env happens to
+      # hold. Secure by default.
+      SCAN_EXECUTION_ENABLED: ${SCAN_EXECUTION_ENABLED:-false}
+      SCAN_DEMO_MODE: ${SCAN_DEMO_MODE:-false}
+      ENRICHMENT_ENABLED: ${ENRICHMENT_ENABLED:-false}
     # No published port on purpose: nginx reaches the API over the internal
     # network, so the only public entry point is the frontend. To debug it,
     # `docker compose -f docker-compose.app.yml exec api curl -s localhost:8000`.

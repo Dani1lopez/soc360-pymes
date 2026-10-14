@@ -6,7 +6,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115.6-009688.svg)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D.svg)
-![Tests](https://img.shields.io/badge/tests-1151-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-2036-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 ![Ruff](https://img.shields.io/badge/linter-ruff-261C15.svg)
@@ -28,10 +28,10 @@ Las pequeñas y medianas empresas (PyMEs) enfrentan las mismas amenazas ciberné
 | Fase | Estado | Descripción |
 |------|--------|-------------|
 | **F0** | ✅ Completado | Arquitectura y Modelo de Datos — 23 ADRs, 13 tablas DB, modelo de seguridad |
-| **F1** | ✅ Completado | Base del Backend — Auth, tenants, usuarios, RLS, eventos, LLM, Redis fail-closed, métricas, manejo de outages — 1151 tests pasando |
+| **F1** | ✅ Completado | Base del Backend — Auth, tenants, usuarios, RLS, eventos, LLM, Redis fail-closed, métricas, manejo de outages — 2036 tests de backend pasando |
 | **F2** | ✅ Completado | Stack de vulnerabilidades — CRUD vertical (Assets → Scans → Vulnerabilities → Reports) más infra/agentes (Nmap, Celery, Dashboard, enriquecimiento LLM, grafo LangGraph) — PRD v2 |
 | **F3** | 📋 Planificado | Tiempo Real — WebSockets, ingestión de logs, detección de anomalías |
-| **F4** | 📋 Planificado | Frontend — React 18 + TypeScript + Vite (MVP Junio 2026) |
+| **F4** | ✅ Completado | Frontend — React 18 + TypeScript + Vite SPA, 8 páginas, conmutador de organización para superadmin — 455 tests de frontend pasando |
 | **F5** | 📋 Planificado | Agentes Extra — Cumplimiento, Inteligencia |
 | **F6** | 📋 Planificado | Avanzado — Email, reportes PDF, Redis TLS |
 | **F7** | 📋 Planificado | QA + Prod — E2E tests, CI/CD, deploy |
@@ -57,15 +57,48 @@ Las pequeñas y medianas empresas (PyMEs) enfrentan las mismas amenazas ciberné
 
 ```mermaid
 graph TB
-    Client["Client / Frontend"] --> API["FastAPI App<br/>(Uvicorn / Gunicorn)"]
-    API --> PG[("PostgreSQL 16<br/>(RLS per Tenant)")]
-    API --> Redis[("Redis 7<br/>Denylist · Cache · Events · Locks")]
-    API --> Consumer["Event Consumer en proceso<br/>(asyncio · XREADGROUP)"]
-    Consumer --> Redis
-    Consumer --> PG
-    API --> LLM["LLM Provider<br/>(Groq · OpenAI · etc)"]
-    Scraper["Prometheus Scraper"] -->|auth por token| API
+    Browser["Navegador"] -->|:8088| Nginx["nginx<br/>SPA estática + proxy /api"]
+    Nginx --> API["FastAPI<br/>(Gunicorn + uvicorn-worker)"]
+    API --> PG[("PostgreSQL 16<br/>RLS por tenant")]
+    API --> Redis[("Redis 7<br/>denylist · locks · eventos · broker")]
+    API -->|aviso best-effort| Worker["Celery: scans<br/>(Nmap · NET_RAW)"]
+    Beat["Celery Beat"] -->|pump · reap| Maintenance["Celery: maintenance"]
+    Maintenance -->|despierta escaneos pendientes| Worker
+    Maintenance --> Redis
+    Worker -->|parse · dedup · persist| PG
+    Worker --> Enrichment["Celery: enrichment<br/>(apagado por defecto)"]
+    Enrichment --> LLM["Proveedor LLM<br/>(Groq · OpenAI · …)"]
+    Scraper["Prometheus"] -->|auth por token| API
 ```
+
+La ruta de petición tiene un solo origen: nginx sirve la SPA compilada y proxya
+`/api` al contenedor de la API, así que el navegador nunca hace una petición
+cross-origin y la cookie de refresco sigue siendo `SameSite=Strict`.
+
+Un lanzamiento confirma el despacho **antes** de avisar al worker, así que el
+aviso es solo una pista: el pump periódico recupera el que se pierda
+despertando al worker para reclamar el trabajo pendiente desde PostgreSQL. El
+consumidor de mantenimiento es lo que ejecuta ese pump y el reaper.
+
+### Pipeline de escaneo y modelo de datos
+
+```mermaid
+graph LR
+    Tenant --> User
+    Tenant --> Asset
+    Asset --> Scan
+    Scan --> Vulnerability
+    Vulnerability --> Report
+    Run["POST /scans/:id/run"] --> Scan
+    Scan -->|despacho confirmado| Pipeline["Nmap → parse → dedup → persist"]
+    Pipeline --> Vulnerability
+    Dashboard["Métricas del dashboard"] --> Scan
+    Dashboard --> Vulnerability
+```
+
+`Tenant` es la frontera de aislamiento: cada otra fila lleva `tenant_id`, las
+políticas RLS lo imponen en la base y la aplicación conecta con un rol que ni
+posee el esquema ni salta esas políticas.
 
 La plataforma sigue un patrón de monolito modular. FastAPI gestiona el tráfico HTTP, PostgreSQL impone aislamiento de tenant a nivel de fila, y Redis actúa como sistema nervioso central para denylist de sesiones, caché, locks distribuidos y streaming de eventos asíncronos. Los eventos se consumen con una tarea asyncio en proceso con lecturas bloqueantes. La ejecución de escaneos y el enriquecimiento LLM utilizan workers Celery separados; Beat gestiona el mantenimiento de escaneos, no la recuperación del enriquecimiento.
 
@@ -85,7 +118,7 @@ La plataforma sigue un patrón de monolito modular. FastAPI gestiona el tráfico
 | Celery | 5.4.0 (escaneos, mantenimiento y enriquecimiento) |
 | LangGraph | 1.2.14 (grafo del pipeline de escaneo) |
 | Uvicorn | 0.32.1 |
-| Gunicorn | — (prod, `gunicorn_conf.py`) |
+| Gunicorn | 23.0.0 (`gunicorn_conf.py`, `uvicorn-worker` para ASGI) |
 | Pydantic | 2.10.4 |
 | pydantic-settings | 2.7.0 |
 | PyJWT[crypto] | >=2.8,<3 |
@@ -202,6 +235,33 @@ curl http://localhost:8000/health
 
 ---
 
+### Stack de producto (todo el sistema, en un comando)
+
+El archivo Compose de arriba es infraestructura local. Para levantar el producto
+—API, worker, maintenance, enrichment, beat, PostgreSQL, Redis y el frontend
+compilado detrás de nginx— usar el archivo del stack, que deja intacto el flujo
+de desarrollo:
+
+```bash
+# 1. Rellenar los valores locales que el stack necesita (idempotente, nunca imprime uno)
+./scripts/demo_bootstrap.py
+
+# 2. Construir y arrancar. --profile demo añade los usuarios sembrados, el
+#    objetivo vulnerable falso y un escaneo que corre de verdad.
+docker compose -f docker-compose.app.yml --profile demo up -d --build
+
+# 3. Abrir http://localhost:8088 e iniciar sesión con un usuario sembrado
+#    (las credenciales son las documentadas en .env.example)
+```
+
+Con el perfil demo el recorrido guiado es: crear un activo `hostname` con valor
+`demo-target`, crear un escaneo de vulnerabilidades para él, ejecutarlo y ver
+aparecer los hallazgos. Eso requiere `SCAN_DEMO_MODE=true` y
+`SCAN_EXECUTION_ENABLED=true`; el stack lee ambos del entorno y los mantiene
+apagados por defecto.
+
+---
+
 ### Servicios de workers
 
 Configurar un archivo local `.env.worker`, fuera del control de versiones, con
@@ -228,6 +288,23 @@ siendo el proveedor predeterminado.
 | `LLM_PROVIDER` | `groq` | Usar `openrouter` para seleccionar OpenRouter |
 | `OPENROUTER_API_KEY` | Sin configurar | Proporcionar la credencial de OpenRouter localmente; nunca incluirla en Git |
 | `OPENROUTER_MODEL` | `inclusionai/ling-flash-3.0:free` | Identificador del modelo de OpenRouter |
+
+---
+
+## Límites conocidos y fuera de alcance
+
+Inventario honesto, para que nadie los descubra por sorpresa:
+
+| Límite | Por qué es así |
+|--------|----------------|
+| **La ejecución de escaneos está apagada por defecto** (`SCAN_EXECUTION_ENABLED=false`) | La autorización sobre el objetivo es la puerta: la plataforma todavía debe verificar la propiedad del objetivo antes de escanear, y ese es el siguiente hito. El perfil demo enciende la ejecución solo para objetivos locales. |
+| **Objetivos acotados** | Un objetivo por activo, como máximo un /24 (IPv4) o /120 (IPv6), y solo direcciones públicas salvo que el modo demo lo relaje. |
+| **El tenant sembrado permite un escaneo al día** | El enforcement de plan es real: `scans_per_day` se reserva de forma atómica por petición, así que un segundo lanzamiento responde `429`. Sembrar otro plan para demostrar más. |
+| **Los informes son registros, no archivos** | Los cuatro tipos existen con estado y metadatos; la generación de PDF no está implementada. |
+| **Sin escaneos programados** | Cada escaneo se lanza explícitamente. La ejecución periódica está planificada. |
+| **El enriquecimiento está apagado por defecto** | Seguridad de coste. Encenderlo requiere credencial del proveedor, y el consumidor de la cola `enrichment` que el stack ya ejecuta. |
+| **Hace falta una clave con forma de proveedor para arrancar** | El validador exige una clave con forma de Groq cuando el proveedor configurado es Groq, incluso con el enriquecimiento apagado. El bootstrap de demo escribe un marcador que nunca se envía a ningún sitio. |
+| **`develop` y `main` no están reconciliadas** | Deriva histórica de ramas. `main` es la fuente de verdad. |
 
 ---
 
@@ -384,7 +461,7 @@ la semántica de entrega, y el
 | F1 | Base del Backend (Auth, Tenants, Users, RLS, Events, LLM, Métricas, Outages) | ✅ Completado |
 | F2 | Stack de vulnerabilidades — CRUD vertical + infra/agentes (PRD v2) | ✅ Completado |
 | F3 | Tiempo Real (WebSockets, Ingestión, Anomalías) | 📋 Planificado |
-| F4 | Frontend (React 18 + TS + Vite) | 📋 Planificado |
+| F4 | Frontend (React 18 + TS + Vite) | ✅ Completado |
 | F5 | Agentes Extra (Cumplimiento, Inteligencia) | 📋 Planificado |
 | F6 | Avanzado (Email, Reportes PDF, Redis TLS) | 📋 Planificado |
 | F7 | QA + Prod (E2E, pulido CI/CD, Deploy) | 📋 Planificado |

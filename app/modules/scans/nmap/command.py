@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 
+from app.core.config import settings
 from app.modules.scans.targets import ScanTarget
 
 NMAP_PROFILE: tuple[str, ...] = (
@@ -20,6 +21,23 @@ NMAP_PROFILE: tuple[str, ...] = (
     "-sU",
     "--top-ports",
     "1000",
+    "-sV",
+    "-O",
+    "--script=vuln",
+    "-oX",
+    "-",
+)
+
+NMAP_DEMO_PROFILE: tuple[str, ...] = (
+    "--privileged",
+    "--host-timeout",
+    "5m",
+    "--script-timeout",
+    "60s",
+    "-sS",
+    "-sU",
+    "-p",
+    "T:21,22,80,3306,U:53,161",
     "-sV",
     "-O",
     "--script=vuln",
@@ -59,7 +77,7 @@ def build_nmap_command(target: ScanTarget, *, nmap_path: str = "nmap") -> list[s
     ipv6 = ipaddress.ip_network(target.addresses[0], strict=False).version == 6
     return [
         nmap_path,
-        *NMAP_PROFILE,
+        *(NMAP_DEMO_PROFILE if settings.SCAN_DEMO_MODE else NMAP_PROFILE),
         *(["-6"] if ipv6 else []),
         "--",
         *target.addresses,

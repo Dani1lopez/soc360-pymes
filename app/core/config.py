@@ -118,6 +118,8 @@ class Settings(BaseSettings):
     # Kill switch for POST /scans/{id}/run. Stays off until asset ownership
     # verification lands (scanning unowned targets carries legal risk).
     SCAN_EXECUTION_ENABLED: bool = False
+    # ONLY for local development demos: allow private scan targets and a fast profile.
+    SCAN_DEMO_MODE: bool = False
     NMAP_PROCESS_SUPERVISION: bool = False
 
     # Metrics endpoint auth + outage translation (PR4 #260)
@@ -227,6 +229,14 @@ class Settings(BaseSettings):
                 "Use REDIS_HOST, REDIS_PORT, REDIS_DB, and REDIS_PASSWORD instead."
             )
         return data
+
+    @model_validator(mode="after")
+    def scan_demo_mode_only_in_development(self) -> Settings:
+        if self.SCAN_DEMO_MODE and self.ENVIRONMENT in {"production", "staging"}:
+            raise ValueError(
+                "SCAN_DEMO_MODE is only allowed for local development demos"
+            )
+        return self
 
     @model_validator(mode="after")
     def redis_password_required_in_production(self) -> Settings:

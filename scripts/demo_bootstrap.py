@@ -38,7 +38,10 @@ EXAMPLE_FILE = ROOT / ".env.example"
 FILL_IF_EMPTY = (
     "SECRET_KEY",
     "LOCK_KEY_SECRET",
-    "DB_OWNER_PASSWORD",
+    # The PostgreSQL image creates its superuser with this value, so the schema
+    # owner's connection URL must be built from it: generate a different one
+    # here and every migration fails with "password authentication failed".
+    "POSTGRES_PASSWORD",
     "APP_DB_PASSWORD",
 )
 
@@ -175,10 +178,13 @@ def main() -> int:
 
     database = values.get("APP_DB_NAME") or DEFAULT_DB_NAME
     derived = (
+        # The application role: its own generated value, never the owner's.
         (DSN_KEYS[0], _dsn(APP_ROLE, values.get("APP_DB_PASSWORD", ""), database)),
+        # The schema owner: the value the PostgreSQL container was initialised
+        # with, which is why it is read back from .env instead of generated.
         (
             DSN_KEYS[1],
-            _dsn(OWNER_ROLE, values.get("DB_OWNER_PASSWORD", ""), database),
+            _dsn(OWNER_ROLE, values.get("POSTGRES_PASSWORD", ""), database),
         ),
     )
 

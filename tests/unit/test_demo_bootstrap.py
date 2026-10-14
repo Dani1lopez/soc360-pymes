@@ -75,6 +75,11 @@ def _values(path: Path) -> dict[str, str]:
     return values
 
 
+def _credential_of(url: str) -> str:
+    """Return the user and secret portion of a connection URL."""
+    return url.split("://", 1)[1].split("@", 1)[0]
+
+
 def test_creates_env_and_fills_every_required_key(script: ModuleType) -> None:
     assert script.main() == 0
     assert script.ENV_FILE.exists()
@@ -155,6 +160,7 @@ def test_writes_derived_connection_urls(script: ModuleType) -> None:
     # an application credential that also owns the schema could bypass every
     # row level security policy.
     assert app_url != owner_url
+    assert _credential_of(app_url) != _credential_of(owner_url)
 
 
 def test_derived_urls_track_a_rotated_value(script: ModuleType) -> None:

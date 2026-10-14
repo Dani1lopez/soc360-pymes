@@ -9,9 +9,16 @@ scrape (spec scenario #10).
 This file is intentionally tiny — any future Gunicorn tweaks (workers,
 bind, log paths) belong here rather than being scattered across shell.
 """
+
 from __future__ import annotations
 
 from prometheus_client import multiprocess
+
+# Gunicorn's default worker is synchronous and cannot serve an ASGI
+# application: without this line Gunicorn starts, binds the port, and then
+# fails on the first request. A dedicated package provides the maintained ASGI
+# worker; uvicorn's own ``uvicorn.workers`` module is deprecated.
+worker_class = "uvicorn_worker.UvicornWorker"
 
 
 def child_exit(server, worker) -> None:

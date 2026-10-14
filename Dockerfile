@@ -61,6 +61,10 @@ COPY migrations/ ./migrations/
 COPY alembic.ini ./
 COPY gunicorn_conf.py ./
 
+# The seed script. It refuses to run outside development, which is what makes it
+# safe to ship, and it is what gives a fresh demo stack somebody to log in as.
+COPY scripts/ ./scripts/
+
 # Writable directory for multiprocess Prometheus metric files.
 # Each Gunicorn worker writes its own <metric>_<pid>.db file here.
 ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc

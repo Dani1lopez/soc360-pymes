@@ -175,3 +175,32 @@ def test_derived_urls_track_a_rotated_value(script: ModuleType) -> None:
     after = _values(script.ENV_FILE)[script.DSN_KEYS[0]]
     assert after != before
     assert "rotated-value" in after
+
+
+def test_demo_logins_are_copied_from_the_example(script: ModuleType) -> None:
+    """A generated login would be unguessable, so the demo copies the example."""
+    example = script.EXAMPLE_FILE
+    example.write_text(
+        _read(example) + _line("SEED_ADMIN_PASSWORD", "documented-value") + "\n",
+        encoding="utf-8",
+    )
+
+    script.main()
+
+    assert _values(script.ENV_FILE)["SEED_ADMIN_PASSWORD"] == "documented-value"
+
+
+def test_an_existing_demo_login_is_not_overwritten(script: ModuleType) -> None:
+    example = script.EXAMPLE_FILE
+    example.write_text(
+        _read(example) + _line("SEED_ADMIN_PASSWORD", "documented-value") + "\n",
+        encoding="utf-8",
+    )
+    script.ENV_FILE.write_text(
+        _template() + _line("SEED_ADMIN_PASSWORD", "operator-choice") + "\n",
+        encoding="utf-8",
+    )
+
+    script.main()
+
+    assert _values(script.ENV_FILE)["SEED_ADMIN_PASSWORD"] == "operator-choice"

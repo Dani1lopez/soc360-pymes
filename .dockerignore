@@ -29,10 +29,13 @@ docker/redis-data
 odd
 openspec
 docs
-scripts
 tests
 frontend
 docker
+
+# scripts/ is deliberately NOT excluded: the runtime image ships the seed
+# script, which is what gives a fresh demo stack somebody to log in as. The
+# script refuses to run outside development, so carrying it is safe.
 
 # Local demonstration stacks and their fixtures: the images do not need them,
 # and docker/demo-target has its own context.

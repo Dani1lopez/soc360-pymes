@@ -45,6 +45,17 @@ FILL_IF_EMPTY = (
     "APP_DB_PASSWORD",
 )
 
+# Logins for the seeded demo data. Their values are copied from .env.example
+# instead of being generated: a generated login would be unguessable, and the
+# point of the demo profile is that a reviewer can log in with the documented
+# credentials.
+DEMO_KEYS = (
+    "SEED_SUPERADMIN_PASSWORD",
+    "SEED_ADMIN_PASSWORD",
+    "SEED_ANALYST_PASSWORD",
+    "SEED_VIEWER_PASSWORD",
+)
+
 # The settings validator requires a key with this prefix whenever the LLM
 # provider is Groq, even with enrichment disabled. The product stack keeps
 # enrichment off, so this placeholder is never sent to any provider.
@@ -145,6 +156,12 @@ def main() -> int:
         lines = EXAMPLE_FILE.read_text(encoding="utf-8").splitlines()
         origin = EXAMPLE_FILE.name
 
+    example_values: dict[str, str] = {}
+    for line in EXAMPLE_FILE.read_text(encoding="utf-8").splitlines():
+        parsed = _assignment(line)
+        if parsed is not None:
+            example_values[parsed[1]] = _bare_value(parsed[2])
+
     seen: set[str] = set()
     filled: list[str] = []
 
@@ -162,6 +179,9 @@ def main() -> int:
         elif name == "GROQ_API_KEY":
             lines[index] = f"{prefix}{name}={GROQ_PLACEHOLDER}"
             filled.append(name)
+        elif name in DEMO_KEYS and example_values.get(name):
+            lines[index] = _assignment_line(prefix, name, example_values[name])
+            filled.append(name)
 
     missing = [key for key in FILL_IF_EMPTY if key not in seen]
     if missing:
@@ -169,6 +189,12 @@ def main() -> int:
         for key in missing:
             lines.append(_assignment_line("", key, _generate(key)))
             filled.append(key)
+
+    for key in DEMO_KEYS:
+        if key in seen or not example_values.get(key):
+            continue
+        lines.append(_assignment_line("", key, example_values[key]))
+        filled.append(key)
 
     values: dict[str, str] = {}
     for line in lines:

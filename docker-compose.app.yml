@@ -186,6 +186,32 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Demo data, behind a profile so a plain 'up' stays empty of fixtures. It
+  # gives the UI somebody to log in as: without it the application is usable in
+  # theory and unusable in practice. Pair it with docker-compose.demo.yml, which
+  # contributes the target the demo scan points at:
+  #   docker compose -f docker-compose.app.yml -f docker-compose.demo.yml --profile demo up -d
+  seed:
+    profiles: [demo]
+    build:
+      context: .
+      target: runtime
+    entrypoint: ["python", "scripts/seed_db.py"]
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DATABASE_URL: ${STACK_DB_DSN}
+      POSTGRES_USER: soc360_migration
+      POSTGRES_DB: ${APP_DB_NAME:-soc360}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
   frontend:
     build:
       context: ./frontend

@@ -218,6 +218,71 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
+  # Consumes the queues that beat publishes to. Without a consumer here the
+  # periodic pump and reaper never run: the dispatch endpoint rings a
+  # best-effort bell, so a lost bell must be recovered by the pump, and a scan
+  # interrupted by a restart must be reaped. With neither, a scan can stay
+  # pending forever while the queue grows unboundedly.
+  maintenance:
+    build:
+      context: .
+      target: runtime
+    user: "65534:65534"
+    entrypoint:
+      ["celery", "-A", "app.worker.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=maintenance", "--concurrency=1"]
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DATABASE_URL: ${STACK_DB_DSN}
+      DATABASE_URL_MIGRATION: ${STACK_DB_MIGRATION_DSN}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    init: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Consumes enrichment work when ENRICHMENT_ENABLED turns it on. It idles
+  # cheaply otherwise, and without it enabling enrichment would publish into a
+  # queue nobody reads.
+  enrichment:
+    build:
+      context: .
+      target: runtime
+    user: "65534:65534"
+    entrypoint:
+      ["celery", "-A", "app.worker.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=enrichment", "--concurrency=2"]
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DATABASE_URL: ${STACK_DB_DSN}
+      DATABASE_URL_MIGRATION: ${STACK_DB_MIGRATION_DSN}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      ENRICHMENT_ENABLED: ${ENRICHMENT_ENABLED:-false}
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    init: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend

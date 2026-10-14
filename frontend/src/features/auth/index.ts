@@ -10,5 +10,6 @@ export {
   currentUserQueryOptions,
   useCurrentUser,
 } from "./hooks/use-current-user";
+export { useEffectiveTenantId } from "./hooks/use-effective-tenant-id";
 export { login, fetchCurrentUser } from "./api/auth-api";
 export { redirectIfAuthenticated, requireSession, validateLoginSearch } from "./lib/route-guards";

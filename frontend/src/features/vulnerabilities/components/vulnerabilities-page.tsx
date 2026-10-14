@@ -17,7 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ADMIN_ROLES, hasAnyRole, useCurrentUser } from "@/features/auth";
+import { ADMIN_ROLES, hasAnyRole, useCurrentUser, useEffectiveTenantId } from "@/features/auth";
 import { assetValuesById, useAssetOptions } from "@/features/assets";
 import { scanAssetIds, useScanOptions } from "@/features/scans";
 import { errorMessage } from "@/lib/errors";
@@ -50,7 +50,7 @@ export function VulnerabilitiesPage() {
   // El backend decide con las mismas allowlists; aquí solo se oculta lo que
   // devolvería 403. `ENRICH_ROLES` gobierna el relanzado, en el detalle.
   const canWrite = hasAnyRole(user, ADMIN_ROLES);
-  const tenantId = user?.tenant_id ?? null;
+  const tenantId = useEffectiveTenantId();
   const canCreate = canWrite && tenantId !== null;
 
   const scanAssets = scanAssetIds(scans.data?.items);
@@ -153,7 +153,9 @@ export function VulnerabilitiesPage() {
 
       {canWrite && !canCreate && (
         <p className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
-          Para registrar hallazgos necesitas una cuenta asociada a una organización.
+          {user?.is_superadmin || user?.role === "superadmin"
+            ? "Selecciona una organización en la cabecera para crear registros."
+            : "Para registrar hallazgos necesitas una cuenta asociada a una organización."}
         </p>
       )}
 

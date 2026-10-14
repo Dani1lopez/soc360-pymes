@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ADMIN_ROLES, hasAnyRole, useCurrentUser } from "@/features/auth";
+import { ADMIN_ROLES, hasAnyRole, useCurrentUser, useEffectiveTenantId } from "@/features/auth";
 import { assetValuesById, useAssetOptions } from "@/features/assets";
 import { errorMessage } from "@/lib/errors";
 import { formatDateTime, orDash } from "@/lib/format";
@@ -41,7 +41,7 @@ export function ScansPage() {
   const cancel = useCancelScan();
 
   const canWrite = hasAnyRole(user, ADMIN_ROLES);
-  const tenantId = user?.tenant_id ?? null;
+  const tenantId = useEffectiveTenantId();
   const canCreate = canWrite && tenantId !== null;
   const assetNames = assetValuesById(assets.data?.items);
 
@@ -102,7 +102,9 @@ export function ScansPage() {
 
       {canWrite && !canCreate && (
         <p className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
-          Para crear escaneos necesitas una cuenta asociada a una organización.
+          {user?.is_superadmin || user?.role === "superadmin"
+            ? "Selecciona una organización en la cabecera para crear registros."
+            : "Para crear escaneos necesitas una cuenta asociada a una organización."}
         </p>
       )}
 

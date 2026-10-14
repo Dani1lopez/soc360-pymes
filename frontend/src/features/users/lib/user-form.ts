@@ -53,11 +53,14 @@ export function toUserCreateInput(
   } as UserCreateInput;
 }
 
-export function toUserUpdateInput(state: UserFormState): UserUpdateInput {
-  return {
-    email: state.email.trim(),
-    full_name: state.fullName.trim(),
-    role: state.role || "viewer",
-    is_active: state.isActive,
-  };
+export function toUserUpdateInput(state: UserFormState, original: UserResponse): UserUpdateInput {
+  const input: UserUpdateInput = {};
+  const email = state.email.trim();
+  const fullName = state.fullName.trim();
+  const role = state.role || "viewer";
+  if (email !== original.email) input.email = email;
+  if (fullName !== original.full_name) input.full_name = fullName;
+  if (role !== original.role) input.role = role;
+  if (state.isActive !== original.is_active) input.is_active = state.isActive;
+  return input;
 }

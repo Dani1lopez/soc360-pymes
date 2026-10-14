@@ -39,6 +39,8 @@ export function UserForm({ user, caller, onSaved, onCancel }: UserFormProps) {
   const update = useUpdateUser();
   const mutation = isEdit ? update : create;
   const roles = assignableUserRoles(caller.role);
+  const updateInput = user === null ? null : toUserUpdateInput(state, user);
+  const hasChanges = updateInput === null || Object.keys(updateInput).length > 0;
 
   function updateField<K extends keyof UserFormState>(field: K, value: UserFormState[K]) {
     setState((current) => ({ ...current, [field]: value }));
@@ -51,14 +53,14 @@ export function UserForm({ user, caller, onSaved, onCancel }: UserFormProps) {
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (mutation.isPending) return;
+    if (mutation.isPending || !hasChanges) return;
     const validation = validateUserForm(state, !isEdit);
     setErrors(validation);
     if (Object.keys(validation).length > 0) return;
     if (user === null) {
       create.mutate(toUserCreateInput(state, caller.tenant_id), { onSuccess: onSaved });
     } else {
-      update.mutate({ id: user.id, input: toUserUpdateInput(state) }, { onSuccess: onSaved });
+      update.mutate({ id: user.id, input: toUserUpdateInput(state, user) }, { onSuccess: onSaved });
     }
   }
 
@@ -173,7 +175,7 @@ export function UserForm({ user, caller, onSaved, onCancel }: UserFormProps) {
         )}
 
         <div className="flex gap-2">
-          <Button type="submit" disabled={mutation.isPending}>
+          <Button type="submit" disabled={mutation.isPending || !hasChanges}>
             {mutation.isPending ? "Guardando…" : isEdit ? "Guardar cambios" : "Crear usuario"}
           </Button>
           <Button type="button" variant="outline" onClick={onCancel}>

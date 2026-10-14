@@ -25,28 +25,25 @@ _DEFAULT_SEED_ENV = {
 class TestSeedPasswordValidation:
     """Test _validate_seed_passwords() function."""
 
-    def test_validates_all_required_env_vars(self):
-        """Should raise SystemExit when required env vars are missing."""
-        # We need to import the function without triggering module-level code
-        # Use importlib with patched env vars to get the module loaded first
+    @pytest.mark.parametrize("missing_var", sorted(_DEFAULT_SEED_ENV))
+    @pytest.mark.parametrize("value", [None, ""])
+    def test_rejects_a_single_missing_or_empty_variable(self, missing_var, value, capsys):
+        """Each variable is required on its own, and an empty value counts as missing."""
         with patch.dict(os.environ, _DEFAULT_SEED_ENV, clear=False):
             import scripts.seed_db as seed_mod
             func = seed_mod._validate_seed_passwords
-        
-        # Now test with missing vars
-        env_vars = [
-            "SEED_SUPERADMIN_PASSWORD",
-            "SEED_ADMIN_PASSWORD",
-            "SEED_ANALYST_PASSWORD",
-            "SEED_VIEWER_PASSWORD",
-        ]
-        with patch.dict(os.environ, {k: "" for k in env_vars}, clear=False):
-            for var in env_vars:
-                os.environ.pop(var, None)
-            
+
+        env = dict(_DEFAULT_SEED_ENV)
+        with patch.dict(os.environ, env, clear=False):
+            if value is None:
+                os.environ.pop(missing_var)
+            else:
+                os.environ[missing_var] = value
             with pytest.raises(SystemExit) as exc_info:
                 func()
-            assert exc_info.value.code == 1
+
+        assert exc_info.value.code == 1
+        assert missing_var in capsys.readouterr().out
 
     def test_passes_when_all_env_vars_set(self):
         """Should not raise when all required env vars are set."""
@@ -89,13 +86,10 @@ class TestSeedDataBuilder:
             import scripts.seed_db as seed_mod
             tenant, superadmin, users = seed_mod._build_seed_data()
         
-        # Superadmin password should be hashed (starts with $2b$)
-        assert superadmin["hashed_password"].startswith("$2b$")
-        assert superadmin["hashed_password"] != "SuperAdmin123!"
-        
-        # All user passwords should be hashed
-        for user in users:
+        configured = set(_DEFAULT_SEED_ENV.values())
+        for user in [superadmin, *users]:
             assert user["hashed_password"].startswith("$2b$")
+            assert user["hashed_password"] not in configured
 
     def test_uuids_are_deterministic(self):
         """Seed UUIDs should be fixed for test reproducibility."""
@@ -112,6 +106,19 @@ class TestSeedDataBuilder:
         # Should be deterministic (same value every run)
         assert str(seed_mod.SEED_TENANT_ID) == "00000000-0000-0000-0000-000000000001"
         assert str(seed_mod.SEED_SUPERADMIN_ID) == "00000000-0000-0000-0000-000000000010"
+
+    def test_seeded_users_have_distinct_ids(self):
+        """A shared primary key would silently drop one seeded user."""
+        with patch.dict(os.environ, _DEFAULT_SEED_ENV, clear=False):
+            import scripts.seed_db as seed_mod
+
+        ids = [
+            seed_mod.SEED_SUPERADMIN_ID,
+            seed_mod.SEED_ADMIN_ID,
+            seed_mod.SEED_ANALYST_ID,
+            seed_mod.SEED_VIEWER_ID,
+        ]
+        assert len(set(ids)) == len(ids)
 
 
 class TestSeedStats:
@@ -171,20 +178,27 @@ class TestSeedStats:
 class TestEnvironmentGuard:
     """Test that seed script blocks execution outside development."""
 
-    def test_blocks_in_production(self):
-        """Should raise SystemExit when ENVIRONMENT=production."""
-        with patch.dict(os.environ, _DEFAULT_SEED_ENV, clear=False):
-            import scripts.seed_db as seed_mod
-        
-        # The module-level guard checks settings.ENVIRONMENT
-        # We can test the logic by checking the allowed environments
-        assert "development" in seed_mod._ALLOWED_SEED_ENVIRONMENTS
-        assert "production" not in seed_mod._ALLOWED_SEED_ENVIRONMENTS
-        assert "staging" not in seed_mod._ALLOWED_SEED_ENVIRONMENTS
+    @staticmethod
+    def _reload_with_environment(environment: str) -> None:
+        import scripts.seed_db as seed_mod
+        from app.core.config import settings
+
+        with (
+            patch.dict(os.environ, _DEFAULT_SEED_ENV, clear=False),
+            patch.object(settings, "ENVIRONMENT", environment),
+        ):
+            importlib.reload(seed_mod)
+
+    @pytest.mark.parametrize("environment", ["production", "staging"])
+    def test_blocks_outside_development(self, environment):
+        """Importing the script must exit when ENVIRONMENT is not development."""
+        try:
+            with pytest.raises(SystemExit) as exc_info:
+                self._reload_with_environment(environment)
+            assert exc_info.value.code == 1
+        finally:
+            self._reload_with_environment("development")
 
     def test_allows_in_development(self):
-        """Should allow execution when ENVIRONMENT=development."""
-        with patch.dict(os.environ, _DEFAULT_SEED_ENV, clear=False):
-            import scripts.seed_db as seed_mod
-        
-        assert "development" in seed_mod._ALLOWED_SEED_ENVIRONMENTS
+        """Importing the script succeeds when ENVIRONMENT=development."""
+        self._reload_with_environment("development")

@@ -5,6 +5,7 @@ import { Link, Outlet } from "@tanstack/react-router";
 import { roleLabel, useCurrentUser, useSignOut } from "@/features/auth";
 import { Button } from "@/components/ui/button";
 import { navigationFor } from "../lib/navigation";
+import { TenantSwitcher } from "./tenant-switcher";
 
 export function AppShell() {
   const { data: user } = useCurrentUser();
@@ -33,6 +34,7 @@ export function AppShell() {
               <span className="block text-xs text-muted-foreground">{roleLabel(user.role)}</span>
             </div>
           )}
+          <TenantSwitcher />
           <ThemeToggle />
           <Button variant="outline" disabled={signOut.isPending} onClick={() => signOut.mutate()}>
             <LogOut aria-hidden="true" className="size-4" />

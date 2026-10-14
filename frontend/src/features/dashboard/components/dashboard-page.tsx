@@ -4,7 +4,7 @@ import { AsyncSection } from "@/components/async-section";
 import { MetricCard } from "@/components/metric-card";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { useCurrentUser } from "@/features/auth";
+import { useCurrentUser, useEffectiveTenantId } from "@/features/auth";
 import { formatDateTime, formatRatio } from "@/lib/format";
 import {
   criticalOpen,
@@ -29,6 +29,16 @@ export function DashboardPage() {
   const { data: user } = useCurrentUser();
   const query = useDashboardSummary();
   const summary = query.data;
+  const tenantId = useEffectiveTenantId();
+
+  if (user?.is_superadmin && tenantId === null) {
+    return (
+      <section className="space-y-6">
+        <PageHeader title="Panel" description="Resumen de la exposición de tu organización." />
+        <p>Selecciona una organización en la cabecera para ver el panel.</p>
+      </section>
+    );
+  }
 
   return (
     <section className="space-y-6">

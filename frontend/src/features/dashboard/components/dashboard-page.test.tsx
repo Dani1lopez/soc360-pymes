@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { setActiveTenantId } from "@/lib/active-tenant";
 import { currentUserQueryKey } from "@/features/auth";
 import { makeUser } from "@/test/fixtures/auth";
 import { makeDashboardSummary } from "@/test/fixtures/dashboard";
@@ -18,7 +19,54 @@ function setup({ calls = vi.fn() }: { calls?: () => void } = {}) {
   return renderShell(<DashboardPage />, currentUserQueryKey, makeUser({ role: "analyst" }));
 }
 
+afterEach(() => setActiveTenantId(null));
+
 describe("DashboardPage", () => {
+  it("does not request a summary until a superadmin selects an organization", async () => {
+    const calls = vi.fn();
+    server.use(
+      http.get("*/api/v1/dashboard/summary", () => {
+        calls();
+        return HttpResponse.json(makeDashboardSummary());
+      }),
+    );
+    renderShell(
+      <DashboardPage />,
+      currentUserQueryKey,
+      makeUser({ is_superadmin: true, tenant_id: null }),
+    );
+    expect(
+      await screen.findByText("Selecciona una organización en la cabecera para ver el panel."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Actualizar/ })).not.toBeInTheDocument();
+    expect(calls).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("scopes the request only for superadmins (%s)", async (isSuperadmin) => {
+    setActiveTenantId("selected-tenant");
+    const urls: URL[] = [];
+    server.use(
+      http.get("*/api/v1/dashboard/summary", ({ request }) => {
+        urls.push(new URL(request.url));
+        return HttpResponse.json(makeDashboardSummary());
+      }),
+    );
+    const { queryClient } = renderShell(
+      <DashboardPage />,
+      currentUserQueryKey,
+      makeUser({
+        role: "admin",
+        is_superadmin: isSuperadmin,
+        ...(isSuperadmin ? { tenant_id: null } : {}),
+      }),
+    );
+    await screen.findByText("Activos vigilados");
+    expect(urls).toHaveLength(1);
+    expect(urls[0]?.search).toBe(isSuperadmin ? "?tenant_id=selected-tenant" : "");
+    expect(
+      queryClient.getQueryData(["dashboard", "summary", isSuperadmin ? "selected-tenant" : "own"]),
+    ).toBeDefined();
+  });
   it("shows the four metrics with their hints", async () => {
     setup();
 

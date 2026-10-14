@@ -154,10 +154,22 @@ export function restoreSession(): Promise<string | null> {
   return refreshSession();
 }
 
+function postLogout(token: string | null): Promise<Response> {
+  // The backend authenticates logout with the bearer; without it the request
+  // is a 401 and the refresh cookie would survive.
+  const headers = token !== null ? { Authorization: `Bearer ${token}` } : undefined;
+  return fetch(LOGOUT_PATH, { method: "POST", credentials: "include", headers });
+}
+
 /** Revoke the session on the backend, then forget it locally no matter what. */
 export async function signOut(): Promise<void> {
   try {
-    await fetch(LOGOUT_PATH, { method: "POST", credentials: "include" });
+    const response = await postLogout(bearer);
+    if (response.status === 401) {
+      // The access token expired: rotate it once so the logout can authenticate.
+      const fresh = await refreshSession();
+      if (fresh !== null) await postLogout(fresh);
+    }
   } catch {
     // Offline logout must still clear the local session.
   }

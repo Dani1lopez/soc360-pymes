@@ -8,6 +8,7 @@ import uuid
 from argparse import ArgumentParser
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -45,7 +46,7 @@ if settings.ENVIRONMENT not in _ALLOWED_SEED_ENVIRONMENTS:
 
 SEED_TENANT_ID     = uuid.UUID("00000000-0000-0000-0000-000000000001")
 SEED_SUPERADMIN_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
-SEED_ADMIN_ID      = uuid.UUID("00000000-0000-0000-0000-000000000010")
+SEED_ADMIN_ID      = uuid.UUID("00000000-0000-0000-0000-000000000011")
 SEED_ANALYST_ID    = uuid.UUID("00000000-0000-0000-0000-000000000012")
 SEED_VIEWER_ID     = uuid.UUID("00000000-0000-0000-0000-000000000013")
 
@@ -61,9 +62,9 @@ def _validate_seed_passwords() -> None:
         "SEED_ANALYST_PASSWORD",
         "SEED_VIEWER_PASSWORD",
     ]
-    missing = [t for t in required if os.getenv(t) is None]
+    missing = [t for t in required if not os.getenv(t)]
     if missing:
-        print(f"❌  Seed bloqueado — faltan variables de entorno:")
+        print("❌  Seed bloqueado — faltan variables de entorno:")
         for var in missing:
             print(f"  . {var}")
         print("\n Definidas en .env o al ejecutar:")
@@ -72,10 +73,10 @@ def _validate_seed_passwords() -> None:
 
 _validate_seed_passwords()
 
-_SUPERADMIN_PASS = os.getenv("SEED_SUPERADMIN_PASSWORD")
-_ADMIN_PASS      = os.getenv("SEED_ADMIN_PASSWORD")
-_ANALYST_PASS    = os.getenv("SEED_ANALYST_PASSWORD")
-_VIEWER_PASS     = os.getenv("SEED_VIEWER_PASSWORD")
+_SUPERADMIN_PASS = os.environ["SEED_SUPERADMIN_PASSWORD"]
+_ADMIN_PASS      = os.environ["SEED_ADMIN_PASSWORD"]
+_ANALYST_PASS    = os.environ["SEED_ANALYST_PASSWORD"]
+_VIEWER_PASS     = os.environ["SEED_VIEWER_PASSWORD"]
 
 # ── Datos de seed ────────────────────────────────────────────────────────────
 # Los hashes bcrypt se calculan aquí UNA SOLA VEZ al arrancar el script.
@@ -83,7 +84,7 @@ _VIEWER_PASS     = os.getenv("SEED_VIEWER_PASSWORD")
 # evaluadas en import time, pytest los recalcularía en cada test file
 # que importe este módulo (~100ms × 4 hashes × N test files = segundos perdidos).
 
-def _build_seed_data() -> tuple[dict, dict, list[dict]]:
+def _build_seed_data() -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     """Construye los datos de seed calculando los hashes una sola vez."""
 
     tenant = {
@@ -315,7 +316,7 @@ async def main(dry_run: bool = False) -> None:
             print(f"   {line}")
 
     if not dry_run:
-        print("\n   ✅ Development users seeded (credentials configured)")        
+        print("\n   ✅ Development users seeded (credentials configured)")
 
     if stats.errors:
         print(f"\n   ⚠️   {stats.errors} error(s) durante el seed. Revisa los logs.\n")

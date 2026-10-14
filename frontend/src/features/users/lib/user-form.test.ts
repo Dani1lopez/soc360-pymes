@@ -81,6 +81,48 @@ describe("toUserCreateInput", () => {
 });
 
 describe("formFromUser and toUserUpdateInput", () => {
+  it("sends only the changed name for an admin", () => {
+    const user = makeUser({ role: "admin" });
+    expect(
+      toUserUpdateInput({ ...formFromUser(user), fullName: "  Nuevo nombre  " }, user),
+    ).toEqual({
+      full_name: "Nuevo nombre",
+    });
+  });
+
+  it("omits the unchanged superadmin role when editing the name", () => {
+    const user = makeUser({ role: "superadmin", tenant_id: null });
+    expect(toUserUpdateInput({ ...formFromUser(user), fullName: "Nuevo nombre" }, user)).toEqual({
+      full_name: "Nuevo nombre",
+    });
+  });
+
+  it("includes a changed role", () => {
+    const user = makeUser({ role: "viewer" });
+    expect(toUserUpdateInput({ ...formFromUser(user), role: "analyst" }, user)).toEqual({
+      role: "analyst",
+    });
+  });
+
+  it("returns an empty object for unchanged values after trimming", () => {
+    const user = makeUser();
+    expect(toUserUpdateInput({ ...formFromUser(user), email: ` ${user.email} ` }, user)).toEqual(
+      {},
+    );
+  });
+
+  it("includes changed email and active state", () => {
+    const user = makeUser({ is_active: true });
+    expect(
+      toUserUpdateInput(
+        { ...formFromUser(user), email: " nuevo@example.com ", isActive: false },
+        user,
+      ),
+    ).toEqual({
+      email: "nuevo@example.com",
+      is_active: false,
+    });
+  });
   it("never sends the secret on update", () => {
     const user = makeUser({ role: "analyst", is_active: false });
     const state = formFromUser(user);
@@ -91,11 +133,6 @@ describe("formFromUser and toUserUpdateInput", () => {
       role: "analyst",
       isActive: false,
     });
-    expect(toUserUpdateInput(state)).toEqual({
-      email: user.email,
-      full_name: user.full_name,
-      role: "analyst",
-      is_active: false,
-    });
+    expect(toUserUpdateInput({ ...state, initialSecret: "doce-caracteres" }, user)).toEqual({});
   });
 });

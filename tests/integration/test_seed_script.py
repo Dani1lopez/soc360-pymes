@@ -7,10 +7,51 @@ from __future__ import annotations
 
 import importlib
 import os
+import subprocess
+import sys
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class TestSeedScriptRunsAsItsOwnEntryPoint:
+    """The script must work when it is the only entry point.
+
+    Every other test in this file imports the module inside the pytest process,
+    where earlier imports have already populated SQLAlchemy's mapper registry. A
+    missing model import therefore stayed invisible: it only broke when the
+    script ran on its own, which is exactly what the container does.
+
+    ``configure_mappers()`` is the step that resolves those string relationship
+    names, and it needs no database connection.
+    """
+
+    def test_mappers_configure_in_a_fresh_interpreter(self) -> None:
+        env = dict(os.environ)
+        env.update(_DEFAULT_SEED_ENV)
+        env["ENVIRONMENT"] = "development"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import scripts.seed_db; "
+                "from sqlalchemy.orm import configure_mappers; "
+                "configure_mappers(); "
+                "print('mappers configured')",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            env=env,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "mappers configured" in result.stdout
 
 
 # Default env vars needed to import seed_db without SystemExit

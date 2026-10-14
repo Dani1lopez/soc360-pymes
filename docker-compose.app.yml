@@ -3,14 +3,22 @@
 #   ./scripts/demo_bootstrap.py                                        # once
 #   docker compose -f docker-compose.app.yml up --build
 #
+# The project name is explicit on purpose. Without it Compose would derive it
+# from the directory name, which is the same project as the development stack,
+# and the shared service names (worker, beat) would make Compose recreate the
+# development containers with this configuration instead of leaving them alone.
+name: soc360-app
+#
 # Why a separate file instead of docker-compose.yml: that one keeps local
 # infrastructure behind profiles (postgres for dev, postgres-test and toxiproxy
 # for tests) and docker-compose.worker.yml is the development worker overlay,
 # which requires .env.worker. Keeping this stack apart leaves both workflows
 # untouched, at the cost of repeating the postgres and redis definitions.
 #
-# No credential is written in this file. The passwords and the application
-# secret come from .env, and `scripts/demo_bootstrap.py` generates them once.
+# Credentials are never written here. They are read from .env, which
+# `scripts/demo_bootstrap.py` fills in, and only ever appear interpolated inside
+# a connection URL or a command argument. Run that script first: without it the
+# application refuses to start, because its settings require those values.
 #
 # TWO DATABASE ROLES, AND THIS IS NOT OPTIONAL:
 #   soc360_migration — owns the schema and runs the migrations
@@ -21,16 +29,19 @@
 # nothing would fail visibly.
 
 services:
+  # The owner role and its password come from .env; only the role name is
+  # overridden, because .env carries the development stack's name.
   postgres:
     image: postgres:16-alpine
     container_name: soc360_app_postgres
+    env_file:
+      - path: .env
+        required: true
     environment:
       POSTGRES_USER: soc360_migration
-      POSTGRES_PASSWORD:<redacted-by-secret-guard>}
       POSTGRES_DB: ${APP_DB_NAME:-soc360}
-      # Consumed by docker/postgres-init/10-roles.sh on first start only.
+      # Read by docker/postgres-init/10-roles.sh, on first start only.
       APP_DB_USER: soc360_app
-      APP_DB_PASSWORD:<redacted-by-secret-guard>}
     volumes:
       - soc360_app_postgres:/var/lib/postgresql/data
       - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
@@ -41,6 +52,8 @@ services:
       retries: 12
     restart: unless-stopped
 
+  # No env_file: the container needs no credential of its own. Compose
+  # interpolates the required value into the command and the healthcheck.
   redis:
     image: redis:7-alpine
     container_name: soc360_app_redis
@@ -48,10 +61,9 @@ services:
       redis-server
       --maxmemory ${REDIS_MAXMEMORY:-256mb}
       --maxmemory-policy noeviction
-      --requirepass ${APP_REDIS_PASSWORD:?run scripts/demo_bootstrap.py first}
+      --requirepass ${REDIS_PASSWORD}
     healthcheck:
-      test:
-        ["CMD", "redis-cli", "-a", "${APP_REDIS_PASSWORD:?run scripts/demo_bootstrap.py first}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -70,10 +82,7 @@ services:
         required: true
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
-      DATABASE_URL:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
-      DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_migration:${POSTGRES_PASSWORD:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
-      POSTGRES_USER: soc360_migration
-      POSTGRES_DB: ${APP_DB_NAME:-soc360}
+      DATABASE_URL_MIGRATION: ${STACK_DB_MIGRATION_DSN}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
     depends_on:
@@ -94,17 +103,15 @@ services:
         required: true
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
-      DATABASE_URL:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
-      DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_migration:${POSTGRES_PASSWORD:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
-      POSTGRES_USER: soc360_migration
-      POSTGRES_DB: ${APP_DB_NAME:-soc360}
+      # The application role, never the schema owner: this is what keeps row
+      # level security in force.
+      DATABASE_URL: ${STACK_DB_DSN}
+      DATABASE_URL_MIGRATION: ${STACK_DB_MIGRATION_DSN}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
-      REDIS_PASSWORD: ${APP_REDIS_PASSWORD:?run scripts/demo_bootstrap.py first}
-    ports:
-      # Debug convenience only, and bound to the loopback interface: the browser
-      # reaches the API through nginx, on the same origin.
-      - "127.0.0.1:8000:8000"
+    # No published port on purpose: nginx reaches the API over the internal
+    # network, so the only public entry point is the frontend. To debug it,
+    # `docker compose -f docker-compose.app.yml exec api curl -s localhost:8000`.
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -121,13 +128,10 @@ services:
         required: true
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
-      DATABASE_URL:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
-      DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_migration:${POSTGRES_PASSWORD:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
-      POSTGRES_USER: soc360_migration
-      POSTGRES_DB: ${APP_DB_NAME:-soc360}
+      DATABASE_URL: ${STACK_DB_DSN}
+      DATABASE_URL_MIGRATION: ${STACK_DB_MIGRATION_DSN}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
-      REDIS_PASSWORD: ${APP_REDIS_PASSWORD:?run scripts/demo_bootstrap.py first}
       # Secure by default. Turn these on in .env only for a local demo: see
       # docs/operations/demo-scan.md.
       SCAN_EXECUTION_ENABLED: ${SCAN_EXECUTION_ENABLED:-false}
@@ -163,13 +167,10 @@ services:
         required: true
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
-      DATABASE_URL:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
-      DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_migration:${POSTGRES_PASSWORD:<redacted-by-secret-guard>}@postgres:5432/${APP_DB_NAME:-soc360}
-      POSTGRES_USER: soc360_migration
-      POSTGRES_DB: ${APP_DB_NAME:-soc360}
+      DATABASE_URL: ${STACK_DB_DSN}
+      DATABASE_URL_MIGRATION: ${STACK_DB_MIGRATION_DSN}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
-      REDIS_PASSWORD: ${APP_REDIS_PASSWORD:?run scripts/demo_bootstrap.py first}
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     read_only: true
@@ -189,7 +190,9 @@ services:
     build:
       context: ./frontend
     ports:
-      - "8080:80"
+      # 8088 rather than 80 or 8080: those are commonly taken on a developer
+      # machine (macOS ships an Apache listening on 8080).
+      - "${APP_HTTP_PORT:-8088}:80"
     depends_on:
       api:
         condition: service_started

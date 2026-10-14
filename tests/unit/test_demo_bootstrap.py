@@ -35,6 +35,7 @@ def _template() -> str:
             _line("APP_NAME", "SOC 360 PYMEs"),
             _line("SECRET_KEY"),
             _line("LOCK_KEY_SECRET"),
+            _line("DB_OWNER_PASSWORD"),
             _line("GROQ_API_KEY"),
             _line("POSTGRES_PASSWORD"),
             "",
@@ -108,7 +109,7 @@ def test_second_run_changes_nothing(
 
     assert script.main() == 0
     assert script.ENV_FILE.read_bytes() == first_run
-    assert "Nothing to fill" in capsys.readouterr().out
+    assert "Nothing to write" in capsys.readouterr().out
 
 
 def test_quoted_empty_value_is_filled(script: ModuleType) -> None:
@@ -135,3 +136,36 @@ def test_export_prefix_survives(script: ModuleType) -> None:
     assert len(exported) == 1
     assert exported[0] != exported_empty
     assert _values(script.ENV_FILE)["SECRET_KEY"]
+
+
+def test_writes_derived_connection_urls(script: ModuleType) -> None:
+    """The stack needs URLs pointing at the Compose service, not the host."""
+    script.main()
+
+    values = _values(script.ENV_FILE)
+    app_url = values[script.DSN_KEYS[0]]
+    owner_url = values[script.DSN_KEYS[1]]
+    suffix = "@" + script.DB_HOST + ":" + str(script.DB_PORT) + "/"
+
+    assert app_url.startswith(script.DSN_SCHEME + "://" + script.APP_ROLE + ":")
+    assert owner_url.startswith(script.DSN_SCHEME + "://" + script.OWNER_ROLE + ":")
+    assert suffix in app_url
+    assert suffix in owner_url
+    # The schema owner and the application role must never share a credential:
+    # an application credential that also owns the schema could bypass every
+    # row level security policy.
+    assert app_url != owner_url
+
+
+def test_derived_urls_track_a_rotated_value(script: ModuleType) -> None:
+    script.main()
+    before = _values(script.ENV_FILE)[script.DSN_KEYS[0]]
+
+    with script.ENV_FILE.open("a", encoding="utf-8") as handle:
+        handle.write(_line("APP_DB_PASSWORD", "rotated-value") + "\n")
+
+    script.main()
+
+    after = _values(script.ENV_FILE)[script.DSN_KEYS[0]]
+    assert after != before
+    assert "rotated-value" in after

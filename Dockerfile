@@ -52,6 +52,15 @@ COPY app/ ./app/
 COPY entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 
+# Migration assets. The one-shot `migrate` service runs `alembic upgrade head`
+# inside this image, so it needs the migration scripts, the Alembic
+# configuration (whose script_location is `migrations` and whose
+# prepend_sys_path is `.`) and the Gunicorn configuration referenced by
+# entrypoint.sh.
+COPY migrations/ ./migrations/
+COPY alembic.ini ./
+COPY gunicorn_conf.py ./
+
 # Writable directory for multiprocess Prometheus metric files.
 # Each Gunicorn worker writes its own <metric>_<pid>.db file here.
 ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc

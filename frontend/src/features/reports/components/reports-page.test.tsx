@@ -1,7 +1,8 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it, vi } from "vitest";
-import type { ReportResponse, Role } from "@/api/schema";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setActiveTenantId } from "@/lib/active-tenant";
+import type { ReportResponse, Role, UserResponse } from "@/api/schema";
 import { currentUserQueryKey } from "@/features/auth";
 import { formatDateTime } from "@/lib/format";
 import { makeAsset, assetList } from "@/test/fixtures/assets";
@@ -12,15 +13,32 @@ import { renderShell } from "@/test/render";
 import { ReportsPage } from "./reports-page";
 
 const asset = makeAsset();
-function setup(items: ReportResponse[] = [makeReport()], role: Role = "admin") {
+function setup(
+  items: ReportResponse[] = [makeReport()],
+  role: Role = "admin",
+  user?: UserResponse,
+) {
   server.use(
     http.get("*/api/v1/assets/", () => HttpResponse.json(assetList([asset]))),
     http.get("*/api/v1/reports/", () => HttpResponse.json(reportList(items))),
   );
-  return renderShell(<ReportsPage />, currentUserQueryKey, makeUser({ role }));
+  return renderShell(<ReportsPage />, currentUserQueryKey, user ?? makeUser({ role }));
 }
 
+beforeEach(() => setActiveTenantId(null));
+
 describe("ReportsPage", () => {
+  it.each(["admin", "superadmin"] as const)("warns %s without a tenant", async (role) => {
+    setup([], role, makeUser({ role, tenant_id: null, is_superadmin: role === "superadmin" }));
+    expect(
+      await screen.findByText(
+        role === "superadmin"
+          ? "Selecciona una organización en la cabecera para crear registros."
+          : /necesitas una cuenta asociada a una organización/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Nuevo informe/ })).not.toBeInTheDocument();
+  });
   it("lists type, status, asset and dates with the metadata-only notice", async () => {
     const report = makeReport({ generated_at: "2026-10-03T12:00:00Z" });
     setup([report]);
@@ -58,36 +76,49 @@ describe("ReportsPage", () => {
     }
     expect(screen.queryByRole("columnheader", { name: "Acciones" })).not.toBeInTheDocument();
   });
-  it("creates using the current user's tenant", async () => {
-    setup();
-    const posted = vi.fn();
-    server.use(
-      http.post("*/api/v1/reports/", async ({ request }) => {
-        posted(await request.json());
-        return HttpResponse.json(makeReport(), { status: 201 });
-      }),
-    );
-    await screen.findByText(makeReport().name);
-    await screen.findByRole("option", { name: asset.value });
-    fireEvent.click(screen.getByRole("button", { name: /Nuevo informe/ }));
-    const form = within(screen.getByRole("region", { name: "Nuevo informe" }));
-    fireEvent.change(form.getByLabelText("Nombre"), { target: { value: " Ejecutivo " } });
-    fireEvent.change(form.getByLabelText("Activo"), { target: { value: asset.id } });
-    fireEvent.change(form.getByLabelText("Tipo"), { target: { value: "executive" } });
-    fireEvent.click(form.getByRole("button", { name: "Crear informe" }));
-    await waitFor(() =>
-      expect(posted).toHaveBeenCalledWith({
-        tenant_id: makeUser().tenant_id,
-        asset_id: asset.id,
-        name: "Ejecutivo",
-        report_type: "executive",
-        summary: null,
-      }),
-    );
-    await waitFor(() =>
-      expect(screen.queryByRole("region", { name: "Nuevo informe" })).not.toBeInTheDocument(),
-    );
-  });
+  it.each(["admin", "superadmin"] as const)(
+    "creates using the effective tenant as %s",
+    async (role) => {
+      const tenantId = role === "superadmin" ? "selected-tenant" : makeUser().tenant_id;
+      setActiveTenantId("selected-tenant");
+      setup(
+        undefined,
+        role,
+        makeUser({
+          role,
+          tenant_id: role === "superadmin" ? null : makeUser().tenant_id,
+          is_superadmin: role === "superadmin",
+        }),
+      );
+      const posted = vi.fn();
+      server.use(
+        http.post("*/api/v1/reports/", async ({ request }) => {
+          posted(await request.json());
+          return HttpResponse.json(makeReport(), { status: 201 });
+        }),
+      );
+      await screen.findByText(makeReport().name);
+      await screen.findByRole("option", { name: asset.value });
+      fireEvent.click(screen.getByRole("button", { name: /Nuevo informe/ }));
+      const form = within(screen.getByRole("region", { name: "Nuevo informe" }));
+      fireEvent.change(form.getByLabelText("Nombre"), { target: { value: " Ejecutivo " } });
+      fireEvent.change(form.getByLabelText("Activo"), { target: { value: asset.id } });
+      fireEvent.change(form.getByLabelText("Tipo"), { target: { value: "executive" } });
+      fireEvent.click(form.getByRole("button", { name: "Crear informe" }));
+      await waitFor(() =>
+        expect(posted).toHaveBeenCalledWith({
+          tenant_id: tenantId,
+          asset_id: asset.id,
+          name: "Ejecutivo",
+          report_type: "executive",
+          summary: null,
+        }),
+      );
+      await waitFor(() =>
+        expect(screen.queryByRole("region", { name: "Nuevo informe" })).not.toBeInTheDocument(),
+      );
+    },
+  );
   it.each([
     ["Estado", "completed", "status"],
     ["Tipo", "technical", "report_type"],

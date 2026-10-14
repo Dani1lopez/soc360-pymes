@@ -1,7 +1,8 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it, vi } from "vitest";
-import type { Role, VulnerabilityResponse } from "@/api/schema";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setActiveTenantId } from "@/lib/active-tenant";
+import type { Role, UserResponse, VulnerabilityResponse } from "@/api/schema";
 import { currentUserQueryKey } from "@/features/auth";
 import { makeAsset } from "@/test/fixtures/assets";
 import { makeUser } from "@/test/fixtures/auth";
@@ -19,7 +20,8 @@ function setup(
   {
     role = "admin",
     onList,
-  }: { role?: Role; onList?: (params: Record<string, string>) => void } = {},
+    user,
+  }: { role?: Role; user?: UserResponse; onList?: (params: Record<string, string>) => void } = {},
 ) {
   server.use(
     http.get("*/api/v1/scans/", () =>
@@ -34,10 +36,23 @@ function setup(
       return HttpResponse.json(vulnerabilityList(items, { offset: Number(params.offset ?? 0) }));
     }),
   );
-  return renderShell(<VulnerabilitiesPage />, currentUserQueryKey, makeUser({ role }));
+  return renderShell(<VulnerabilitiesPage />, currentUserQueryKey, user ?? makeUser({ role }));
 }
 
+beforeEach(() => setActiveTenantId(null));
+
 describe("VulnerabilitiesPage", () => {
+  it.each(["admin", "superadmin"] as const)("warns %s without a tenant", async (role) => {
+    setup([], { user: makeUser({ role, tenant_id: null, is_superadmin: role === "superadmin" }) });
+    expect(
+      await screen.findByText(
+        role === "superadmin"
+          ? "Selecciona una organización en la cabecera para crear registros."
+          : /necesitas una cuenta asociada a una organización/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Registrar hallazgo/ })).not.toBeInTheDocument();
+  });
   it("lists findings with severity, status, CVSS, CVE and asset", async () => {
     setup([
       makeVulnerability(),
@@ -95,8 +110,16 @@ describe("VulnerabilitiesPage", () => {
     expect(screen.queryByRole("button", { name: "Eliminar" })).not.toBeInTheDocument();
   });
 
-  it("registers a finding with the selected scan", async () => {
-    setup([makeVulnerability()]);
+  it.each(["admin", "superadmin"] as const)("registers a finding as %s", async (role) => {
+    const tenantId = role === "superadmin" ? "selected-tenant" : makeUser().tenant_id;
+    setActiveTenantId("selected-tenant");
+    setup([makeVulnerability()], {
+      user: makeUser({
+        role,
+        tenant_id: role === "superadmin" ? null : makeUser().tenant_id,
+        is_superadmin: role === "superadmin",
+      }),
+    });
     const posted = vi.fn();
     server.use(
       http.post("*/api/v1/vulnerabilities/", async ({ request }) => {
@@ -115,7 +138,7 @@ describe("VulnerabilitiesPage", () => {
 
     await waitFor(() =>
       expect(posted).toHaveBeenCalledWith({
-        tenant_id: makeUser().tenant_id,
+        tenant_id: tenantId,
         scan_id: scan.id,
         title: "Puerto abierto",
         severity: "medium",

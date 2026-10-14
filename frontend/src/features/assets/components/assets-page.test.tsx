@@ -7,6 +7,7 @@ import { makeUser } from "@/test/fixtures/auth";
 import { assetList, makeAsset } from "@/test/fixtures/assets";
 import { server } from "@/test/msw";
 import { renderWithQueryClient } from "@/test/render";
+import { setActiveTenantId } from "@/lib/active-tenant";
 import { AssetsPage } from "./assets-page";
 
 type ListRequest = { offset: string | null; limit: string | null };
@@ -33,6 +34,7 @@ function useUser(role: Role = "admin") {
 }
 
 beforeEach(() => {
+  setActiveTenantId(null);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -95,7 +97,7 @@ describe("AssetsPage", () => {
   it("warns an admin without a tenant instead of offering a broken form", async () => {
     server.use(
       http.get("*/api/v1/users/me", () =>
-        HttpResponse.json(makeUser({ role: "superadmin", tenant_id: null, is_superadmin: true })),
+        HttpResponse.json(makeUser({ role: "admin", tenant_id: null })),
       ),
     );
     useList([makeAsset()]);
@@ -108,38 +110,67 @@ describe("AssetsPage", () => {
     expect(screen.queryByRole("button", { name: /Nuevo activo/ })).not.toBeInTheDocument();
   });
 
-  it("creates an asset with the signed-in tenant and closes the form", async () => {
-    useUser();
-    useList([makeAsset()]);
-    const posted = vi.fn();
+  it("asks superadmins to select an organization", async () => {
     server.use(
-      http.post("*/api/v1/assets/", async ({ request }) => {
-        posted(await request.json());
-        return HttpResponse.json(makeAsset({ id: "nuevo" }), { status: 201 });
-      }),
+      http.get("*/api/v1/users/me", () =>
+        HttpResponse.json(makeUser({ role: "superadmin", tenant_id: null, is_superadmin: true })),
+      ),
     );
-
+    useList([]);
     renderWithQueryClient(<AssetsPage />);
-    await screen.findByText("acme-corp.example");
-
-    fireEvent.click(screen.getByRole("button", { name: /Nuevo activo/ }));
-    fireEvent.change(screen.getByLabelText("Tipo"), { target: { value: "web_app" } });
-    fireEvent.change(screen.getByLabelText("Valor"), {
-      target: { value: "https://app.acme-corp.example" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Crear activo" }));
-
-    await waitFor(() =>
-      expect(posted).toHaveBeenCalledWith({
-        tenant_id: makeUser().tenant_id,
-        type: "web_app",
-        value: "https://app.acme-corp.example",
-      }),
-    );
-    await waitFor(() =>
-      expect(screen.queryByRole("heading", { name: "Nuevo activo" })).not.toBeInTheDocument(),
-    );
+    expect(
+      await screen.findByText("Selecciona una organización en la cabecera para crear registros."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Nuevo activo/ })).not.toBeInTheDocument();
   });
+
+  it.each(["admin", "superadmin"] as const)(
+    "creates an asset as %s and closes the form",
+    async (role) => {
+      const tenantId = role === "superadmin" ? "selected-tenant" : makeUser().tenant_id;
+      setActiveTenantId("selected-tenant");
+      server.use(
+        http.get("*/api/v1/users/me", () =>
+          HttpResponse.json(
+            makeUser({
+              role,
+              tenant_id: role === "superadmin" ? null : makeUser().tenant_id,
+              is_superadmin: role === "superadmin",
+            }),
+          ),
+        ),
+      );
+      useList([makeAsset()]);
+      const posted = vi.fn();
+      server.use(
+        http.post("*/api/v1/assets/", async ({ request }) => {
+          posted(await request.json());
+          return HttpResponse.json(makeAsset({ id: "nuevo" }), { status: 201 });
+        }),
+      );
+
+      renderWithQueryClient(<AssetsPage />);
+      await screen.findByText("acme-corp.example");
+
+      fireEvent.click(screen.getByRole("button", { name: /Nuevo activo/ }));
+      fireEvent.change(screen.getByLabelText("Tipo"), { target: { value: "web_app" } });
+      fireEvent.change(screen.getByLabelText("Valor"), {
+        target: { value: "https://app.acme-corp.example" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Crear activo" }));
+
+      await waitFor(() =>
+        expect(posted).toHaveBeenCalledWith({
+          tenant_id: tenantId,
+          type: "web_app",
+          value: "https://app.acme-corp.example",
+        }),
+      );
+      await waitFor(() =>
+        expect(screen.queryByRole("heading", { name: "Nuevo activo" })).not.toBeInTheDocument(),
+      );
+    },
+  );
 
   it("validates the pair type/value before calling the API", async () => {
     useUser();

@@ -14,7 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ADMIN_ROLES, hasAnyRole, useCurrentUser } from "@/features/auth";
+import { ADMIN_ROLES, hasAnyRole, useCurrentUser, useEffectiveTenantId } from "@/features/auth";
 import { downloadTextFile } from "@/lib/download";
 import { errorMessage } from "@/lib/errors";
 import { formatDateTime } from "@/lib/format";
@@ -37,7 +37,7 @@ export function AssetsPage() {
   // El backend decide con las mismas allowlists; aquí solo se oculta lo que el
   // usuario no puede hacer para no ofrecer acciones que devolverían 403.
   const canWrite = hasAnyRole(user, ADMIN_ROLES);
-  const tenantId = user?.tenant_id ?? null;
+  const tenantId = useEffectiveTenantId();
   const canCreate = canWrite && tenantId !== null;
 
   const items = query.data?.items ?? [];
@@ -88,7 +88,9 @@ export function AssetsPage() {
 
       {canWrite && !canCreate && (
         <p className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
-          Para crear activos necesitas una cuenta asociada a una organización.
+          {user?.is_superadmin || user?.role === "superadmin"
+            ? "Selecciona una organización en la cabecera para crear registros."
+            : "Para crear activos necesitas una cuenta asociada a una organización."}
         </p>
       )}
       {exportCsv.error !== null && (

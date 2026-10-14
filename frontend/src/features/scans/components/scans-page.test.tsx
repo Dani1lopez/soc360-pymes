@@ -1,7 +1,8 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it, vi } from "vitest";
-import type { ScanResponse } from "@/api/schema";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setActiveTenantId } from "@/lib/active-tenant";
+import type { ScanResponse, UserResponse } from "@/api/schema";
 import { currentUserQueryKey } from "@/features/auth";
 import { makeAsset } from "@/test/fixtures/assets";
 import { makeUser } from "@/test/fixtures/auth";
@@ -17,7 +18,12 @@ function setup(
   {
     role = "admin" as const,
     onList,
-  }: { role?: "admin" | "viewer"; onList?: (params: Record<string, string>) => void } = {},
+    user,
+  }: {
+    role?: "admin" | "viewer";
+    user?: UserResponse;
+    onList?: (params: Record<string, string>) => void;
+  } = {},
 ) {
   server.use(
     http.get("*/api/v1/assets/", () =>
@@ -29,10 +35,23 @@ function setup(
       return HttpResponse.json(scanList(scans, { offset: Number(params.offset ?? 0) }));
     }),
   );
-  return renderShell(<ScansPage />, currentUserQueryKey, makeUser({ role }));
+  return renderShell(<ScansPage />, currentUserQueryKey, user ?? makeUser({ role }));
 }
 
+beforeEach(() => setActiveTenantId(null));
+
 describe("ScansPage", () => {
+  it.each(["admin", "superadmin"] as const)("warns %s without a tenant", async (role) => {
+    setup([], { user: makeUser({ role, tenant_id: null, is_superadmin: role === "superadmin" }) });
+    expect(
+      await screen.findByText(
+        role === "superadmin"
+          ? "Selecciona una organización en la cabecera para crear registros."
+          : /necesitas una cuenta asociada a una organización/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Nuevo escaneo/ })).not.toBeInTheDocument();
+  });
   it("lists scans with the asset value and the status label", async () => {
     setup([
       makeScan(),
@@ -124,8 +143,16 @@ describe("ScansPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("scan execution is disabled");
   });
 
-  it("creates a scan with the selected asset", async () => {
-    setup([makeScan()]);
+  it.each(["admin", "superadmin"] as const)("creates a scan as %s", async (role) => {
+    const tenantId = role === "superadmin" ? "selected-tenant" : makeUser().tenant_id;
+    setActiveTenantId("selected-tenant");
+    setup([makeScan()], {
+      user: makeUser({
+        role,
+        tenant_id: role === "superadmin" ? null : makeUser().tenant_id,
+        is_superadmin: role === "superadmin",
+      }),
+    });
     const posted = vi.fn();
     server.use(
       http.post("*/api/v1/scans/", async ({ request }) => {
@@ -146,7 +173,7 @@ describe("ScansPage", () => {
       expect(posted).toHaveBeenCalledWith({
         asset_id: asset.id,
         name: "Auditoría web",
-        tenant_id: makeUser().tenant_id,
+        tenant_id: tenantId,
         type: "web",
         config: { paths: ["/", "/login"] },
       }),

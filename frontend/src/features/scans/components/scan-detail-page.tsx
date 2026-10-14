@@ -5,7 +5,7 @@ import { AsyncSection } from "@/components/async-section";
 import { ConfirmButton } from "@/components/confirm-button";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { ADMIN_ROLES, hasAnyRole, useCurrentUser } from "@/features/auth";
+import { ADMIN_ROLES, hasAnyRole, useCurrentUser, useEffectiveTenantId } from "@/features/auth";
 import { assetValuesById, useAssetOptions } from "@/features/assets";
 import { errorMessage } from "@/lib/errors";
 import { formatDateTime, orDash } from "@/lib/format";
@@ -35,7 +35,7 @@ export function ScanDetailPage({ scanId }: { scanId: string }) {
   const [editing, setEditing] = useState(false);
 
   const canWrite = hasAnyRole(user, ADMIN_ROLES);
-  const tenantId = user?.tenant_id ?? null;
+  const tenantId = useEffectiveTenantId();
   const scan = query.data;
   const assetNames = assetValuesById(assets.data?.items);
   const actionError = run.error ?? cancel.error ?? remove.error;

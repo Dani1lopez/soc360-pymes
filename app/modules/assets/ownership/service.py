@@ -15,6 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.assets import service as assets_service
 from app.modules.assets.ownership.models import AssetOwnershipDeclaration
+from app.modules.assets.ownership.verifiers import (
+    HttpFetch,
+    TxtLookup,
+    target_fingerprint,
+    verify_dns_txt,
+    verify_http_file,
+)
+from app.modules.scans.targets import Resolver
 
 
 class OwnershipAssetNotFoundError(Exception):
@@ -23,6 +31,18 @@ class OwnershipAssetNotFoundError(Exception):
 
 class OwnershipDeclarationNotFoundError(Exception):
     """The asset has no declaration to revoke."""
+
+
+class OwnershipDeclarationRevokedError(Exception):
+    """The declaration was revoked, so it cannot be verified."""
+
+
+class OwnershipNotVerifiableError(Exception):
+    """The method needs no challenge: a declaration is verified on creation."""
+
+
+class OwnershipChallengeFailedError(Exception):
+    """The published challenge does not contain the token."""
 
 
 def _new_token() -> str:
@@ -85,6 +105,61 @@ async def list_declarations(
         )
     )
     return list((await db.execute(stmt)).scalars().all())
+
+
+async def verify_ownership(
+    asset_id: uuid.UUID,
+    *,
+    tenant_id: uuid.UUID | None,
+    db: AsyncSession,
+    txt_lookup: TxtLookup | None = None,
+    http_fetch: HttpFetch | None = None,
+    resolver: Resolver | None = None,
+) -> AssetOwnershipDeclaration:
+    """Run the published challenge and record its answer (decision D3).
+
+    A satisfied challenge marks the declaration verified and stores the
+    resolved fingerprint of the target, which the executor re-checks on every
+    claim. A failed challenge marks the declaration failed; the caller decides
+    how to report it.
+    """
+    declarations = await list_declarations(asset_id, tenant_id=tenant_id, db=db)
+    if not declarations:
+        raise OwnershipDeclarationNotFoundError(str(asset_id))
+
+    declaration = declarations[0]
+    if declaration.status == "revoked":
+        raise OwnershipDeclarationRevokedError(str(declaration.id))
+    if declaration.method == "declaration":
+        raise OwnershipNotVerifiableError(str(declaration.id))
+    if declaration.status == "verified":
+        return declaration
+
+    asset = await assets_service.get_asset(asset_id, tenant_id, db)
+    if asset is None:  # pragma: no cover - list_declarations already scoped it
+        raise OwnershipAssetNotFoundError(str(asset_id))
+
+    if declaration.method == "dns_txt":
+        published = await verify_dns_txt(
+            asset.asset_type, asset.value, declaration.token, lookup=txt_lookup
+        )
+    else:
+        published = await verify_http_file(
+            asset.asset_type, asset.value, declaration.token, fetch=http_fetch
+        )
+
+    if not published:
+        declaration.status = "failed"
+        await db.flush()
+        raise OwnershipChallengeFailedError(str(declaration.id))
+
+    declaration.status = "verified"
+    declaration.verified_at = datetime.now(timezone.utc)
+    declaration.resolved_fingerprint = await target_fingerprint(
+        asset.asset_type, asset.value, resolver=resolver
+    )
+    await db.flush()
+    return declaration
 
 
 async def revoke_ownership(

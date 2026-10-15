@@ -29,13 +29,16 @@ XML = (
 )
 
 
-async def _declare(db, scan: Scan, *, status: str) -> None:
+async def _declare(
+    db, scan: Scan, *, status: str, fingerprint: str | None = None
+) -> None:
     value = await db.scalar(select(Asset.value).where(Asset.id == scan.asset_id))
     db.add(
         AssetOwnershipDeclaration(
             tenant_id=scan.tenant_id,
             asset_id=scan.asset_id,
             declared_value=value,
+            resolved_fingerprint=fingerprint,
             method="declaration",
             token="executor-gate",
             status=status,
@@ -95,7 +98,7 @@ async def test_a_verified_declaration_lets_the_claimed_scan_run(
     db_session, seed_data
 ) -> None:
     scan = await _seed_pending_scan(db_session)
-    await _declare(db_session, scan, status="verified")
+    await _declare(db_session, scan, status="verified", fingerprint="10.0.0.7")
     await db_session.commit()
 
     calls: list = []
@@ -126,3 +129,37 @@ async def test_a_verified_declaration_lets_the_claimed_scan_run(
     assert status == "completed"
     assert failure_reason is None
     assert raw_output
+
+
+async def test_a_target_that_moved_after_verification_is_rejected(
+    db_session, seed_data
+) -> None:
+    """D3: the answer recorded at verification is re-checked on every claim."""
+    scan = await _seed_pending_scan(db_session)
+    await _declare(db_session, scan, status="verified", fingerprint="10.0.0.7")
+    await db_session.commit()
+
+    async def resolver(host: str) -> list[str]:
+        return ["10.0.0.8"]
+
+    async def run(argv, **kwargs):
+        pytest.fail("Nmap must not run when the target moved")
+
+    claimed = await claim_next_scan(db_session)
+    assert claimed is not None
+    scan_id, tenant_id = claimed
+
+    result = await execute_scan(
+        db_session,
+        scan_id,
+        tenant_id=tenant_id,
+        claimed=True,
+        resolver=resolver,
+        run=run,
+    )
+
+    assert result == "failed"
+    status, failure_reason, raw_output = await _row(db_session, scan_id)
+    assert status == "failed"
+    assert failure_reason == "target_fingerprint_changed"
+    assert raw_output is None

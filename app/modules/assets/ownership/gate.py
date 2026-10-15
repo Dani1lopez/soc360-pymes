@@ -22,8 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.assets.models import Asset
 from app.modules.assets.ownership.models import AssetOwnershipDeclaration
 
-# Stable, persistable failure reason (also the API detail for the dispatch gate).
+# Stable, persistable failure reasons (also the API detail for the dispatch gate).
 NOT_VERIFIED_REASON = "asset ownership is not verified"
+FINGERPRINT_CHANGED_REASON = "target_fingerprint_changed"
 
 
 class OwnershipRequiredError(Exception):
@@ -62,3 +63,23 @@ async def ensure_scan_authorized(db: AsyncSession, *, asset_id: uuid.UUID) -> No
     """Raise :class:`OwnershipRequiredError` when the asset may not be scanned."""
     if not await has_verified_declaration(db, asset_id=asset_id):
         raise OwnershipRequiredError()
+
+
+async def recorded_fingerprint(db: AsyncSession, *, asset_id: uuid.UUID) -> str | None:
+    """The answer recorded when the covering declaration was verified (D3).
+
+    ``None`` means the declaration was never verified against a live target (an
+    internal asset declared by hand), so there is nothing to compare.
+    """
+    stmt = (
+        select(AssetOwnershipDeclaration.resolved_fingerprint)
+        .join(Asset, Asset.id == AssetOwnershipDeclaration.asset_id)
+        .where(
+            AssetOwnershipDeclaration.asset_id == asset_id,
+            AssetOwnershipDeclaration.status == "verified",
+            AssetOwnershipDeclaration.declared_value == Asset.value,
+        )
+        .order_by(AssetOwnershipDeclaration.verified_at.desc().nullslast())
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()

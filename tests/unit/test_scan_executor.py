@@ -23,16 +23,14 @@ def setup(monkeypatch):
         flush=AsyncMock(),
         commit=AsyncMock(),
         rollback=AsyncMock(),
-        # ``upsert_findings`` reads the findings already stored for the scan;
-        # ``scalar_one_or_none`` answers the H2 ownership gate.
-        execute=AsyncMock(
-            return_value=SimpleNamespace(
-                all=lambda: [], scalar_one_or_none=lambda: uuid.uuid4()
-            )
-        ),
+        # ``upsert_findings`` reads the findings already stored for the scan.
+        execute=AsyncMock(return_value=SimpleNamespace(all=lambda: [])),
     )
     tenant = uuid.uuid4()
     load = AsyncMock(return_value=(uuid.uuid4(), "hostname", "example.com"))
+    # The ownership gate has its own DB-backed tests; here it only has to pass.
+    monkeypatch.setattr(executor, "ensure_scan_authorized", AsyncMock())
+    monkeypatch.setattr(executor, "recorded_fingerprint", AsyncMock(return_value=None))
     transition = AsyncMock(return_value=True)
     context = AsyncMock()
     events = []

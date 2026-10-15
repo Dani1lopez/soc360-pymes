@@ -30,14 +30,17 @@ from app.agents.scan_graph import (
 from app.core.database import set_tenant_context
 from app.modules.assets.models import Asset
 from app.modules.assets.ownership.gate import (
+    FINGERPRINT_CHANGED_REASON,
     NOT_VERIFIED_REASON,
     OwnershipRequiredError,
     ensure_scan_authorized,
+    recorded_fingerprint,
 )
+from app.modules.assets.ownership.verifiers import target_fingerprint
 from app.modules.scans.models import Scan
 from app.modules.scans.nmap.runner import NmapRunResult, run_nmap
 from app.modules.scans.state import transition_scan
-from app.modules.scans.targets import Resolver
+from app.modules.scans.targets import Resolver, TargetRejectedError
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -133,6 +136,18 @@ async def execute_scan(
             await ensure_scan_authorized(session, asset_id=asset[0])
         except OwnershipRequiredError:
             return await _shielded(fail(NOT_VERIFIED_REASON))
+        # D3: the answer recorded at verification is re-checked on every claim, so
+        # a target whose DNS now points elsewhere is refused instead of scanned.
+        expected = await recorded_fingerprint(session, asset_id=asset[0])
+        if expected is not None:
+            try:
+                current = await target_fingerprint(
+                    asset[1], asset[2], resolver=resolver
+                )
+            except TargetRejectedError as exc:
+                return await _shielded(fail(exc.reason))
+            if current != expected:
+                return await _shielded(fail(FINGERPRINT_CHANGED_REASON))
         graph = build_scan_graph(
             session=session,
             tenant_id=tenant_id,

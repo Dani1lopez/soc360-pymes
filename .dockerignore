@@ -1,0 +1,47 @@
+# Build context for the Python images (Dockerfile targets: worker, runtime).
+#
+# Without this file the context is ~1.4 GB: .venv (194M), venv (182M),
+# frontend/node_modules (383M) and a raw PostgreSQL data directory (72M).
+#
+# The images copy only these paths, so everything else can be excluded:
+#   uv.lock, pyproject.toml, .python-version
+#   app/, migrations/, alembic.ini, entrypoint.sh, gunicorn_conf.py
+
+.git
+.github
+
+# Python environments and caches
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.pyright_cache
+
+# Local data, secrets and tooling output
+.env
+.env*
+docker/postgres-data
+docker/redis-data
+odd
+openspec
+docs
+tests
+frontend
+docker
+
+# scripts/ is deliberately NOT excluded: the runtime image ships the seed
+# script, which is what gives a fresh demo stack somebody to log in as. The
+# script refuses to run outside development, so carrying it is safe.
+
+# Local demonstration stacks and their fixtures: the images do not need them,
+# and docker/demo-target has its own context.
+docker-compose*.yml
+compose*.yml
+*.md
+*.log
+.gitignore
+.dockerignore

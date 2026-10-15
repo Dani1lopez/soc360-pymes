@@ -27,6 +27,13 @@ from app.core.security import hash_password                      # noqa: E402
 from app.modules.tenants.models import Tenant                    # noqa: E402
 from app.modules.users.models import User                        # noqa: E402
 
+# Imported for its side effect, not for use: User declares its relationship to
+# RefreshToken by name, so SQLAlchemy can only resolve it once the class is in
+# the mapper registry. Without this line the script works only when it runs
+# inside a process that has already imported the auth module — which is exactly
+# how it worked when the server imported it and failed when it did not.
+from app.modules.auth.models import RefreshToken  # noqa: E402, F401
+
 logger = get_logger(__name__)
 
 # ── Guard de entorno ─────────────────────────────────────────────────────────

@@ -23,6 +23,15 @@ dependencies = [
     "prometheus-client>=0.26.0",
     "defusedxml>=0.7.1",
     "langgraph==1.2.14",
+    # The production server. entrypoint.sh runs Gunicorn, but it was missing
+    # from the dependencies, so the API image could never start: the API had
+    # only ever been run with uvicorn on the developer machine.
+    "gunicorn==23.0.0",
+    # Gunicorn's default worker is synchronous and cannot serve an ASGI
+    # application, so FastAPI needs a worker that speaks ASGI. This is the
+    # maintained package for that; uvicorn's own uvicorn.workers module is
+    # deprecated.
+    "uvicorn-worker>=0.2,<1",
 ]
 
 [project.optional-dependencies]

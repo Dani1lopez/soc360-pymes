@@ -24,7 +24,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.event_bus import EventBus
-from app.core.database import set_tenant_context
 from app.event_schemas import (
     ScanCreatedEvent,
     ScanDeletedEvent,
@@ -222,16 +221,19 @@ class ScanNotCancellableError(Exception):
 async def cancel_scan(
     scan_id: uuid.UUID, tenant_id: uuid.UUID | None, db: AsyncSession
 ) -> Scan | None:
-    """Cancel only an open scan visible to the caller, then refresh under RLS."""
+    """Cancel only an open scan visible to the caller."""
     scan = await get_scan(scan_id, tenant_id, db)
     if scan is None:
         return None
     if not await transition_scan(db, scan_id, to="cancelled", commit=False):
         await db.rollback()
         raise ScanNotCancellableError()
-    await db.commit()
-    await _restore_tenant_context(db, tenant_id)
+    # Read the row back while the transaction is still open. The commit below
+    # closes it under the production ``get_db``, and a statement afterwards
+    # raises ``InvalidRequestError``, which surfaced as a 500 on a cancellation
+    # that had already been applied.
     await db.refresh(scan)
+    await db.commit()
     return scan
 
 
@@ -245,23 +247,16 @@ class ScanQuotaExceededError(Exception):
         super().__init__("daily scan quota exceeded")
 
 
-async def _restore_tenant_context(db: AsyncSession, tenant_id: uuid.UUID | None) -> None:
-    """Re-apply the RLS context after a commit dropped it.
-
-    ``set_tenant_context`` is transaction-local, so any statement after a
-    commit would otherwise be filtered by RLS and silently match no rows.
-    ``tenant_id=None`` is the superadmin path, as everywhere in this module.
-    """
-    await set_tenant_context(db, tenant_id, is_superadmin=tenant_id is None)
-
-
 async def dispatch_scan(
     scan_id: uuid.UUID, tenant_id: uuid.UUID | None, db: AsyncSession
 ) -> Scan | None:
     """Reserve daily quota atomically, committing before broker delivery.
 
-    Returns the refreshed scan with the tenant context restored, so the
-    caller can keep using the session after the commit.
+    The row is read back before the commit, while the transaction and the RLS
+    context are still alive. Afterwards the session must not be used again: the
+    production ``get_db`` wraps the request in ``session.begin()``, so this
+    commit closes it and any further command raises ``InvalidRequestError``,
+    which is what turned an already committed dispatch into a 500.
     """
     scan = await get_scan(scan_id, tenant_id, db)
     if scan is None:
@@ -302,9 +297,8 @@ async def dispatch_scan(
     if count > limit:
         await db.rollback()
         raise ScanQuotaExceededError()
-    await db.commit()
-    await _restore_tenant_context(db, tenant_id)
     await db.refresh(scan)
+    await db.commit()
     return scan
 
 

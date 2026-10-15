@@ -6,7 +6,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115.6-009688.svg)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D.svg)
-![Tests](https://img.shields.io/badge/tests-1151-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-2036-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 ![Ruff](https://img.shields.io/badge/linter-ruff-261C15.svg)
@@ -28,10 +28,10 @@ Small and medium-sized businesses (PyMEs) face the same cyber threats as enterpr
 | Phase | Status | Description |
 |-------|--------|-------------|
 | **F0** | ✅ Complete | Architecture & Data Model — 23 ADRs, 13 DB tables, security model |
-| **F1** | ✅ Complete | Backend Base — Auth, tenants, users, RLS, events, LLM, fail-closed Redis, metrics, outage handling — 1151 tests passing |
+| **F1** | ✅ Complete | Backend Base — Auth, tenants, users, RLS, events, LLM, fail-closed Redis, metrics, outage handling — 2036 backend tests passing |
 | **F2** | ✅ Complete | Vulnerability stack — vertical CRUD (Assets → Scans → Vulnerabilities → Reports) plus infra/agents (Nmap, Celery, Dashboard, LLM enrichment, LangGraph scan graph) — PRD v2 |
 | **F3** | 📋 Planned | Real-time — WebSockets, log ingestion, anomaly detection |
-| **F4** | 📋 Planned | Frontend — React 18 + TypeScript + Vite (MVP June 2026) |
+| **F4** | ✅ Complete | Frontend — React 18 + TypeScript + Vite SPA, 8 pages, superadmin tenant switcher — 455 frontend tests passing |
 | **F5** | 📋 Planned | Extra Agents — Compliance, Intelligence |
 | **F6** | 📋 Planned | Advanced — Email, PDF reports, Redis TLS |
 | **F7** | 📋 Planned | QA + Prod — E2E tests, CI/CD, deploy |
@@ -57,15 +57,48 @@ Small and medium-sized businesses (PyMEs) face the same cyber threats as enterpr
 
 ```mermaid
 graph TB
-    Client["Client / Frontend"] --> API["FastAPI App<br/>(Uvicorn / Gunicorn)"]
-    API --> PG[("PostgreSQL 16<br/>(RLS per Tenant)")]
-    API --> Redis[("Redis 7<br/>Denylist · Cache · Events · Locks")]
-    API --> Consumer["In-process Event Consumer<br/>(asyncio · XREADGROUP)"]
-    Consumer --> Redis
-    Consumer --> PG
-    API --> LLM["LLM Provider<br/>(Groq · OpenAI · etc)"]
-    Scraper["Prometheus Scraper"] -->|token auth| API
+    Browser["Browser"] -->|:8088| Nginx["nginx<br/>static SPA + /api proxy"]
+    Nginx --> API["FastAPI<br/>(Gunicorn + uvicorn-worker)"]
+    API --> PG[("PostgreSQL 16<br/>RLS per tenant")]
+    API --> Redis[("Redis 7<br/>denylist · locks · events · broker")]
+    API -->|best-effort bell| Worker["Celery: scans<br/>(Nmap · NET_RAW)"]
+    Beat["Celery Beat"] -->|pump · reap| Maintenance["Celery: maintenance"]
+    Maintenance -->|wakes pending scans| Worker
+    Maintenance --> Redis
+    Worker -->|parse · dedup · persist| PG
+    Worker --> Enrichment["Celery: enrichment<br/>(off by default)"]
+    Enrichment --> LLM["LLM provider<br/>(Groq · OpenAI · …)"]
+    Scraper["Prometheus"] -->|token auth| API
 ```
+
+The request path is a single origin: nginx serves the built SPA and proxies
+`/api` to the API container, so the browser never makes a cross-origin request
+and the refresh cookie stays `SameSite=Strict`.
+
+A launch commits the dispatch **before** ringing the worker, so the bell is
+only a hint: the periodic pump recovers a lost one by waking the worker to
+claim pending work from PostgreSQL. The maintenance consumer is what runs that
+pump and the reaper.
+
+### Scan pipeline and data model
+
+```mermaid
+graph LR
+    Tenant --> User
+    Tenant --> Asset
+    Asset --> Scan
+    Scan --> Vulnerability
+    Vulnerability --> Report
+    Run["POST /scans/:id/run"] --> Scan
+    Scan -->|committed dispatch| Pipeline["Nmap → parse → dedup → persist"]
+    Pipeline --> Vulnerability
+    Dashboard["Dashboard metrics"] --> Scan
+    Dashboard --> Vulnerability
+```
+
+`Tenant` is the isolation boundary: every other row carries `tenant_id`, RLS
+policies enforce it in the database, and the application connects with a role
+that neither owns the schema nor bypasses those policies.
 
 The platform follows a modular monolith pattern. FastAPI handles HTTP traffic, PostgreSQL enforces tenant isolation at the row level, and Redis serves as the central nervous system for session denylisting, caching, distributed locks, and asynchronous event streaming. Events are consumed by an in-process asyncio task with blocking reads. Scan execution and LLM enrichment use separate Celery workers; Beat handles scan maintenance, not enrichment recovery.
 
@@ -85,7 +118,7 @@ The platform follows a modular monolith pattern. FastAPI handles HTTP traffic, P
 | Celery | 5.4.0 (scan execution, maintenance and enrichment) |
 | LangGraph | 1.2.14 (scan pipeline graph) |
 | Uvicorn | 0.32.1 |
-| Gunicorn | — (prod, `gunicorn_conf.py`) |
+| Gunicorn | 23.0.0 (`gunicorn_conf.py`, `uvicorn-worker` for ASGI) |
 | Pydantic | 2.10.4 |
 | pydantic-settings | 2.7.0 |
 | PyJWT[crypto] | >=2.8,<3 |
@@ -202,6 +235,33 @@ curl http://localhost:8000/health
 
 ---
 
+### Product stack (the whole system, one command)
+
+The Compose file above is local infrastructure. To run the product itself — API,
+worker, maintenance, enrichment, beat, PostgreSQL, Redis and the built frontend
+behind nginx — use the stack file, which leaves this development workflow
+untouched:
+
+```bash
+# 1. Fill the local .env values the stack needs (idempotent, never prints one)
+./scripts/demo_bootstrap.py
+
+# 2. Build and start. --profile demo adds the seeded users, the fake
+#    vulnerable target and a scan that runs for real.
+docker compose -f docker-compose.app.yml --profile demo up -d --build
+
+# 3. Open http://localhost:8088 and sign in as a seeded user
+#    (the logins are the documented ones in .env.example)
+```
+
+With the demo profile the guided flow is: create a `hostname` asset with value
+`demo-target`, create a vulnerability scan for it, execute it, and watch the
+findings appear. That needs `SCAN_DEMO_MODE=true` and
+`SCAN_EXECUTION_ENABLED=true`; the stack reads both from the environment and
+keeps them off by default.
+
+---
+
 ### Worker services
 
 Configure a local, untracked `.env.worker` with the database URL targeting
@@ -227,6 +287,23 @@ the default.
 | `LLM_PROVIDER` | `groq` | Set `openrouter` to select OpenRouter |
 | `OPENROUTER_API_KEY` | Not configured | Supply your OpenRouter credential locally; never commit it |
 | `OPENROUTER_MODEL` | `inclusionai/ling-flash-3.0:free` | OpenRouter model identifier |
+
+---
+
+## Known limits and out of scope
+
+An honest inventory, so nobody discovers these by surprise:
+
+| Limit | Why it is like this |
+|-------|--------------------|
+| **Scan execution is off by default** (`SCAN_EXECUTION_ENABLED=false`) | Authorization over the target is the gate. The platform still has to enforce target ownership before it can scan anything, which is the next milestone; the demo profile turns execution on only for local targets. |
+| **Targets are bounded** | One target per asset definition, at most a `/24` (IPv4) or `/120` (IPv6) subnet, and public addresses only unless the demo mode relaxes it. |
+| **The seeded demo tenant allows one scan a day** | Plan enforcement is real: `scans_per_day` is reserved atomically per request, so a second launch answers `429`. Seed a different plan to demo more. |
+| **Reports are records, not files** | The four report types exist with status and metadata; PDF generation is not implemented. |
+| **No scheduled scans** | Every scan is launched explicitly. Periodic execution is planned. |
+| **Enrichment is off by default** | Cost safety. Turning it on needs a provider credential and the `enrichment` queue consumer the stack already runs. |
+| **A provider-shaped key is required to boot** | The settings validator demands a Groq-shaped key whenever the configured provider is Groq, even with enrichment off. The demo bootstrap writes a placeholder that is never sent anywhere. |
+| **`develop` and `main` are not reconciled** | Historical branch drift. `main` is the source of truth. |
 
 ---
 

@@ -29,6 +29,7 @@ from app.event_schemas import (
     ScanDeletedEvent,
     ScanUpdatedEvent,
 )
+from app.modules.assets.ownership.gate import ensure_scan_authorized
 from app.modules.scans.models import Scan
 from app.modules.scans.schemas import ScanCreateRequest, ScanUpdate
 from app.modules.scans.state import transition_scan
@@ -261,6 +262,10 @@ async def dispatch_scan(
     scan = await get_scan(scan_id, tenant_id, db)
     if scan is None:
         return None
+    # H2-T4: the asset needs a verified ownership declaration before the dispatch
+    # can fix ``dispatched_at``, so an undeclared scan never becomes claimable.
+    # The gate keys off the scan's own asset, never the caller's tenant.
+    await ensure_scan_authorized(db, asset_id=scan.asset_id)
     limit = (
         await db.execute(
             select(Tenant.scans_per_day)

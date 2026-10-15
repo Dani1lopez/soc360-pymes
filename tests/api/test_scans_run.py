@@ -9,7 +9,12 @@ from sqlalchemy import func, select, update
 from app.core.config import settings
 from app.modules.scans.models import Scan
 from app.modules.tenants.models import Tenant
-from tests.api.test_scans import _seed_asset, _seed_scan, _set_superadmin_context
+from tests.api.test_scans import (
+    _declare_ownership,
+    _seed_asset,
+    _seed_scan,
+    _set_superadmin_context,
+)
 from tests.conftest import TENANT_A_ID, TENANT_B_ID
 
 
@@ -40,6 +45,8 @@ async def dispatcher(tenant_client):
 async def seed(db, **kwargs):
     tenant = kwargs.get("tenant_id", TENANT_A_ID)
     asset = await _seed_asset(db, "192.0.2.123", tenant_id=tenant)
+    # H2-T4: a dispatchable scan needs a verified ownership declaration.
+    await _declare_ownership(db, asset, tenant_id=tenant)
     return await _seed_scan(db, asset_id=asset, name="run-test", **kwargs)
 
 

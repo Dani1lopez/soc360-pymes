@@ -7,12 +7,15 @@ twice is stored once, and the scan still completes with the raw Nmap output.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 
 from app.core.database import set_tenant_context
+from app.modules.assets.models import Asset
+from app.modules.assets.ownership.models import AssetOwnershipDeclaration
 from app.modules.scans.executor import execute_scan
 from app.modules.scans.models import Scan
 from app.modules.scans.nmap.runner import NmapRunResult
@@ -31,10 +34,26 @@ XML = (
 async def test_a_finding_observed_twice_is_stored_once(db_session, seed_data) -> None:
     scan = await _seed_pending_scan(db_session)
     scan_id, tenant_id = scan.id, scan.tenant_id
+    # H2-T5: the executor requires a verified ownership declaration.
+    declared_value = await db_session.scalar(
+        select(Asset.value).where(Asset.id == scan.asset_id)
+    )
+    db_session.add(
+        AssetOwnershipDeclaration(
+            tenant_id=scan.tenant_id,
+            asset_id=scan.asset_id,
+            declared_value=declared_value,
+            method="declaration",
+            token="graph-pipeline",
+            status="verified",
+            verified_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.flush()
     await db_session.commit()
 
     async def resolver(host: str) -> list[str]:
-        return ["93.184.216.34", "2606:4700:4700::1111"]
+        return ["10.0.0.7", "fd00::1"]
 
     async def run(argv, **kwargs):
         # Both address families report the same script on the same surface.

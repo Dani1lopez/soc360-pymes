@@ -16,6 +16,9 @@ from app.core.database import Base
 # Al importar cada modelo, se registra en Base.metadata y Alembic
 # puede detectarlo en el autogenerate. Nunca eliminar sin verificar.
 from app.modules.assets.models import Asset  # noqa: F401
+from app.modules.assets.ownership.models import (  # noqa: F401
+    AssetOwnershipDeclaration,
+)
 from app.modules.auth.models import RefreshToken  # noqa: F401
 from app.modules.reports.models import Report  # noqa: F401
 from app.modules.scans.models import Scan  # noqa: F401

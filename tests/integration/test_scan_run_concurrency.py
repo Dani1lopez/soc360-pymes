@@ -9,6 +9,7 @@ from sqlalchemy import delete, event, select, text, update
 
 from app.core.database import set_tenant_context
 from app.modules.assets.models import Asset
+from app.modules.assets.ownership.models import AssetOwnershipDeclaration
 from app.modules.scans.models import Scan
 from app.modules.scans.service import (
     ScanQuotaExceededError,
@@ -20,6 +21,7 @@ from app.modules.tenants.models import Tenant
 @pytest.fixture
 async def committed_scans(isolated_db_session):
     tenant_id, asset_id = uuid4(), uuid4()
+    asset_value = f"dispatch-{asset_id.hex}"
     scan_ids = [uuid4(), uuid4()]
     async with isolated_db_session() as db:
         await set_tenant_context(db, None, True)
@@ -37,7 +39,20 @@ async def committed_scans(isolated_db_session):
                 id=asset_id,
                 tenant_id=tenant_id,
                 asset_type="hostname",
-                value=f"dispatch-{asset_id.hex}",
+                value=asset_value,
+            )
+        )
+        await db.flush()
+        # H2-T4: dispatch_scan requires a verified ownership declaration.
+        db.add(
+            AssetOwnershipDeclaration(
+                tenant_id=tenant_id,
+                asset_id=asset_id,
+                declared_value=asset_value,
+                method="declaration",
+                token="concurrency-token",
+                status="verified",
+                verified_at=datetime.now(timezone.utc),
             )
         )
         await db.flush()

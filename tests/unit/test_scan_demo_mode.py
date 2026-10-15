@@ -1,11 +1,21 @@
-"""Local demo target policy and fast scan profile, without network access."""
+"""Local demo scan profile: the fast Nmap profile, and nothing else.
+
+H2 decision D2=A moved the network policy out of this switch. The tests that used
+to assert a demo-only target policy now assert the opposite property: turning
+``SCAN_DEMO_MODE`` on must not widen what a scan can reach. The policy itself is
+covered in ``test_target_policy.py``.
+"""
 
 import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings, settings
 from app.modules.scans.nmap.command import NMAP_PROFILE, build_nmap_command
-from app.modules.scans.targets import ScanTarget, TargetRejectedError, resolve_scan_target
+from app.modules.scans.targets import (
+    ScanTarget,
+    TargetRejectedError,
+    resolve_scan_target,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -14,53 +24,24 @@ def demo_mode(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("address", ["10.0.0.5", "172.18.0.7", "192.168.1.10"])
-async def test_private_ip_and_hostname(address: str) -> None:
-    async def resolver(host: str) -> list[str]:
-        assert host == "demo-target"
-        return [address]
-
-    assert (await resolve_scan_target("ip", address)).addresses == (address,)
-    target = await resolve_scan_target("hostname", "demo-target", resolver=resolver)
-    assert target.addresses == (address,)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "address",
-    [
-        "127.0.0.1", "::1", "169.254.169.254", "224.0.0.1", "0.0.0.0",
-        "fe80::1", "240.0.0.1", "::", "ff02::1", "100.64.0.1",
-    ],
-)
-async def test_unsafe_addresses_remain_rejected(address: str) -> None:
-    with pytest.raises(TargetRejectedError, match="^target_not_global$"):
-        await resolve_scan_target("ip", address)
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("enabled", [False, True])
-async def test_private_subnet_policy(
+async def test_demo_mode_does_not_change_the_target_policy(
     monkeypatch: pytest.MonkeyPatch, enabled: bool
 ) -> None:
     monkeypatch.setattr(settings, "SCAN_DEMO_MODE", enabled)
-    if enabled:
-        target = await resolve_scan_target("subnet", "172.18.0.0/24")
-        assert target.addresses == ("172.18.0.0/24",)
-    else:
-        with pytest.raises(TargetRejectedError, match="^target_not_global$"):
-            await resolve_scan_target("subnet", "172.18.0.0/24")
+    assert (await resolve_scan_target("ip", "172.18.0.7")).addresses == ("172.18.0.7",)
+    with pytest.raises(TargetRejectedError, match="^target_not_allowed$"):
+        await resolve_scan_target("ip", "8.8.8.8")
 
 
 @pytest.mark.asyncio
-async def test_disabled_mode_preserves_policy_and_profile(
+async def test_demo_mode_does_not_widen_subnets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "SCAN_DEMO_MODE", False)
-    with pytest.raises(TargetRejectedError, match="^target_not_global$"):
-        await resolve_scan_target("ip", "10.0.0.5")
-    target = ScanTarget("ip", "8.8.8.8", ("8.8.8.8",))
-    assert build_nmap_command(target) == ["nmap", *NMAP_PROFILE, "--", "8.8.8.8"]
+    assert (await resolve_scan_target("subnet", "172.18.0.0/24")).addresses == (
+        "172.18.0.0/24",
+    )
 
 
 def test_demo_profile() -> None:
@@ -86,6 +67,14 @@ def test_demo_profile() -> None:
     ]
 
 
+async def test_disabled_mode_uses_the_standard_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "SCAN_DEMO_MODE", False)
+    target = ScanTarget("ip", "10.0.0.7", ("10.0.0.7",))
+    assert build_nmap_command(target) == ["nmap", *NMAP_PROFILE, "--", "10.0.0.7"]
+
+
 @pytest.mark.parametrize("environment", ["production", "staging", "development"])
 def test_demo_mode_environment_validation(environment: str) -> None:
     values = settings.model_dump()
@@ -105,54 +94,3 @@ def test_demo_mode_environment_validation(environment: str) -> None:
 
 def test_demo_mode_defaults_off() -> None:
     assert Settings.model_fields["SCAN_DEMO_MODE"].default is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "value",
-    ["127.0.0.0/24", "169.254.169.0/24", "224.0.0.0/24", "240.0.0.0/24", "::/120"],
-)
-async def test_unsafe_subnets_remain_rejected(value: str) -> None:
-    with pytest.raises(TargetRejectedError, match="^target_not_global$"):
-        await resolve_scan_target("subnet", value)
-
-
-@pytest.mark.asyncio
-async def test_mixed_dns_answers_reject_unsafe_address() -> None:
-    async def resolver(host: str) -> list[str]:
-        return ["172.18.0.7", "169.254.169.254"]
-
-    with pytest.raises(TargetRejectedError, match="^target_not_global$"):
-        await resolve_scan_target("hostname", "demo-target", resolver=resolver)
-
-
-@pytest.mark.asyncio
-async def test_private_url_literal_is_accepted_without_dns() -> None:
-    async def resolver(host: str) -> list[str]:
-        pytest.fail("IP literals must not use DNS")
-
-    target = await resolve_scan_target(
-        "web_app", "http://172.18.0.7/path", resolver=resolver
-    )
-    assert target.addresses == ("172.18.0.7",)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "address",
-    [
-        "192.0.2.1", "198.51.100.7", "203.0.113.5", "198.18.0.1",
-        "2001:db8::1", "::ffff:10.0.0.5",
-        "2002:7f00:1::1", "2002:a9fe:a9fe::1", "64:ff9b::a9fe:a9fe", "2001:0:4136:e378::1",
-    ],
-)
-async def test_demo_mode_only_adds_rfc1918_and_unique_local(address: str) -> None:
-    """Documentation, benchmarking and IPv6 transition forms are not demo targets."""
-    with pytest.raises(TargetRejectedError, match="^target_not_global$"):
-        await resolve_scan_target("ip", address)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("address", ["fc00::1", "fd00::5"])
-async def test_demo_mode_accepts_ipv6_unique_local(address: str) -> None:
-    assert (await resolve_scan_target("ip", address)).addresses == (address,)

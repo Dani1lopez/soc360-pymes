@@ -22,6 +22,10 @@ dependencies = [
     "email-validator==2.3.0",
     "prometheus-client>=0.26.0",
     "defusedxml>=0.7.1",
+    # The DNS TXT ownership challenge (H2, S5) needs real TXT lookups. It was
+    # present only as a transitive dependency, and importing an undeclared
+    # package breaks the API image the day that transitive edge disappears.
+    "dnspython==2.8.0",
     "langgraph==1.2.14",
     # The production server. entrypoint.sh runs Gunicorn, but it was missing
     # from the dependencies, so the API image could never start: the API had

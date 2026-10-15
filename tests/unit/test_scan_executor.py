@@ -27,7 +27,10 @@ def setup(monkeypatch):
         execute=AsyncMock(return_value=SimpleNamespace(all=lambda: [])),
     )
     tenant = uuid.uuid4()
-    load = AsyncMock(return_value=("hostname", "example.com"))
+    load = AsyncMock(return_value=(uuid.uuid4(), "hostname", "example.com"))
+    # The ownership gate has its own DB-backed tests; here it only has to pass.
+    monkeypatch.setattr(executor, "ensure_scan_authorized", AsyncMock())
+    monkeypatch.setattr(executor, "recorded_fingerprint", AsyncMock(return_value=None))
     transition = AsyncMock(return_value=True)
     context = AsyncMock()
     events = []
@@ -46,7 +49,7 @@ def setup(monkeypatch):
     monkeypatch.setattr(executor, "transition_scan", transition)
     monkeypatch.setattr(executor, "set_tenant_context", context)
     run = AsyncMock(return_value=NmapRunResult(XML, "", 0))
-    resolver = AsyncMock(return_value=["93.184.216.34"])
+    resolver = AsyncMock(return_value=["10.0.0.7"])
     return SimpleNamespace(
         session=session,
         tenant=tenant,
@@ -147,7 +150,7 @@ async def test_target_rejected(setup):
     s = setup
     s.resolver.return_value = ["127.0.0.1"]
     assert await execute(s) == "failed"
-    assert s.transition.call_args.kwargs["failure_reason"] == "target_not_global"
+    assert s.transition.call_args.kwargs["failure_reason"] == "target_not_allowed"
     s.run.assert_not_awaited()
 
 
@@ -232,7 +235,7 @@ async def test_unexpected_error_before_claim_does_not_touch_the_scan(setup):
 
 async def test_dual_family(setup):
     s = setup
-    s.resolver.return_value += ["2606:4700:4700::1111"]
+    s.resolver.return_value += ["fd00::1"]
     assert await execute(s) == "completed"
     assert s.run.await_count == 2
     assert "-6" in s.run.call_args_list[1].args[0]

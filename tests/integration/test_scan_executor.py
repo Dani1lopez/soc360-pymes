@@ -1,11 +1,14 @@
 """DB executor contracts; require the PostgreSQL integration fixtures."""
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 
 from app.core.database import set_tenant_context
+from app.modules.assets.models import Asset
+from app.modules.assets.ownership.models import AssetOwnershipDeclaration
 from app.modules.scans.executor import execute_scan
 from app.modules.scans.models import Scan
 from app.modules.scans.nmap.runner import NmapRunError, NmapRunResult
@@ -20,6 +23,25 @@ XML = (
 )
 
 
+async def _declare_verified(db_session, scan) -> None:
+    """H2-T5: execute_scan requires a verified ownership declaration."""
+    value = await db_session.scalar(
+        select(Asset.value).where(Asset.id == scan.asset_id)
+    )
+    db_session.add(
+        AssetOwnershipDeclaration(
+            tenant_id=scan.tenant_id,
+            asset_id=scan.asset_id,
+            declared_value=value,
+            method="declaration",
+            token="executor-test",
+            status="verified",
+            verified_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.flush()
+
+
 async def test_executor_skips_undispatched_scan(db_session, seed_data):
     scan = await _seed_pending_scan(db_session, dispatched=False)
     scan_id, tenant_id = scan.id, scan.tenant_id
@@ -27,7 +49,7 @@ async def test_executor_skips_undispatched_scan(db_session, seed_data):
     calls = []
 
     async def resolver(host):
-        return ["93.184.216.34"]
+        return ["10.0.0.7"]
 
     async def run(argv, **kwargs):
         calls.append(argv)
@@ -51,11 +73,12 @@ async def test_executor_skips_undispatched_scan(db_session, seed_data):
 async def test_executor_persistence(db_session, seed_data, mode):
     scan = await _seed_pending_scan(db_session)
     scan_id, tenant_id = scan.id, scan.tenant_id
+    await _declare_verified(db_session, scan)
     # Commit the seed so executor rollback cannot remove it.
     await db_session.commit()
 
     async def resolver(host):
-        return ["93.184.216.34"]
+        return ["192.168.1.7"]
 
     async def run(argv, **kwargs):
         if mode == "failed":

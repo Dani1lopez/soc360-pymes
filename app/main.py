@@ -28,6 +28,7 @@ from app.core.metrics_auth import (
 from app.core.middleware import HTTPSRedirectMiddleware, SecurityHeadersMiddleware
 from app.core.redis import close_pool, get_redis_client, ping_redis_with_retry
 from app.event_bus import EventBus, EventConsumer, drain_dlq_tasks
+from app.modules.assets.ownership.router import router as asset_ownership_router
 from app.modules.assets.router import router as assets_router
 from app.modules.auth.router import router as auth_router
 from app.modules.dashboard.router import router as dashboard_router
@@ -267,6 +268,7 @@ def create_app() -> FastAPI:
     app.include_router(tenants_router, prefix="/api/v1")
     app.include_router(users_router, prefix="/api/v1")
     app.include_router(assets_router, prefix="/api/v1")
+    app.include_router(asset_ownership_router, prefix="/api/v1")
     app.include_router(scans_router, prefix="/api/v1")
     app.include_router(vulnerabilities_router, prefix="/api/v1")
     app.include_router(reports_router, prefix="/api/v1")

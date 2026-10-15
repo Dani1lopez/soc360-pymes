@@ -67,7 +67,7 @@ async def test_worker_live_cancel(isolated_db_session, tmp_path):
     pid_file = tmp_path / "nmap.pid"
 
     async def resolver(host):
-        return ["93.184.216.34"]
+        return ["10.0.0.7"]
 
     async def blocking_nmap(argv, **kwargs):
         # Write then rename: os.replace is atomic, so the test never observes
@@ -127,7 +127,7 @@ async def test_worker_scan_duplicate_delivery(isolated_db_session, monkeypatch):
         )
 
         async def fake_resolver(host: str) -> list[str]:
-            return ["93.184.216.34"]
+            return ["192.168.1.7"]
 
         runs = []
 

@@ -16,7 +16,7 @@ it, exactly as the CSV lifecycle tests do, and pins the 202 contract.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, AsyncGenerator, cast
 from uuid import UUID, uuid4
@@ -36,6 +36,7 @@ from app.core.database import (
 from app.dependencies import get_db
 from app.dependencies.auth import get_current_user
 from app.modules.assets.models import Asset
+from app.modules.assets.ownership.models import AssetOwnershipDeclaration
 from app.modules.scans.dispatch import get_scan_dispatcher
 from app.modules.scans.models import Scan
 from app.modules.tenants.models import Tenant
@@ -100,6 +101,18 @@ async def _seed_committed() -> tuple[UUID, UUID, UUID]:
                 config={"host_discovery": True},
                 started_at=None,
                 completed_at=None,
+            )
+        )
+        await session.flush()
+        # H2-T4: the asset needs a verified declaration before it can be dispatched.
+        session.add(
+            AssetOwnershipDeclaration(
+                tenant_id=tenant_id,
+                asset_id=asset_id,
+                method="declaration",
+                token="lifecycle-token",
+                status="verified",
+                verified_at=datetime.now(timezone.utc),
             )
         )
         await session.commit()

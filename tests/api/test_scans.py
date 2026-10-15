@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import set_tenant_context
 from app.main import create_app
 from app.modules.assets.models import Asset
+from app.modules.assets.ownership.models import AssetOwnershipDeclaration
 from app.modules.scans.models import Scan
 from tests.conftest import TENANT_A_ID, TENANT_B_ID
 
@@ -224,14 +225,45 @@ async def _seed_asset(
     db_session: AsyncSession,
     value: str,
     tenant_id: str = TENANT_A_ID,
+    asset_type: str = "ip",
 ) -> str:
     """Insert one asset directly; return its id as a string."""
     await _set_superadmin_context(db_session)
-    asset = Asset(tenant_id=UUID(tenant_id), asset_type="ip", value=value)
+    asset = Asset(tenant_id=UUID(tenant_id), asset_type=asset_type, value=value)
     db_session.add(asset)
     await db_session.flush()
     await db_session.commit()
     return str(asset.id)
+
+
+async def _declare_ownership(
+    db_session: AsyncSession,
+    asset_id: str,
+    *,
+    tenant_id: str = TENANT_A_ID,
+    status: str = "verified",
+) -> str:
+    """Insert one ownership declaration directly; return its id as a string.
+
+    H2: dispatching a scan requires a verified declaration for its asset.
+    """
+    await _set_superadmin_context(db_session)
+    value = await db_session.scalar(
+        select(Asset.value).where(Asset.id == UUID(asset_id))
+    )
+    declaration = AssetOwnershipDeclaration(
+        tenant_id=UUID(tenant_id),
+        asset_id=UUID(asset_id),
+        declared_value=value,
+        method="declaration",
+        token="seed-token",
+        status=status,
+        verified_at=datetime.now(timezone.utc) if status == "verified" else None,
+    )
+    db_session.add(declaration)
+    await db_session.flush()
+    await db_session.commit()
+    return str(declaration.id)
 
 
 async def _seed_scan(
@@ -1375,9 +1407,7 @@ class TestEvents:
         # Whichever transport path this environment takes, the request must
         # have actually reached the patched commit: proven by zero publishes,
         # not merely by a 5xx that could originate elsewhere in the stack.
-        assert calls == [], (
-            f"a failed commit MUST publish nothing, got {calls!r}"
-        )
+        assert calls == [], f"a failed commit MUST publish nothing, got {calls!r}"
 
         # Leave the shared session clean: discard the flushed-but-never-
         # committed INSERT so nothing dirty survives into later assertions.

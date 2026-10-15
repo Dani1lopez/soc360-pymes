@@ -26,6 +26,11 @@ Tenant rules:
 * Cross-tenant by-id access returns 404, never 403, so existence is not leaked.
 * ``tenant_id=None`` is reserved for the deliberately global superadmin path;
   everyone else's service call carries ``current_user.tenant_id``.
+
+Ownership gate (H2): ``POST /scans/{id}/run`` requires a **verified ownership
+declaration** for the scan's asset. Without one it answers 403
+``asset ownership is not verified`` and never fixes ``dispatched_at``; the
+executor re-checks the same condition on every claim.
 """
 
 from __future__ import annotations
@@ -43,6 +48,7 @@ from app.dependencies.auth import require_any_role
 from app.dependencies.event_deps import get_event_bus
 from app.event_bus import EventBus
 from app.modules.assets.models import Asset
+from app.modules.assets.ownership.gate import OwnershipRequiredError
 from app.modules.scans import service
 from app.modules.scans.dispatch import ScanDispatcher, get_scan_dispatcher
 from app.modules.scans.schemas import (
@@ -328,6 +334,9 @@ async def run_scan(
         scan = await service.dispatch_scan(scan_id, tenant_id, db)
     except service.ScanNotDispatchableError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except OwnershipRequiredError as exc:
+        # H2-T4: the asset has no verified ownership declaration.
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     except service.ScanQuotaExceededError as exc:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)

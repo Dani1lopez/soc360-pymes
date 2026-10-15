@@ -115,8 +115,9 @@ class Settings(BaseSettings):
     # Must differ from REDIS_DB; enforced when the broker URL is built, not here,
     # because the test suite assigns REDIS_DB per xdist worker.
     CELERY_BROKER_REDIS_DB: int = 1
-    # Kill switch for POST /scans/{id}/run. Stays off until asset ownership
-    # verification lands (scanning unowned targets carries legal risk).
+    # Kill switch for POST /scans/{id}/run. Off by default so a fresh deployment
+    # never scans anything; turn it on explicitly. When on, dispatch and the
+    # executor both still require a verified ownership declaration per asset.
     SCAN_EXECUTION_ENABLED: bool = False
     # ONLY for local development demos: allow private scan targets and a fast profile.
     SCAN_DEMO_MODE: bool = False

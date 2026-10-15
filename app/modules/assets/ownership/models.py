@@ -44,6 +44,10 @@ class AssetOwnershipDeclaration(Base):
     # No single-column ForeignKey: the composite constraint below binds the asset
     # to the same tenant, so a declaration can never point at somebody else's asset.
     asset_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    # The asset value as it was when the declaration was made (decision D4): a
+    # declaration covers exactly what was declared, so widening a subnet through
+    # an edit invalidates it instead of silently extending its reach.
+    declared_value: Mapped[str] = mapped_column(Text, nullable=False)
     # Who declared it (S6, auditable record). Nullable so removing a user account
     # does not erase the declaration itself; the rows keep their timestamp.
     declared_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -95,6 +99,7 @@ class AssetOwnershipDeclaration(Base):
         # Covers asset_id lookups too, being its leading column.
         Index(f"ix_{_TABLE}_asset_tenant", "asset_id", "tenant_id"),
         Index(f"ix_{_TABLE}_declared_by_user_id", "declared_by_user_id"),
+        Index(f"ix_{_TABLE}_asset_value", "asset_id", "declared_value"),
     )
 
     def __repr__(self) -> str:

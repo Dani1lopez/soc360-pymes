@@ -19,6 +19,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.assets.models import Asset
 from app.modules.assets.ownership.models import AssetOwnershipDeclaration
 
 # Stable, persistable failure reason (also the API detail for the dispatch gate).
@@ -39,12 +40,18 @@ async def has_verified_declaration(db: AsyncSession, *, asset_id: uuid.UUID) -> 
 
     The query runs under the session's RLS context, so the caller's tenant scope
     applies: a declaration of another tenant is not visible and does not count.
+
+    ``declared_value`` must still match the asset's current value (decision D4):
+    editing an asset so it widens what it covers invalidates the old declaration
+    instead of extending the declared reach with it.
     """
     stmt = (
         select(AssetOwnershipDeclaration.id)
+        .join(Asset, Asset.id == AssetOwnershipDeclaration.asset_id)
         .where(
             AssetOwnershipDeclaration.asset_id == asset_id,
             AssetOwnershipDeclaration.status == "verified",
+            AssetOwnershipDeclaration.declared_value == Asset.value,
         )
         .limit(1)
     )

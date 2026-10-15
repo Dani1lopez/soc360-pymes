@@ -24,6 +24,7 @@ def upgrade() -> None:
         sa.Column("id", sa.UUID(), nullable=False),
         sa.Column("tenant_id", sa.UUID(), nullable=False),
         sa.Column("asset_id", sa.UUID(), nullable=False),
+        sa.Column("declared_value", sa.Text(), nullable=False),
         sa.Column("declared_by_user_id", sa.UUID(), nullable=True),
         sa.Column("method", sa.String(length=20), nullable=False),
         sa.Column("token", sa.Text(), nullable=False),
@@ -78,6 +79,11 @@ def upgrade() -> None:
         "ix_asset_ownership_declarations_declared_by_user_id",
         "asset_ownership_declarations",
         ["declared_by_user_id"],
+    )
+    op.create_index(
+        "ix_asset_ownership_declarations_asset_value",
+        "asset_ownership_declarations",
+        ["asset_id", "declared_value"],
     )
     op.execute("""
         CREATE TRIGGER trg_asset_ownership_declarations_updated_at

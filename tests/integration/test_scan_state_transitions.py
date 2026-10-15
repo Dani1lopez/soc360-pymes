@@ -245,6 +245,7 @@ async def _seed_committed_scan(
             AssetOwnershipDeclaration(
                 tenant_id=UUID(TENANT_A_ID),
                 asset_id=asset.id,
+                declared_value=asset.value,
                 method="declaration",
                 token=f"state-race-{uuid.uuid4().hex[:12]}",
                 status="verified",

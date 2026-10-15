@@ -97,6 +97,7 @@ async def test_a_declaration_is_invisible_to_another_tenant(
         AssetOwnershipDeclaration(
             tenant_id=UUID(TENANT_A_ID),
             asset_id=ASSET_A_ID,
+            declared_value="alpha.internal",
             method="declaration",
             token="token-a",
             status="verified",
@@ -130,6 +131,7 @@ async def test_a_declaration_cannot_point_at_another_tenants_asset(
         AssetOwnershipDeclaration(
             tenant_id=UUID(TENANT_A_ID),
             asset_id=ASSET_B_ID,
+            declared_value="beta.internal",
             method="declaration",
             token="token-cross",
             status="pending",
@@ -155,6 +157,7 @@ async def test_the_method_and_status_vocabulary_is_enforced(
         AssetOwnershipDeclaration(
             tenant_id=UUID(TENANT_A_ID),
             asset_id=ASSET_A_ID,
+            declared_value="alpha.internal",
             method=method,
             token="token-bad",
             status=status,

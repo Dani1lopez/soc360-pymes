@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core.database import set_tenant_context
+from app.modules.assets.models import Asset
 from app.modules.assets.ownership.models import AssetOwnershipDeclaration
 from app.modules.scans.executor import execute_scan
 from app.modules.scans.models import Scan
@@ -24,10 +25,14 @@ XML = (
 
 async def _declare_verified(db_session, scan) -> None:
     """H2-T5: execute_scan requires a verified ownership declaration."""
+    value = await db_session.scalar(
+        select(Asset.value).where(Asset.id == scan.asset_id)
+    )
     db_session.add(
         AssetOwnershipDeclaration(
             tenant_id=scan.tenant_id,
             asset_id=scan.asset_id,
+            declared_value=value,
             method="declaration",
             token="executor-test",
             status="verified",

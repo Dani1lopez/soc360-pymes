@@ -21,6 +21,7 @@ from app.modules.tenants.models import Tenant
 @pytest.fixture
 async def committed_scans(isolated_db_session):
     tenant_id, asset_id = uuid4(), uuid4()
+    asset_value = f"dispatch-{asset_id.hex}"
     scan_ids = [uuid4(), uuid4()]
     async with isolated_db_session() as db:
         await set_tenant_context(db, None, True)
@@ -38,7 +39,7 @@ async def committed_scans(isolated_db_session):
                 id=asset_id,
                 tenant_id=tenant_id,
                 asset_type="hostname",
-                value=f"dispatch-{asset_id.hex}",
+                value=asset_value,
             )
         )
         await db.flush()
@@ -47,6 +48,7 @@ async def committed_scans(isolated_db_session):
             AssetOwnershipDeclaration(
                 tenant_id=tenant_id,
                 asset_id=asset_id,
+                declared_value=asset_value,
                 method="declaration",
                 token="concurrency-token",
                 status="verified",

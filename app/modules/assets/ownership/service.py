@@ -53,6 +53,7 @@ async def declare_ownership(
     declaration = AssetOwnershipDeclaration(
         tenant_id=asset.tenant_id,
         asset_id=asset.id,
+        declared_value=asset.value,
         declared_by_user_id=declared_by_user_id,
         method=method,
         token=_new_token(),

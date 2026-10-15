@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core.database import set_tenant_context
+from app.modules.assets.models import Asset
 from app.modules.assets.ownership.models import AssetOwnershipDeclaration
 from app.modules.scans.executor import execute_scan
 from app.modules.scans.models import Scan
@@ -34,10 +35,14 @@ async def test_a_finding_observed_twice_is_stored_once(db_session, seed_data) ->
     scan = await _seed_pending_scan(db_session)
     scan_id, tenant_id = scan.id, scan.tenant_id
     # H2-T5: the executor requires a verified ownership declaration.
+    declared_value = await db_session.scalar(
+        select(Asset.value).where(Asset.id == scan.asset_id)
+    )
     db_session.add(
         AssetOwnershipDeclaration(
             tenant_id=scan.tenant_id,
             asset_id=scan.asset_id,
+            declared_value=declared_value,
             method="declaration",
             token="graph-pipeline",
             status="verified",

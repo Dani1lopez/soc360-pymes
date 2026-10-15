@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core.database import set_tenant_context
+from app.modules.assets.models import Asset
 from app.modules.assets.ownership.gate import NOT_VERIFIED_REASON
 from app.modules.assets.ownership.models import AssetOwnershipDeclaration
 from app.modules.scans.executor import execute_scan
@@ -29,10 +30,12 @@ XML = (
 
 
 async def _declare(db, scan: Scan, *, status: str) -> None:
+    value = await db.scalar(select(Asset.value).where(Asset.id == scan.asset_id))
     db.add(
         AssetOwnershipDeclaration(
             tenant_id=scan.tenant_id,
             asset_id=scan.asset_id,
+            declared_value=value,
             method="declaration",
             token="executor-gate",
             status=status,

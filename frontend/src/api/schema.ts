@@ -31,6 +31,13 @@ export type AssetUpdateInput = ApiSchemas["AssetUpdate"];
 export type AssetCreateInput =
   ApiPaths["/api/v1/assets/"]["post"]["requestBody"]["content"]["application/json"];
 
+// Ownership declarations (H2). A declaration covers exactly one asset value, so
+// the listing is always scoped to an asset. `declaration` is the layer for
+// assets where no technical check is possible; the other two start a challenge.
+export type OwnershipDeclaration = ApiSchemas["OwnershipDeclarationResponse"];
+export type OwnershipDeclarationList = ApiSchemas["OwnershipDeclarationListResponse"];
+export type OwnershipMethod = NonNullable<ApiSchemas["OwnershipDeclarationRequest"]["method"]>;
+
 // Scans. `POST /scans/` is a discriminated union on `type`, and `PATCH` accepts
 // the name, the type and a config object that the backend validates against the
 // resulting type.

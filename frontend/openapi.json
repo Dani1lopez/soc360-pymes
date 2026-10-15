@@ -562,6 +562,135 @@
         "title": "LoginRequest",
         "type": "object"
       },
+      "OwnershipDeclarationListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OwnershipDeclarationResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "OwnershipDeclarationListResponse",
+        "type": "object"
+      },
+      "OwnershipDeclarationRequest": {
+        "description": "What the caller declares. Only the method is caller-controlled.",
+        "properties": {
+          "method": {
+            "default": "declaration",
+            "enum": [
+              "declaration",
+              "dns_txt",
+              "http_file"
+            ],
+            "title": "Method",
+            "type": "string"
+          }
+        },
+        "title": "OwnershipDeclarationRequest",
+        "type": "object"
+      },
+      "OwnershipDeclarationResponse": {
+        "properties": {
+          "asset_id": {
+            "format": "uuid",
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "declared_by_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared By User Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "resolved_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Fingerprint"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified At"
+          }
+        },
+        "required": [
+          "id",
+          "asset_id",
+          "tenant_id",
+          "method",
+          "status",
+          "token",
+          "declared_by_user_id",
+          "verified_at",
+          "resolved_fingerprint",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "OwnershipDeclarationResponse",
+        "type": "object"
+      },
       "ReportCreate": {
         "additionalProperties": false,
         "description": "Create payload.\n\n``status`` and ``generated_at`` are deliberately absent: the server forces\n``status=\"pending\"`` and ``generated_at=None`` regardless of client input.",
@@ -2441,6 +2570,206 @@
         "summary": "Update an asset",
         "tags": [
           "assets"
+        ]
+      }
+    },
+    "/api/v1/assets/{asset_id}/ownership": {
+      "get": {
+        "operationId": "list_declarations_api_v1_assets__asset_id__ownership_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnershipDeclarationListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List the ownership declarations of an asset",
+        "tags": [
+          "asset-ownership"
+        ]
+      },
+      "post": {
+        "operationId": "declare_ownership_api_v1_assets__asset_id__ownership_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnershipDeclarationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnershipDeclarationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Declare ownership of an asset",
+        "tags": [
+          "asset-ownership"
+        ]
+      }
+    },
+    "/api/v1/assets/{asset_id}/ownership/revoke": {
+      "post": {
+        "operationId": "revoke_ownership_api_v1_assets__asset_id__ownership_revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnershipDeclarationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Revoke the newest ownership declaration of an asset",
+        "tags": [
+          "asset-ownership"
+        ]
+      }
+    },
+    "/api/v1/assets/{asset_id}/ownership/verify": {
+      "post": {
+        "operationId": "verify_ownership_api_v1_assets__asset_id__ownership_verify_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnershipDeclarationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Verify the newest ownership challenge of an asset",
+        "tags": [
+          "asset-ownership"
         ]
       }
     },

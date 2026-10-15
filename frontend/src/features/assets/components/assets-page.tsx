@@ -23,6 +23,7 @@ import { assetTypeLabel } from "../lib/asset-types";
 import { useAssets } from "../hooks/use-assets";
 import { useDeleteAsset, useExportAssets } from "../hooks/use-asset-mutations";
 import { AssetForm } from "./asset-form";
+import { AssetOwnership } from "./asset-ownership";
 
 type Editor = { asset: AssetResponse | null } | null;
 
@@ -122,6 +123,7 @@ export function AssetsPage() {
             <TableRow>
               <TableHead>Tipo</TableHead>
               <TableHead>Valor</TableHead>
+              <TableHead>Propiedad</TableHead>
               <TableHead>Alta</TableHead>
               <TableHead>Actualizado</TableHead>
               {canWrite && <TableHead>Acciones</TableHead>}
@@ -132,6 +134,9 @@ export function AssetsPage() {
               <TableRow key={asset.id}>
                 <TableCell>{assetTypeLabel(asset.type)}</TableCell>
                 <TableCell className="font-medium break-all">{asset.value}</TableCell>
+                <TableCell>
+                  <AssetOwnership asset={asset} canWrite={canWrite} />
+                </TableCell>
                 <TableCell className="text-muted-foreground">
                   {formatDateTime(asset.created_at)}
                 </TableCell>

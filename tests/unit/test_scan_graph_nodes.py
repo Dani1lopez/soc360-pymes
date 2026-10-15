@@ -47,7 +47,7 @@ async def test_scan_node_collects_one_document_per_address_family() -> None:
     run = AsyncMock(return_value=NmapRunResult(XML, "", 0))
 
     async def resolver(host: str) -> list[str]:
-        return ["93.184.216.34", "2606:4700:4700::1111"]
+        return ["10.0.0.7", "fd00::1"]
 
     state = await scan_node({"asset": ASSET}, resolver=resolver, run=run)
     assert state["nmap_documents"] == [XML.decode(), XML.decode()]
@@ -58,7 +58,7 @@ async def test_scan_node_reports_the_nmap_failure_reason(caplog) -> None:
     run = AsyncMock(side_effect=NmapRunError("timeout", "private diagnostics"))
 
     async def resolver(host: str) -> list[str]:
-        return ["93.184.216.34"]
+        return ["10.0.0.7"]
 
     state = await scan_node(
         {"asset": ASSET, "scan_id": "scan-1"}, resolver=resolver, run=run
@@ -73,7 +73,7 @@ async def test_scan_node_reports_a_rejected_target() -> None:
 
     run = AsyncMock()
     state = await scan_node({"asset": ASSET}, resolver=resolver, run=run)
-    assert state == {"error": "target_not_global"}
+    assert state == {"error": "target_not_allowed"}
     run.assert_not_awaited()
 
 

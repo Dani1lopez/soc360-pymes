@@ -34,7 +34,7 @@ async def test_a_finding_observed_twice_is_stored_once(db_session, seed_data) ->
     await db_session.commit()
 
     async def resolver(host: str) -> list[str]:
-        return ["93.184.216.34", "2606:4700:4700::1111"]
+        return ["10.0.0.7", "fd00::1"]
 
     async def run(argv, **kwargs):
         # Both address families report the same script on the same surface.

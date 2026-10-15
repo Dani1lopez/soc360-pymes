@@ -27,7 +27,7 @@ async def test_executor_skips_undispatched_scan(db_session, seed_data):
     calls = []
 
     async def resolver(host):
-        return ["93.184.216.34"]
+        return ["10.0.0.7"]
 
     async def run(argv, **kwargs):
         calls.append(argv)
@@ -55,7 +55,7 @@ async def test_executor_persistence(db_session, seed_data, mode):
     await db_session.commit()
 
     async def resolver(host):
-        return ["93.184.216.34"]
+        return ["192.168.1.7"]
 
     async def run(argv, **kwargs):
         if mode == "failed":

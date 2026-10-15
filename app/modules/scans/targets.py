@@ -1,9 +1,14 @@
-"""Scan-time target validation: reject unsafe or oversized targets.
+"""Scan-time target validation: reject unsafe, non-private or oversized targets.
 
 Asset syntax is revalidated immediately before launch (F2 slice 5, decisions
 1 and 8). DNS is resolved here exactly once and only the validated IPs
 reach Nmap, preventing a second lookup from bypassing the authorization gate.
 This module performs no database access or process execution.
+
+H2 decision D2=A: scans only reach RFC1918/ULA private networks, so a deployment
+can never be pointed at a third party's public address. The network policy is
+deliberately independent of ``SCAN_DEMO_MODE``, which only selects the fast Nmap
+profile: enabling the local demo switch must not widen what is scannable.
 """
 
 from __future__ import annotations
@@ -15,7 +20,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from app.core.config import settings
 from app.modules.assets.service import _validate_asset_value
 
 Resolver = Callable[[str], Awaitable[list[str]]]
@@ -50,43 +54,38 @@ async def _resolve_host(host: str) -> list[str]:
     return list(dict.fromkeys(str(address[0]) for _, _, _, _, address in results))
 
 
-# Demo mode adds only these private ranges on top of global addresses; documentation,
-# benchmarking and similar "private" blocks are deliberately not demo targets.
-_DEMO_PRIVATE_NETWORKS = tuple(
+# Only these ranges are scannable: RFC1918 for IPv4 and unique-local for IPv6.
+_SCAN_PRIVATE_NETWORKS = tuple(
     ipaddress.ip_network(network)
     for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
 )
 # IPv6 forms that embed an IPv4 address and could smuggle a forbidden one past the filter.
-_DEMO_TRANSITION_NETWORKS = tuple(
+_TRANSITION_NETWORKS = tuple(
     ipaddress.ip_network(network)
     for network in ("2002::/16", "64:ff9b::/96", "2001::/32")
 )
 
 
 def _allowed_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    if not settings.SCAN_DEMO_MODE:
-        return address.is_global
     if (
         address.is_loopback
         or address.is_link_local
         or address.is_multicast
         or address.is_unspecified
         or address.is_reserved
-        or any(address in network for network in _DEMO_TRANSITION_NETWORKS)
+        or any(address in network for network in _TRANSITION_NETWORKS)
     ):
         return False
-    return address.is_global or any(
-        address in network for network in _DEMO_PRIVATE_NETWORKS
-    )
+    return any(address in network for network in _SCAN_PRIVATE_NETWORKS)
 
 
-def _public_ip(value: str) -> str:
+def _allowed_ip(value: str) -> str:
     try:
         address = ipaddress.ip_address(value)
     except ValueError as exc:
         raise TargetRejectedError("target_invalid") from exc
     if not _allowed_address(address):
-        raise TargetRejectedError("target_not_global")
+        raise TargetRejectedError("target_not_allowed")
     return str(address)
 
 
@@ -97,11 +96,12 @@ async def resolve_scan_target(
     resolver: Resolver | None = None,
     resolution_timeout: float = RESOLUTION_TIMEOUT_SECONDS,
 ) -> ScanTarget:
-    """Canonicalize syntax and apply the global-only or local demo target policy.
+    """Canonicalize syntax and apply the private-network target policy.
 
-    Subnets contain at most 256 addresses (/24 IPv4 or /120 IPv6). Unsupported
-    asset types are rejected without resolution; URL credentials never appear
-    in errors. ``original`` retains the supplied asset value for the caller.
+    Subnets contain at most 256 addresses (/24 IPv4 or /120 IPv6) and must be a
+    subset of a private range. Unsupported asset types are rejected without
+    resolution; URL credentials never appear in errors. ``original`` retains the
+    supplied asset value for the caller.
     """
     if asset_type not in {"ip", "subnet", "hostname", "domain", "web_app"}:
         raise TargetRejectedError("target_unsupported_type")
@@ -114,19 +114,18 @@ async def resolve_scan_target(
 
     addresses: tuple[str, ...]
     if asset_type == "ip":
-        addresses = (_public_ip(canonical),)
+        addresses = (_allowed_ip(canonical),)
     elif asset_type == "subnet":
         network = ipaddress.ip_network(canonical, strict=False)
         if network.num_addresses > 256:
             raise TargetRejectedError("target_too_large")
-        allowed = network.is_global
-        if settings.SCAN_DEMO_MODE:
-            # Check both boundaries so a subnet cannot include forbidden addresses.
-            allowed = _allowed_address(network.network_address) and _allowed_address(
-                network.broadcast_address
-            )
-        if not allowed:
-            raise TargetRejectedError("target_not_global")
+        # A subnet must sit entirely inside one private range: checking both
+        # boundaries would let a range that spans two blocks through.
+        if not any(
+            network.version == private.version and network.subnet_of(private)
+            for private in _SCAN_PRIVATE_NETWORKS
+        ):
+            raise TargetRejectedError("target_not_allowed")
         addresses = (str(network),)
     else:
         host = canonical
@@ -137,7 +136,7 @@ async def resolve_scan_target(
             except ValueError:
                 pass
             else:
-                return ScanTarget(asset_type, value, (_public_ip(host),))
+                return ScanTarget(asset_type, value, (_allowed_ip(host),))
         try:
             async with asyncio.timeout(resolution_timeout):
                 resolved = await (resolver or _resolve_host)(host)
@@ -147,5 +146,5 @@ async def resolve_scan_target(
             raise TargetRejectedError("target_unresolvable") from exc
         if not resolved:
             raise TargetRejectedError("target_unresolvable")
-        addresses = tuple(_public_ip(address) for address in resolved)
+        addresses = tuple(_allowed_ip(address) for address in resolved)
     return ScanTarget(asset_type, value, addresses)

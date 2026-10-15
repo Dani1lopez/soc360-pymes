@@ -17,8 +17,10 @@ execution must retain the claimed tenant's database context. Scanning
 third-party hosts also carries legal risk; a valid target is not proof of
 permission to scan it.
 
-`SCAN_EXECUTION_ENABLED` defaults to false (`app/core/config.py`). Keep it off
-until asset ownership verification is implemented. The switch blocks new
+`SCAN_EXECUTION_ENABLED` defaults to false (`app/core/config.py`) so a fresh
+deployment never scans anything. Enabling it is safe only because dispatch and
+the executor both require a verified ownership declaration for the asset
+(milestone H2); the switch is a separate operator kill switch. The switch blocks new
 HTTP dispatches, worker claims and pump bells, including already-dispatched
 pending rows. Running scans are stopped with `/cancel`; reaping is unaffected
 (`app/modules/scans/router.py`, `app/worker/tasks.py`).

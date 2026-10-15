@@ -297,8 +297,8 @@ Inventario honesto, para que nadie los descubra por sorpresa:
 
 | Límite | Por qué es así |
 |--------|----------------|
-| **La ejecución de escaneos está apagada por defecto** (`SCAN_EXECUTION_ENABLED=false`) | La autorización sobre el objetivo es la puerta: la plataforma todavía debe verificar la propiedad del objetivo antes de escanear, y ese es el siguiente hito. El perfil demo enciende la ejecución solo para objetivos locales. |
-| **Objetivos acotados** | Un objetivo por activo, como máximo un /24 (IPv4) o /120 (IPv6), y solo direcciones públicas salvo que el modo demo lo relaje. |
+| **La ejecución de escaneos está apagada por defecto** (`SCAN_EXECUTION_ENABLED=false`) | Un despliegue nuevo no escanea nada hasta que un operador la enciende. Una vez encendida, cada escaneo sigue exigiendo una declaración de propiedad verificada del activo (se comprueba al despachar y otra vez en el ejecutor), y en producción los objetivos se limitan a redes privadas. El perfil demo enciende la ejecución solo para objetivos locales. |
+| **Objetivos acotados** | Un objetivo por activo, como máximo un /24 (IPv4) o /120 (IPv6), y solo rangos privados (RFC 1918 / ULA) en producción; el modo demo lo relaja para objetivos locales. |
 | **El tenant sembrado permite un escaneo al día** | El enforcement de plan es real: `scans_per_day` se reserva de forma atómica por petición, así que un segundo lanzamiento responde `429`. Sembrar otro plan para demostrar más. |
 | **Los informes son registros, no archivos** | Los cuatro tipos existen con estado y metadatos; la generación de PDF no está implementada. |
 | **Sin escaneos programados** | Cada escaneo se lanza explícitamente. La ejecución periódica está planificada. |

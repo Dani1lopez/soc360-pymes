@@ -296,8 +296,8 @@ An honest inventory, so nobody discovers these by surprise:
 
 | Limit | Why it is like this |
 |-------|--------------------|
-| **Scan execution is off by default** (`SCAN_EXECUTION_ENABLED=false`) | Authorization over the target is the gate. The platform still has to enforce target ownership before it can scan anything, which is the next milestone; the demo profile turns execution on only for local targets. |
-| **Targets are bounded** | One target per asset definition, at most a `/24` (IPv4) or `/120` (IPv6) subnet, and public addresses only unless the demo mode relaxes it. |
+| **Scan execution is off by default** (`SCAN_EXECUTION_ENABLED=false`) | A fresh deployment never scans anything until an operator turns it on. Once on, a scan still needs a verified ownership declaration for the asset (checked at dispatch and again in the executor), and production targets are limited to private networks. The demo profile turns execution on only for local targets. |
+| **Targets are bounded** | One target per asset definition, at most a `/24` (IPv4) or `/120` (IPv6) subnet, and private ranges only (RFC 1918 / ULA) in production; the demo mode relaxes it for local targets. |
 | **The seeded demo tenant allows one scan a day** | Plan enforcement is real: `scans_per_day` is reserved atomically per request, so a second launch answers `429`. Seed a different plan to demo more. |
 | **Reports are records, not files** | The four report types exist with status and metadata; PDF generation is not implemented. |
 | **No scheduled scans** | Every scan is launched explicitly. Periodic execution is planned. |

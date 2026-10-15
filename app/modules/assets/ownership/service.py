@@ -168,9 +168,11 @@ async def revoke_ownership(
     tenant_id: uuid.UUID | None,
     db: AsyncSession,
 ) -> AssetOwnershipDeclaration:
-    """Revoke the newest declaration of one visible asset.
+    """Revoke every declaration of one visible asset and return the newest.
 
-    Idempotent: revoking an already revoked declaration returns it unchanged.
+    Declaring twice leaves two live rows, and the gate accepts any verified
+    one, so revoking only the newest would keep authorizing scans. Idempotent:
+    revoking an already revoked declaration changes nothing.
     Revoking an asset that was never declared is a 404, because there is
     nothing to revoke.
     """
@@ -178,8 +180,11 @@ async def revoke_ownership(
     if not declarations:
         raise OwnershipDeclarationNotFoundError(str(asset_id))
 
-    declaration = declarations[0]
-    if declaration.status != "revoked":
-        declaration.status = "revoked"
+    changed = False
+    for declaration in declarations:
+        if declaration.status != "revoked":
+            declaration.status = "revoked"
+            changed = True
+    if changed:
         await db.flush()
-    return declaration
+    return declarations[0]

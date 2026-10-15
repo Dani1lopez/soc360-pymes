@@ -106,6 +106,28 @@ async def test_revoking_is_idempotent(
     assert [item["status"] for item in listed.json()["items"]] == ["revoked"]
 
 
+async def test_revoking_withdraws_every_declaration_of_the_asset(
+    tenant_client: AsyncClient, admin_a_headers: dict[str, str]
+) -> None:
+    asset_id = await _create_asset(tenant_client, admin_a_headers, value="10.0.0.9")
+    for _ in range(2):
+        await tenant_client.post(
+            f"/api/v1/assets/{asset_id}/ownership",
+            headers=admin_a_headers,
+            json={"method": "declaration"},
+        )
+
+    revoked = await tenant_client.post(
+        f"/api/v1/assets/{asset_id}/ownership/revoke", headers=admin_a_headers
+    )
+
+    assert revoked.status_code == 200, revoked.text
+    listed = await tenant_client.get(
+        f"/api/v1/assets/{asset_id}/ownership", headers=admin_a_headers
+    )
+    assert [item["status"] for item in listed.json()["items"]] == ["revoked", "revoked"]
+
+
 async def test_another_tenant_cannot_declare_or_read(
     tenant_client: AsyncClient,
     admin_a_headers: dict[str, str],

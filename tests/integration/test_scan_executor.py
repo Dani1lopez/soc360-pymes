@@ -1,11 +1,13 @@
 """DB executor contracts; require the PostgreSQL integration fixtures."""
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 
 from app.core.database import set_tenant_context
+from app.modules.assets.ownership.models import AssetOwnershipDeclaration
 from app.modules.scans.executor import execute_scan
 from app.modules.scans.models import Scan
 from app.modules.scans.nmap.runner import NmapRunError, NmapRunResult
@@ -18,6 +20,21 @@ XML = (
     .read_bytes()
     .replace(b"unsafe &lt;script&gt; &amp; data", b"VULNERABLE CVSS: 7.5")
 )
+
+
+async def _declare_verified(db_session, scan) -> None:
+    """H2-T5: execute_scan requires a verified ownership declaration."""
+    db_session.add(
+        AssetOwnershipDeclaration(
+            tenant_id=scan.tenant_id,
+            asset_id=scan.asset_id,
+            method="declaration",
+            token="executor-test",
+            status="verified",
+            verified_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.flush()
 
 
 async def test_executor_skips_undispatched_scan(db_session, seed_data):
@@ -51,6 +68,7 @@ async def test_executor_skips_undispatched_scan(db_session, seed_data):
 async def test_executor_persistence(db_session, seed_data, mode):
     scan = await _seed_pending_scan(db_session)
     scan_id, tenant_id = scan.id, scan.tenant_id
+    await _declare_verified(db_session, scan)
     # Commit the seed so executor rollback cannot remove it.
     await db_session.commit()
 

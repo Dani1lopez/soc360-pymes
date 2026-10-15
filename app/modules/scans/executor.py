@@ -29,6 +29,11 @@ from app.agents.scan_graph import (
 )
 from app.core.database import set_tenant_context
 from app.modules.assets.models import Asset
+from app.modules.assets.ownership.gate import (
+    NOT_VERIFIED_REASON,
+    OwnershipRequiredError,
+    ensure_scan_authorized,
+)
 from app.modules.scans.models import Scan
 from app.modules.scans.nmap.runner import NmapRunResult, run_nmap
 from app.modules.scans.state import transition_scan
@@ -72,14 +77,14 @@ async def _shielded(cleanup: Awaitable[T]) -> T:
 
 async def _load_scan(
     session: AsyncSession, scan_id: uuid.UUID, tenant_id: uuid.UUID
-) -> tuple[str, str] | None:
+) -> tuple[uuid.UUID, str, str] | None:
     result = await session.execute(
-        select(Asset.asset_type, Asset.value)
+        select(Asset.id, Asset.asset_type, Asset.value)
         .join(Scan, (Scan.asset_id == Asset.id) & (Scan.tenant_id == Asset.tenant_id))
         .where(Scan.id == scan_id, Scan.tenant_id == tenant_id)
     )
     row = result.one_or_none()
-    return (row[0], row[1]) if row is not None else None
+    return (row[0], row[1], row[2]) if row is not None else None
 
 
 async def execute_scan(
@@ -120,6 +125,14 @@ async def execute_scan(
         # A commit anywhere inside the run expires the transaction-local RLS
         # setting, so re-establish it before the graph touches the database.
         await _db_phase(session, tenant_id)
+        # H2-T5: the mandatory gate. It runs once the scan is really claimable, so
+        # an undispatched scan stays "skipped" instead of being failed for a
+        # reason that never applied to it. This is the only code that runs on
+        # every claim, so a declaration revoked after dispatch still blocks it.
+        try:
+            await ensure_scan_authorized(session, asset_id=asset[0])
+        except OwnershipRequiredError:
+            return await _shielded(fail(NOT_VERIFIED_REASON))
         graph = build_scan_graph(
             session=session,
             tenant_id=tenant_id,
@@ -134,7 +147,7 @@ async def execute_scan(
             {
                 "scan_id": str(scan_id),
                 "tenant_id": str(tenant_id),
-                "asset": {"asset_type": asset[0], "value": asset[1]},
+                "asset": {"asset_type": asset[1], "value": asset[2]},
             },
         )
         if state.get("error"):

@@ -21,6 +21,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.modules.assets.models import Asset
+from app.modules.assets.ownership.models import AssetOwnershipDeclaration
 from app.modules.scans.models import Scan
 from app.modules.scans.state import cancel_scan, transition_scan
 from app.modules.tenants.models import Tenant
@@ -199,7 +200,11 @@ async def test_transition_from_terminal_returns_false_and_leaves_row_unchanged(
 async def _seed_committed_scan(
     make_session, *, status: str
 ) -> tuple[uuid.UUID, uuid.UUID]:
-    """Commit tenant + asset + scan through a real session; return (scan, asset)."""
+    """Commit tenant + asset + scan + ownership declaration; return (scan, asset).
+
+    The verified declaration is part of the seed because H2-T5 makes it a
+    precondition for the executor to run at all.
+    """
     session = make_session()
     try:
         await _enable_superadmin(session)
@@ -235,6 +240,17 @@ async def _seed_committed_scan(
             started_at=(datetime.now(timezone.utc) if status != "pending" else None),
         )
         session.add(scan)
+        await session.flush()
+        session.add(
+            AssetOwnershipDeclaration(
+                tenant_id=UUID(TENANT_A_ID),
+                asset_id=asset.id,
+                method="declaration",
+                token=f"state-race-{uuid.uuid4().hex[:12]}",
+                status="verified",
+                verified_at=datetime.now(timezone.utc),
+            )
+        )
         await session.flush()
         await session.commit()
         return scan.id, asset.id

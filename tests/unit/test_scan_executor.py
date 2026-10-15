@@ -23,11 +23,16 @@ def setup(monkeypatch):
         flush=AsyncMock(),
         commit=AsyncMock(),
         rollback=AsyncMock(),
-        # ``upsert_findings`` reads the findings already stored for the scan.
-        execute=AsyncMock(return_value=SimpleNamespace(all=lambda: [])),
+        # ``upsert_findings`` reads the findings already stored for the scan;
+        # ``scalar_one_or_none`` answers the H2 ownership gate.
+        execute=AsyncMock(
+            return_value=SimpleNamespace(
+                all=lambda: [], scalar_one_or_none=lambda: uuid.uuid4()
+            )
+        ),
     )
     tenant = uuid.uuid4()
-    load = AsyncMock(return_value=("hostname", "example.com"))
+    load = AsyncMock(return_value=(uuid.uuid4(), "hostname", "example.com"))
     transition = AsyncMock(return_value=True)
     context = AsyncMock()
     events = []

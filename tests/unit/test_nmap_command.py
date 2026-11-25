@@ -2,6 +2,7 @@
 
 import pytest
 
+from app.core.config import settings
 from app.modules.scans.nmap.command import (
     NMAP_PROFILE,
     REQUIRED_SCAN_TYPES,
@@ -27,6 +28,12 @@ EXPECTED_PROFILE = (
 )
 
 
+@pytest.fixture
+def standard_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the standard profile so these cases ignore an enabled demo mode."""
+    monkeypatch.setattr(settings, "SCAN_DEMO_MODE", False)
+
+
 @pytest.mark.parametrize(
     "addresses",
     [
@@ -35,7 +42,9 @@ EXPECTED_PROFILE = (
         ("8.8.8.8", "1.1.1.1"),
     ],
 )
-def test_exact_argv_and_target_separator(addresses: tuple[str, ...]) -> None:
+def test_exact_argv_and_target_separator(
+    addresses: tuple[str, ...], standard_profile: None
+) -> None:
     target = ScanTarget("ip", addresses[0], addresses)
     argv = build_nmap_command(target)
     assert argv == ["nmap", *EXPECTED_PROFILE, "--", *addresses]
@@ -50,7 +59,7 @@ def test_exact_argv_and_target_separator(addresses: tuple[str, ...]) -> None:
 
 
 @pytest.mark.parametrize("address", ["2606:4700:4700::1111", "2606:4700::/120"])
-def test_ipv6_profile(address: str) -> None:
+def test_ipv6_profile(address: str, standard_profile: None) -> None:
     assert build_nmap_command(ScanTarget("ip", address, (address,))) == [
         "nmap",
         *EXPECTED_PROFILE,
@@ -100,7 +109,7 @@ def test_profile_is_immutable_and_unchanged_after_call() -> None:
     assert isinstance(REQUIRED_SCAN_TYPES, frozenset)
 
 
-def test_custom_binary_path() -> None:
+def test_custom_binary_path(standard_profile: None) -> None:
     target = ScanTarget("ip", "8.8.8.8", ("8.8.8.8",))
     assert build_nmap_command(target, nmap_path="/usr/local/bin/nmap") == [
         "/usr/local/bin/nmap",

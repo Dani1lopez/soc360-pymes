@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: soc360_pymes_test
+          POSTGRES_USER: soc360_migration
+          POSTGRES_PASSWORD: soc360_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U soc360_migration -d soc360_pymes_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        env:
+          REDIS_PASSWORD: ci_test_redis_password
+        options: >-
+          --health-cmd "redis-cli -a ci_test_redis_password ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        command: redis-server --requirepass ci_test_redis_password
+        ports:
+          - 6379:6379
+
+      toxiproxy:
+        image: ghcr.io/shopify/toxiproxy:2.9.0
+        ports:
+          - 8474:8474
+          - 26379:26379
+
+    env:
+      ENVIRONMENT: development
+      POSTGRES_USER: soc360_migration
+      POSTGRES_PASSWORD: soc360_test_password
+      POSTGRES_DB: soc360_pymes_test
+      DATABASE_URL: postgresql+asyncpg://soc360_app:soc360_test_password@localhost:5432/soc360_pymes_test
+      DATABASE_URL_MIGRATION: postgresql+asyncpg://soc360_migration:soc360_test_password@localhost:5432/soc360_pymes_test
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      REDIS_DB: 15
+      REDIS_PASSWORD: ci_test_redis_password
+      SECRET_KEY: abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwx
+      GROQ_API_KEY: gsk_${{ 'ci_placeholder_not_a_real_key' }}
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      REFRESH_TOKEN_EXPIRE_DAYS: 7
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Check lockfile freshness
+        run: uv lock --check
+
+      - name: Sync dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Check the OpenAPI snapshot is up to date
+        run: uv run python scripts/dump_openapi.py --check
+
+      - name: Smoke test uv import surface
+        run: >
+          uv run python -c
+          "import uvicorn, sqlalchemy.ext.asyncio, redis.asyncio, celery, jwt, asyncpg, cryptography, bcrypt, hiredis"
+
+      - name: Smoke test Celery CLI help
+        run: uv run celery --help
+
+      - name: Setup app role
+        env:
+          PGPASSWORD: soc360_test_password
+        run: |
+          psql -U soc360_migration -d soc360_pymes_test -h localhost <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='soc360_app') THEN
+              CREATE ROLE soc360_app WITH LOGIN PASSWORD 'soc360_test_password' NOSUPERUSER NOBYPASSRLS;
+            END IF;
+          END
+          $$;
+          GRANT USAGE ON SCHEMA public TO soc360_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO soc360_app;
+          GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO soc360_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO soc360_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO soc360_app;
+          SQL
+
+      - name: Detect SDD PR context from PR title
+        id: sdd_pr
+        if: github.event_name == 'pull_request'
+        run: |
+          if [[ "${{ github.event.pull_request.title }}" =~ \(PR([0-9]+) ]]; then
+            echo "context=PR${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "context=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Direct tests run in two exhaustive, non-overlapping selections
+      # (guarded by tests/unit/test_ci_pytest_selection.py and
+      # tests/unit/test_xdist_serial_partition.py).
+      # Workers are pinned to 4 (one per runner vCPU): `-n auto` is NOT safe because worker index
+      # gw13+ raises at tests/conftest.py import (one Redis DB per worker).
+      # Toxiproxy and redis_pressure gates below stay serial by design.
+      # ROLLBACK: replace both steps with the original single serial step:
+      #   run: uv run pytest -m "not toxiproxy and not redis_pressure"
+      - name: Run direct tests (parallel, -n 4)
+        id: direct_tests_parallel
+        env:
+          SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
+          PG_SUPERUSER: soc360_migration
+          PG_SUPERUSER_PASSWORD: soc360_test_password
+        run: >
+          uv run pytest -n 4
+          -m "not toxiproxy and not redis_pressure and not serial_only"
+
+      # Runs even when the parallel step failed, so one CI run reports every
+      # direct-test failure (as the former single step did), but not when an
+      # earlier setup step failed: then the parallel step is skipped and this one
+      # would only add a misleading second failure. The extra exclusions keep
+      # tests owned by the dedicated Toxiproxy / Redis-pressure gates out of this
+      # step; they run after their own readiness checks below.
+      - name: Run direct tests (serial_only)
+        if: ${{ !cancelled() && steps.direct_tests_parallel.conclusion != 'skipped' }}
+        env:
+          SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
+          PG_SUPERUSER: soc360_migration
+          PG_SUPERUSER_PASSWORD: soc360_test_password
+        run: >
+          uv run pytest
+          -m "serial_only and not toxiproxy and not redis_pressure"
+
+      - name: Wait for Toxiproxy readiness
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --max-time 2 \
+                http://localhost:8474/version; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Toxiproxy admin API did not become ready within 30 seconds" >&2
+          exit 1
+
+      - name: Validate Toxiproxy Redis routing
+        env:
+          SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
+        run: >
+          uv run pytest
+          tests/integration/test_toxiproxy_baseline.py::test_pr1_redis_connection_refused_smoke
+          -q
+
+      - name: Run proxy tests (serial)
+        env:
+          SDD_PR_CONTEXT: ${{ steps.sdd_pr.outputs.context }}
+        run: uv run pytest -m "integration and toxiproxy" -x
+
+      - name: Redis no-eviction pressure gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          project=soc360-redis-pressure
+          compose=(docker compose -f docker-compose.redis-pressure.yml --project-name "$project")
+          trap '${compose[@]} down -v' EXIT
+          export REDIS_PRESSURE_MAXMEMORY=32mb
+          export REDIS_PRESSURE_MEM_LIMIT=64m
+          export REDIS_PRESSURE_PORT=16379
+          export REDIS_PRESSURE_PASSWORD=ci_pressure_redis_password
+          "${compose[@]}" up -d --wait
+          container_id=$("${compose[@]}" ps -q redis-pressure)
+          memory=$(docker inspect --format '{{.HostConfig.Memory}}' "$container_id")
+          test "$memory" -gt 0
+          export REDIS_PRESSURE_CONTAINER_ID="$container_id"
+          uv run pytest -m redis_pressure -q

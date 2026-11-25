@@ -1,0 +1,511 @@
+# SOC360-PyMEs — SOC as a Service for Small & Medium Businesses
+
+[🇪🇸 Español](README.es.md)
+
+![Python](https://img.shields.io/badge/python-3.12+-blue.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115.6-009688.svg)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)
+![Redis](https://img.shields.io/badge/Redis-7-DC382D.svg)
+![Tests](https://img.shields.io/badge/tests-2036-brightgreen.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
+![Ruff](https://img.shields.io/badge/linter-ruff-261C15.svg)
+![Mypy](https://img.shields.io/badge/types-mypy-2E6DB4.svg)
+
+---
+
+## Why SOC360-PyMEs
+
+Small and medium-sized businesses (PyMEs) face the same cyber threats as enterprises but rarely have the budget to build or maintain a 24/7 Security Operations Center (SOC). **SOC360-PyMEs** closes that gap by delivering a multi-tenant SaaS backend that provides enterprise-grade security operations at a fraction of the cost.
+
+- **Problem**: PyMEs lack dedicated security teams, vulnerability management, and real-time threat detection.
+- **Solution**: A SOC-as-a-Service platform with automated asset discovery, AI-powered vulnerability analysis, tenant isolation, and scalable event processing.
+
+---
+
+## Current Status
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| **F0** | ✅ Complete | Architecture & Data Model — 23 ADRs, 13 DB tables, security model |
+| **F1** | ✅ Complete | Backend Base — Auth, tenants, users, RLS, events, LLM, fail-closed Redis, metrics, outage handling — 2036 backend tests passing |
+| **F2** | ✅ Complete | Vulnerability stack — vertical CRUD (Assets → Scans → Vulnerabilities → Reports) plus infra/agents (Nmap, Celery, Dashboard, LLM enrichment, LangGraph scan graph) — PRD v2 |
+| **F3** | 📋 Planned | Real-time — WebSockets, log ingestion, anomaly detection |
+| **F4** | ✅ Complete | Frontend — React 18 + TypeScript + Vite SPA, 8 pages, superadmin tenant switcher — 455 frontend tests passing |
+| **F5** | 📋 Planned | Extra Agents — Compliance, Intelligence |
+| **F6** | 📋 Planned | Advanced — Email, PDF reports, Redis TLS |
+| **F7** | 📋 Planned | QA + Prod — E2E tests, CI/CD, deploy |
+
+---
+
+## Core Features
+
+| Feature | Description |
+|---------|-------------|
+| **Authentication & Security** | JWT access (15min) + refresh rotation (7d, HttpOnly cookie). JTI denylist via Redis. Login lockout (10 attempts / 15min). Rate limiting. CSRF protection. Security headers. PII sanitization. Fail-closed on Redis outages (auth, revocation, DLQ). |
+| **Multi-Tenant (RLS)** | Row-Level Security via PostgreSQL `SET LOCAL`. Transaction-scoped tenant context. 4 plans: Free (10 assets), Starter (25), Pro (100), Enterprise (500). Composite FKs enforce tenant-scoped references (scans → assets). |
+| **RBAC** | Hierarchical roles: viewer < analyst/ingestor < admin < superadmin. CHECK constraints enforce tenant rules. Self-protection prevents privilege escalation. |
+| **Event Bus** | Redis Streams with typed Pydantic events, consumer groups, XACK, Dead Letter Queue with durable ack, auto-reconnect, blocking reads (XREADGROUP), and lag monitoring. In-process async consumer — no external worker dependency. |
+| **LLM Abstraction** | Provider Protocol with 10 providers (Groq, OpenRouter, OpenAI, Anthropic, Gemini, Mistral, Cohere, Together, HuggingFace, Ollama). Groq (llama-3.3-70b) default. Singleton caching. `llm_safe_complete()` never raises. Credential redaction. Prompt-injection sanitization for scan data. |
+| **LLM Enrichment** | Nine vulnerability functions, scoped by tenant level (basic 3 / standard 6 / full 9). Persisted per-function status and provenance, idempotent retries, bounded concurrency and call budget. Dedicated Celery queue; disabled by default for cost safety. English output; finding-bound CVE/CWE citation filtering. |
+| **Observability** | Multiprocess-safe Prometheus registry (`prometheus-client`). Token-authenticated `/metrics` endpoint. `child_exit` gunicorn hook for worker cleanup. Typed outage catalog (25 FlowIds) mapping failures to sanitized 503 responses with `Retry-After`. |
+| **Resilience** | Distributed locks (Redis) with retry/backoff and outage isolation. Startup Redis retry. DB index auto-recovery via `CREATE INDEX CONCURRENTLY`. Toxiproxy fault-injection test harness (revocation, scan-lock, rate-limit faults). |
+
+---
+
+## High-Level Architecture
+
+```mermaid
+graph TB
+    Browser["Browser"] -->|:8088| Nginx["nginx<br/>static SPA + /api proxy"]
+    Nginx --> API["FastAPI<br/>(Gunicorn + uvicorn-worker)"]
+    API --> PG[("PostgreSQL 16<br/>RLS per tenant")]
+    API --> Redis[("Redis 7<br/>denylist · locks · events · broker")]
+    API -->|best-effort bell| Worker["Celery: scans<br/>(Nmap · NET_RAW)"]
+    Beat["Celery Beat"] -->|pump · reap| Maintenance["Celery: maintenance"]
+    Maintenance -->|wakes pending scans| Worker
+    Maintenance --> Redis
+    Worker -->|parse · dedup · persist| PG
+    Worker --> Enrichment["Celery: enrichment<br/>(off by default)"]
+    Enrichment --> LLM["LLM provider<br/>(Groq · OpenAI · …)"]
+    Scraper["Prometheus"] -->|token auth| API
+```
+
+The request path is a single origin: nginx serves the built SPA and proxies
+`/api` to the API container, so the browser never makes a cross-origin request
+and the refresh cookie stays `SameSite=Strict`.
+
+A launch commits the dispatch **before** ringing the worker, so the bell is
+only a hint: the periodic pump recovers a lost one by waking the worker to
+claim pending work from PostgreSQL. The maintenance consumer is what runs that
+pump and the reaper.
+
+### Scan pipeline and data model
+
+```mermaid
+graph LR
+    Tenant --> User
+    Tenant --> Asset
+    Asset --> Scan
+    Scan --> Vulnerability
+    Vulnerability --> Report
+    Run["POST /scans/:id/run"] --> Scan
+    Scan -->|committed dispatch| Pipeline["Nmap → parse → dedup → persist"]
+    Pipeline --> Vulnerability
+    Dashboard["Dashboard metrics"] --> Scan
+    Dashboard --> Vulnerability
+```
+
+`Tenant` is the isolation boundary: every other row carries `tenant_id`, RLS
+policies enforce it in the database, and the application connects with a role
+that neither owns the schema nor bypasses those policies.
+
+The platform follows a modular monolith pattern. FastAPI handles HTTP traffic, PostgreSQL enforces tenant isolation at the row level, and Redis serves as the central nervous system for session denylisting, caching, distributed locks, and asynchronous event streaming. Events are consumed by an in-process asyncio task with blocking reads. Scan execution and LLM enrichment use separate Celery workers; Beat handles scan maintenance, not enrichment recovery.
+
+---
+
+## Tech Stack
+
+| Technology | Version |
+|------------|---------|
+| Python | 3.12+ |
+| FastAPI | 0.115.6 |
+| SQLAlchemy | 2.0.36 |
+| asyncpg | 0.30.0 |
+| PostgreSQL | 16 (Alpine) |
+| Redis | 7 (Alpine, client 5.2.1) |
+| Alembic | 1.14.0 |
+| Celery | 5.4.0 (scan execution, maintenance and enrichment) |
+| LangGraph | 1.2.14 (scan pipeline graph) |
+| Uvicorn | 0.32.1 |
+| Gunicorn | 23.0.0 (`gunicorn_conf.py`, `uvicorn-worker` for ASGI) |
+| Pydantic | 2.10.4 |
+| pydantic-settings | 2.7.0 |
+| PyJWT[crypto] | >=2.8,<3 |
+| bcrypt | >=4.0 |
+| prometheus-client | >=0.26.0 |
+| structlog | 24.4.0 |
+| pytest | 8.3.4 |
+| pytest-asyncio | 0.24.0 |
+| ruff | 0.8.4 |
+| mypy | 1.13.0 |
+| httpx | 0.27.2 |
+| fakeredis | 2.34.1 |
+| Docker Compose | — |
+| Groq (llama-3.3-70b) | LLM default |
+
+---
+
+## Project Structure
+
+```
+soc360-pymes/
+├── app/
+│   ├── main.py                 # FastAPI entrypoint, lifespan, routers, /metrics, /health
+│   ├── dependencies/           # FastAPI deps (get_db, get_current_user, locks, LLM, cross-tenant)
+│   ├── event_bus/              # Redis Streams EventBus + consumer + DLQ
+│   ├── event_schemas.py        # Pydantic event schemas
+│   ├── agents/                 # F2 agents (planned)
+│   ├── core/                   # Shared layer
+│   │   ├── config.py           # pydantic-settings
+│   │   ├── database.py         # SQLAlchemy async engine, RLS helper
+│   │   ├── security.py         # JWT, bcrypt, denylist, JTI, roles
+│   │   ├── redis.py            # Redis pool + health check + startup retry
+│   │   ├── middleware.py       # SecurityHeaders + HTTPS redirect
+│   │   ├── exceptions.py       # Error hierarchy (RedisOutageError, TemporaryUnavailableError)
+│   │   ├── logging.py          # structlog + redaction
+│   │   ├── llm/                # Multi-provider LLM abstraction (config, factory, providers)
+│   │   ├── contracts.py        # TypedDict contracts
+│   │   ├── pii.py              # PII sanitization
+│   │   ├── types.py            # Custom types
+│   │   ├── metrics.py          # Multiprocess Prometheus registry
+│   │   ├── metrics_auth.py     # /metrics token auth
+│   │   ├── outage.py           # Typed outage catalog (25 FlowIds)
+│   │   ├── rate_limit.py       # Redis rate limiting
+│   │   └── dist_lock.py        # Distributed locks
+│   └── modules/                # Domain modules
+│       ├── auth/               # ✅ F1 — 984 loc
+│       ├── tenants/            # ✅ F1 — 532 loc
+│       ├── users/              # ✅ F1 — 620 loc
+│       ├── assets/             # ✅ F2 — models (57 loc)
+│       ├── scans/              # ✅ F2 — models (82 loc)
+│       ├── vulnerabilities/    # ✅ F2 — models (80 loc)
+│       └── reports/            # ✅ F2 — models (80 loc)
+├── tests/                      # 1,151 tests
+│   ├── conftest.py             # Shared fixtures
+│   ├── unit/                   # Fakeredis + mocks
+│   ├── integration/            # Real DB + Alembic + Toxiproxy + RLS / index / migration constraint tests
+│   ├── api/                    # httpx AsyncClient
+│   ├── modules/                # Module-level tests
+│   └── helpers/                # broken_redis, toxiproxy harnesses
+├── migrations/                 # 7 Alembic migrations
+├── docker/                     # Docker volumes
+├── scripts/
+│   └── seed_db.py              # Idempotent seed
+├── docker-compose.yml
+├── Dockerfile
+├── entrypoint.sh
+├── gunicorn_conf.py
+├── pytest.ini
+└── .env.example
+```
+
+> **Note**: Assets, Scans, and Vulnerabilities modules have models implemented (F2 in progress — CRUD slices per PRD v2). Empty scaffold modules (dashboard, alerts, anomalies, ingest) have been removed.
+
+---
+
+## Quickstart
+
+**Prerequisites**: Docker, Python 3.12+, [uv](https://docs.astral.sh/uv/getting-started/installation/)
+
+### With uv (recommended)
+
+```bash
+# 1. Clone
+git clone https://github.com/Dani1lopez/soc360-pymes.git
+cd soc360-pymes
+
+# 2. Sync dependencies (creates .venv automatically)
+uv sync --extra dev
+
+# 3. Configure environment
+cp .env.example .env
+# Edit .env if needed (Docker exposes PostgreSQL on port 5433)
+
+# 4. Start services (PostgreSQL 16 + Redis 7)
+docker compose --profile dev up -d
+
+# 5. Wait for services to be healthy, then migrate
+uv run alembic upgrade head
+
+# 6. Seed database with demo data
+uv run python scripts/seed_db.py
+
+# 7. Run tests (1,151 tests across 5 layers)
+uv run pytest -v
+
+# 8. Start dev server
+uv run uvicorn app.main:app --reload
+
+# 9. Verify it works
+curl http://localhost:8000/health
+```
+
+---
+
+### Product stack (the whole system, one command)
+
+The Compose file above is local infrastructure. To run the product itself — API,
+worker, maintenance, enrichment, beat, PostgreSQL, Redis and the built frontend
+behind nginx — use the stack file, which leaves this development workflow
+untouched:
+
+```bash
+# 1. Fill the local .env values the stack needs (idempotent, never prints one)
+./scripts/demo_bootstrap.py
+
+# 2. Build and start. --profile demo adds the seeded users, the fake
+#    vulnerable target and a scan that runs for real.
+docker compose -f docker-compose.app.yml --profile demo up -d --build
+
+# 3. Open http://localhost:8088 and sign in as a seeded user
+#    (the logins are the documented ones in .env.example)
+```
+
+With the demo profile the guided flow is: create a `hostname` asset with value
+`demo-target`, declare ownership of it, have a superadmin approve that
+declaration, create a vulnerability scan for it, execute it, and watch the
+findings appear. The approval is not optional: a hand declaration is recorded as
+pending and a scan needs a verified one, so only a superadmin can authorize it
+(sign in as the seeded superadmin and approve the declaration). The run also
+needs `SCAN_DEMO_MODE=true` and `SCAN_EXECUTION_ENABLED=true`; the stack reads
+both from the environment and keeps them off by default.
+
+---
+
+### Worker services
+
+Configure a local, untracked `.env.worker` with the database URL targeting
+Compose host `postgres` on port 5432 (or your external database). Start the
+worker overlay, including the dedicated enrichment service:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.worker.yml --profile dev --profile worker up -d worker maintenance enrichment beat
+```
+
+### Enrichment configuration
+
+Set these environment variables in the API and worker environments. Enrichment
+uses the configured global LLM provider; OpenRouter is optional and Groq remains
+the default.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ENRICHMENT_ENABLED` | `False` | Enable post-scan publishing, relaunch endpoints and worker execution |
+| `ENRICHMENT_LANGUAGE` | `en` | Output language; only English is currently supported |
+| `ENRICHMENT_MAX_CONCURRENCY` | `3` | Concurrent provider calls per vulnerability (minimum 1) |
+| `ENRICHMENT_BUDGET_SECONDS` | `120` | Overall provider-call budget, including concurrency waiting |
+| `LLM_PROVIDER` | `groq` | Set `openrouter` to select OpenRouter |
+| `OPENROUTER_API_KEY` | Not configured | Supply your OpenRouter credential locally; never commit it |
+| `OPENROUTER_MODEL` | `inclusionai/ling-flash-3.0:free` | OpenRouter model identifier |
+
+### Proxy and rate-limit configuration
+
+These two settings decide which peer may declare the client IP and how long a
+shared IP is throttled.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `TRUSTED_PROXIES` | `["127.0.0.1/32", "::1/128"]` | IPs/CIDRs allowed to set `X-Forwarded-For`: loopback only, for the local Vite proxy. The compose stack passes the `edge` subnet (the bundled nginx and nothing else) here in `docker-compose.app.yml`. A peer outside this list cannot influence the client IP — its `X-Forwarded-For` is ignored. Every entry must be a valid IP or CIDR, and an invalid entry fails at boot. Override as a JSON array, e.g. `TRUSTED_PROXIES='["10.0.0.0/8"]'` |
+| `SOC360_EDGE_SUBNET` | `10.203.17.0/29` | Subnet of the `edge` network, which only `frontend` (nginx) and `api` join. The same value feeds the API's `TRUSTED_PROXIES`, so the network and the trusted range cannot drift apart. Change it when two stacks run side by side (each needs its own range) or when this range clashes with an existing network; the ordinary `default` network is left to Docker |
+| `RATE_LIMIT_IP_THROTTLE_SECONDS` | `60` | Fixed throttle window for the per-IP bucket, between `1` and `300` seconds. One IP is shared by many users (office NAT, carrier CGNAT, the compose network itself), so exceeding the threshold throttles that IP for this short window instead of the escalating per-account lockout: a shared IP is never hard-locked |
+
+---
+
+## Known limits and out of scope
+
+An honest inventory, so nobody discovers these by surprise:
+
+| Limit | Why it is like this |
+|-------|--------------------|
+| **Scan execution is off by default** (`SCAN_EXECUTION_ENABLED=false`) | A fresh deployment never scans anything until an operator turns it on. Once on, a scan still needs a verified ownership declaration for the asset (checked at dispatch and again in the executor), and production targets are limited to private networks. A hand declaration is only a request: it stays pending until a superadmin approves it. The demo profile turns execution on only for local targets. |
+| **Targets are bounded** | One target per asset definition, at most a `/24` (IPv4) or `/120` (IPv6) subnet, and private ranges only (RFC 1918 / ULA) in production; the demo mode relaxes it for local targets. |
+| **The seeded demo tenant allows one scan a day** | Plan enforcement is real: `scans_per_day` is reserved atomically per request, so a second launch answers `429`. Seed a different plan to demo more. |
+| **Reports are records, not files** | The four report types exist with status and metadata; PDF generation is not implemented. |
+| **No scheduled scans** | Every scan is launched explicitly. Periodic execution is planned. |
+| **Enrichment is off by default** | Cost safety. Turning it on needs a provider credential and the `enrichment` queue consumer the stack already runs. |
+| **A provider-shaped key is required to boot** | The settings validator demands a Groq-shaped key whenever the configured provider is Groq, even with enrichment off. The demo bootstrap writes a placeholder that is never sent anywhere. |
+| **`develop` and `main` are not reconciled** | Historical branch drift. `main` is the source of truth. |
+
+---
+
+## Development Workflow
+
+1. **Branch**: Create feature branches from `main`.
+2. **Commits**: Use [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`).
+3. **Pull Requests**: Open PRs against `main`. CI (GitHub Actions) runs tests, ruff, mypy, and lockfile freshness checks.
+4. **Merge**: PRs are squash-merged to keep `main` history linear and readable.
+
+---
+
+## Testing & Quality
+
+The test suite is organized in four layers:
+
+| Layer | Scope | Command |
+|-------|-------|---------|
+| **Unit** | Fakeredis + mocks, no DB | `pytest tests/unit -v` |
+| **Integration** | Real PostgreSQL + Alembic migrations + Toxiproxy fault injection, plus the RLS cross-tenant, index health and migration constraint tests | `pytest tests/integration -v` |
+| **API** | Full HTTP cycle via `httpx.AsyncClient` | `pytest tests/api tests/test_auth.py tests/test_tenants.py tests/test_users.py -v` |
+| **Modules** | Module-scoped behavior (auth session caps, refresh-token races) | `pytest tests/modules -v` |
+
+Additional quality commands:
+
+```bash
+# Linting
+uv run ruff check .
+uv run ruff format .
+
+# Type checking
+uv run mypy .
+
+# Full suite
+uv run pytest -v
+```
+
+CI runs the direct suite in two steps: parallel with pytest-xdist, then the `serial_only` tests (fixed-name databases and migrations) serially:
+
+```bash
+uv run pytest -n 4 -m "not toxiproxy and not redis_pressure and not serial_only"
+uv run pytest -m "serial_only and not toxiproxy and not redis_pressure"
+```
+
+Use `-n 4`, not `-n auto`: worker indexes `gw13` and above are unsupported (one Redis DB per worker). Toxiproxy and `redis_pressure` gates stay serial. Rollback to the original single step:
+
+```bash
+uv run pytest -m "not toxiproxy and not redis_pressure"
+```
+
+Key testing patterns:
+- Concurrency tests for advisory locks and parallel sessions.
+- Fail-closed tests for Redis-down scenarios (auth, revocation, locks, DLQ).
+- Toxiproxy fault-injection matrix: revocation events, scan locks, rate-limit, DB statement timeout.
+- Deterministic seeding with fixed UUIDs, 2 tenants, and 5 users.
+
+---
+
+## API Overview
+
+The following endpoints are currently available:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/auth/login` | Authenticate and receive JWT + refresh cookie |
+| `POST` | `/api/v1/auth/refresh` | Rotate refresh token (HttpOnly cookie required) |
+| `POST` | `/api/v1/auth/logout` | Revoke current session |
+| `POST` | `/api/v1/auth/change-password` | Change password and cascade revocation |
+| `GET` | `/api/v1/users/me` | Get current user profile |
+| `POST` | `/api/v1/users/` | Create user (admin+) |
+| `GET` | `/api/v1/users/` | List users (tenant-scoped) |
+| `GET` | `/api/v1/users/{id}` | Get user by ID |
+| `PATCH` | `/api/v1/users/{id}` | Update user |
+| `DELETE` | `/api/v1/users/{id}` | Deactivate user (self-protected) |
+| `POST` | `/api/v1/tenants/` | Create tenant (superadmin) |
+| `GET` | `/api/v1/tenants/` | List tenants (superadmin) |
+| `GET` | `/api/v1/tenants/{id}` | Get tenant by ID |
+| `PATCH` | `/api/v1/tenants/{id}` | Update tenant |
+| `DELETE` | `/api/v1/tenants/{id}` | Deactivate tenant |
+| `GET` | `/api/v1/dashboard/summary` | Tenant dashboard metrics (60 s cache; superadmin passes `tenant_id`) |
+| `GET` | `/api/v1/vulnerabilities/{id}/enrichment` | Read functions for the tenant's level (admin/analyst/viewer/superadmin) |
+| `POST` | `/api/v1/vulnerabilities/{id}/enrichment` | Queue missing, failed or stale functions (admin/analyst/superadmin) |
+| `POST` | `/api/v1/scans/{id}/enrichment` | Queue findings with incomplete successful function coverage (admin/analyst/superadmin) |
+| `GET` | `/health` | Liveness probe (status + version) |
+| `GET` | `/health/db/indexes` | Invalid DB index probe (k8s target) |
+| `GET` | `/metrics` | Prometheus scrape endpoint (token-authenticated, not in schema) |
+
+Enrichment POSTs return 202 with queued counts, or 503 if disabled or publishing
+fails; there is no periodic enrichment sweep. GET remains available when disabled
+and reports absent rows as `missing`. Scan relaunch counts `ok` rows and does not
+detect stale successes; vulnerability relaunch checks input, prompt version and
+model when the task runs. A mid-loop publish failure may leave some tasks queued
+without reporting their count.
+
+Full OpenAPI documentation is available at `/api/docs` when the server is running (disabled in production).
+
+---
+
+## Auth Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant API as FastAPI
+    participant DB as PostgreSQL
+    participant R as Redis
+
+    C->>API: POST /api/v1/auth/login
+    API->>R: Check healthy (fail-closed)
+    API->>R: Check lockout
+    API->>DB: Verify credentials
+    API->>DB: Check tenant active
+    API->>R: Clear login attempts
+    API->>API: Create JWT + refresh
+    API->>R: Track JTI (denylist)
+    API->>DB: Store refresh hash
+    API->>C: access_token + HttpOnly cookie
+```
+
+---
+
+## F2 Pipeline (Complete — PRD v2)
+
+```mermaid
+graph LR
+    A["Slice 0: Heal F1<br/>(indexes, last_login_at)"] --> B["Slice 1-4: Vertical CRUD<br/>Assets → Scans → Vulnerabilities → Reports"]
+    B --> C["Slice 5-6: Infra<br/>Nmap executor · Celery + Beat"]
+    C --> D["Slice 7-9: Agents<br/>Dashboard · LLM enrichment · LangGraph"]
+```
+
+F2 follows PRD v2 ("build vertical, clean first"). Each module (Assets, Scans, Vulnerabilities, Reports) gets Pydantic schemas, async tenant-scoped services, RBAC routers, and tests before moving to infrastructure (safe Nmap execution, Celery workers) and agents (dashboard metrics, nine-function LLM enrichment, LangGraph agent pipeline). Models and migrations for all four modules are already implemented with composite FKs for tenant isolation.
+
+---
+
+F2 is complete: slices 7 (dashboard), 8 (LLM enrichment) and 9 (scan graph)
+are implemented.
+The scan pipeline runs as a LangGraph graph — Nmap, parse, dedup, persist —
+inside the existing Celery scan task, and findings are deduplicated inside one
+scan. Enrichment stays a per-vulnerability Celery task outside the graph. See
+the [Slice 8 ADR](docs/adr/f2-slice-8-llm-enrichment.md) for enrichment levels
+and delivery semantics, and the
+[Slice 9 ADR](docs/adr/f2-slice-9-scan-graph.md) for the graph boundaries.
+
+---
+
+## Roadmap
+
+| Phase | Focus | Status |
+|-------|-------|--------|
+| F0 | Architecture & Data Model | ✅ Complete |
+| F1 | Backend Base (Auth, Tenants, Users, RLS, Events, LLM, Metrics, Outages) | ✅ Complete |
+| F2 | Vulnerability stack — vertical CRUD + infra/agents (PRD v2) | ✅ Complete |
+| F3 | Real-time (WebSockets, Ingestion, Anomalies) | 📋 Planned |
+| F4 | Frontend (React 18 + TS + Vite) | 📋 Planned |
+| F5 | Extra Agents (Compliance, Intelligence) | 📋 Planned |
+| F6 | Advanced (Email, PDF reports, Redis TLS) | 📋 Planned |
+| F7 | QA + Prod (E2E, CI/CD polish, Deploy) | 📋 Planned |
+
+> The active delivery plan is PRD v2 — F2 Vertical Build, which supersedes the archived PRD v1 MVP June.
+
+---
+
+## Contributing
+
+Contributions are welcome. Please open an issue to discuss significant changes before submitting a PR. For bug fixes and small improvements, feel free to open a PR directly.
+
+- [Open an issue](https://github.com/Dani1lopez/soc360-pymes/issues)
+- [Submit a PR](https://github.com/Dani1lopez/soc360-pymes/pulls)
+
+---
+
+## License
+
+This project is **open source** under the [MIT License](LICENSE).
+
+```
+MIT License — Copyright (c) 2026 Daniel Alcaraz López
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+```
+
+See the full license text in [`LICENSE`](LICENSE).

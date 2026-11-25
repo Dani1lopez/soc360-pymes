@@ -1,0 +1,87 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: soc360_postgres
+    profiles: [dev]
+    # Only starts with: docker compose --profile dev up
+    # Does NOT expose port to host by default
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # Host port mapping — only active when --profile dev is used (postgres service).
+    # Bound to loopback so the dev database is never reachable from the network.
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - ./docker/postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 6s
+      retries: 5
+    restart: unless-stopped
+
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: soc360_postgres_test
+    profiles: [test]
+    # Only starts with: docker compose --profile test up -d
+    environment:
+      POSTGRES_USER: soc360_migration
+      POSTGRES_PASSWORD: "${POSTGRES_TEST_PASSWORD:?set POSTGRES_TEST_PASSWORD in your environment or tests/.env}"
+      POSTGRES_DB: soc360_test
+    # Bound to loopback: the test database is a local-only service.
+    ports:
+      - "127.0.0.1:5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U soc360_migration -d soc360_test"]
+      interval: 10s
+      timeout: 6s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: soc360_redis
+    # Memory values are environment-owned and must be measured per environment.
+    # test values are never production sizing; provide both values explicitly.
+    command: >
+      redis-server
+      --maxmemory ${REDIS_MAXMEMORY:?REDIS_MAXMEMORY must be set}
+      --maxmemory-policy noeviction
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    mem_limit: ${REDIS_CONTAINER_MEMORY_LIMIT:?REDIS_CONTAINER_MEMORY_LIMIT must be set}
+    # Host port mapping for local dev ONLY, bound to loopback — do not expose in
+    # staging/production
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - ./docker/redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}", "ping"]
+      interval: 10s
+      timeout: 6s
+      retries: 5
+    restart: unless-stopped
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    container_name: soc360_toxiproxy
+    profiles: [dev, test]
+    # Bound to loopback: only local test tooling talks to the proxy.
+    ports:
+      - "127.0.0.1:8474:8474"
+      - "127.0.0.1:26379:26379"
+    # The Toxiproxy image is shell-less; probing its executable is the
+    # fail-closed readiness check for the admin process bound on :8474.
+    healthcheck:
+      test: ["CMD", "/toxiproxy", "-version"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped

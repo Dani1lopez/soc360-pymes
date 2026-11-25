@@ -1,0 +1,8 @@
+node_modules/
+dist/
+pnpm-lock.yaml
+openapi.json
+src/api/types.ts
+src/routeTree.gen.ts
+test-results/
+playwright-report/

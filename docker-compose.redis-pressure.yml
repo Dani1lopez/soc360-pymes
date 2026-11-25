@@ -1,0 +1,21 @@
+# Disposable real-Redis pressure fixture. Values are representative test inputs only.
+# Never reuse these limits for production sizing or connect this service to shared data.
+services:
+  redis-pressure:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --maxmemory ${REDIS_PRESSURE_MAXMEMORY:?REDIS_PRESSURE_MAXMEMORY must be set}
+      --maxmemory-policy noeviction
+      --requirepass ${REDIS_PRESSURE_PASSWORD:?REDIS_PRESSURE_PASSWORD must be set}
+    # This external ceiling is deliberately larger than the temporary Redis limit.
+    mem_limit: ${REDIS_PRESSURE_MEM_LIMIT:?REDIS_PRESSURE_MEM_LIMIT must be set}
+    ports:
+      - "127.0.0.1:${REDIS_PRESSURE_PORT:?REDIS_PRESSURE_PORT must be set}:6379"
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PRESSURE_PASSWORD:?REDIS_PRESSURE_PASSWORD must be set}", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30

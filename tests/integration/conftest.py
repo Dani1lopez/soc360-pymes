@@ -1,0 +1,602 @@
+"""Integration test configuration using real PostgreSQL + Alembic migrations.
+
+This conftest is loaded ONLY for tests under tests/integration/.
+It overrides the session-scoped prepare_database fixture to use real
+Alembic migrations instead of the Base.metadata.create_all() approach.
+
+Gate 0: tests must run against real schema (not no-op) so that functional
+failures are real bugs, not missing schema.
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import re
+import subprocess
+import sys
+from collections.abc import Callable, Generator
+from typing import Any
+from uuid import UUID
+
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import make_url
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.core.database import set_tenant_context
+from app.core.redis import close_pool
+from app.dependencies import get_current_user, get_db, get_db_with_tenant
+from app.main import create_app
+from app.modules.assets.models import Asset
+from app.modules.auth.models import RefreshToken
+from app.modules.reports.models import Report
+from app.modules.scans.models import Scan
+from app.modules.users.models import User
+from app.modules.vulnerabilities.models import Vulnerability
+import tests.conftest as root_conftest
+from tests.conftest import ADMIN_A_ID, ADMIN_B_ID, TENANT_A_ID, TENANT_B_ID
+
+# Global marker for all tests in this directory
+pytestmark = pytest.mark.integration
+
+
+def pytest_collection_modifyitems(items):
+    """Forcefully mark all tests in tests/integration/ with the integration marker.
+
+    This ensures `pytest -m integration` works even when pytestmark in conftest
+    alone doesn't reliably propagate to the test collection.
+    """
+    integration_path = "tests/integration"
+    for item in items:
+        if integration_path in str(item.fspath):
+            item.add_marker(pytest.mark.integration)
+
+
+# ---------------------------------------------------------------------------
+# Helpers — safe logging (never print credentials)
+# ---------------------------------------------------------------------------
+
+def _db_url_for_log(url: str) -> str:
+    """Mask password in DATABASE_URL for error messages."""
+    if not url:
+        return "<not set>"
+    parts = url.split("@")
+    if len(parts) == 2:
+        creds = parts[0].replace("postgresql+asyncpg://", "")
+        return f"postgresql+asyncpg://{creds.split(':')[0]}:***@{parts[1]}"
+    return url
+
+
+def _sanitize_output(text: str, db_url: str = "") -> str:
+    """Remove database URLs and credentials from Alembic output.
+
+    Prevents accidental credential leakage via stderr/stdout in error messages
+    or logs. Strips the full postgresql+asyncpg://user:pass@host:port/db format.
+    """
+    if not text:
+        return text
+    # Remove DATABASE_URL in all its forms (postgresql+asyncpg, postgresql, etc.)
+    text = re.sub(
+        r"postgresql(?:\+asyncpg)?://[^@]+@[^/\s]+/[^\s]*",
+        "[DB_URL_REDACTED]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Fallback: if db_url was provided, mask it explicitly
+    if db_url:
+        text = text.replace(db_url, "[DB_URL_REDACTED]")
+    return text
+
+
+# Matches the token 'test' as a distinct word, separated by underscores/hyphens
+# or by the start/end of the database name. This prevents accidental matches
+# like 'contest' or 'mytestdb' while allowing clear test names such as
+# 'soc360_test', 'test_soc360', 'test_db', and 'TEST'.
+_SAFE_TEST_TOKEN = re.compile(r"(?:^|[_-])test(?:[_-]|$)")
+
+
+def _is_safe_database_name(dbname: str) -> bool:
+    """Return True only when the database name clearly identifies a test DB.
+
+    Only names that contain the distinct token 'test' (case-insensitive) are
+    accepted. System databases such as 'postgres', 'template0', and 'template1',
+    production/application names, and empty names are all rejected.
+    """
+    if not dbname or not isinstance(dbname, str):
+        return False
+    normalized = dbname.strip().lower()
+    return bool(_SAFE_TEST_TOKEN.search(normalized))
+
+
+def _assert_worker_scoped(url: str) -> None:
+    """Refuse a URL whose database is not this xdist worker's own database.
+
+    Under xdist every destructive step must target ``<db>_<worker_id>``; the
+    unscoped shared database would be wiped by every worker at once.
+    """
+    worker_id = root_conftest._XDIST_WORKER_ID
+    if not worker_id:
+        return
+    dbname = make_url(url).database or ""
+    if not dbname.endswith(f"_{worker_id}"):
+        raise RuntimeError(
+            f"Refusing to touch unscoped database '{dbname}' under pytest-xdist "
+            f"worker {worker_id!r}: expected a '_{worker_id}' worker database. "
+            f"URL (safe): {_db_url_for_log(url)}"
+        )
+
+
+def _migration_database_url() -> str:
+    """DATABASE_URL_MIGRATION currently in the environment.
+
+    Under xdist the root conftest exports the worker-scoped value before the
+    app is imported; reading the live env value (not an import-time constant)
+    keeps the safety guards honest about what this process would really touch.
+    """
+    return os.environ.get("DATABASE_URL_MIGRATION", "")
+
+
+def _app_database_url() -> str:
+    """DATABASE_URL currently in the environment (worker-scoped under xdist)."""
+    return os.environ.get("DATABASE_URL", "")
+
+
+def _clean_database() -> None:
+    """Drop all tables in the public schema to ensure a pristine migration state.
+
+    Handles stale-table failures when the alembic_version stamp and actual
+    tables are out of sync (e.g. leftover tables from Base.metadata.create_all
+    or a previous interrupted run). Uses the migration user because it owns the
+    objects created by both Alembic and SQLAlchemy create-all paths.
+
+    Raises:
+        RuntimeError: if DATABASE_URL_MIGRATION is missing, unparseable, or
+            points to a database that is not in the disposable/test allowlist.
+    """
+    import asyncpg
+
+    db_url = _migration_database_url()
+    if not db_url:
+        raise RuntimeError(
+            "DATABASE_URL_MIGRATION is not set. Refusing to clean database."
+        )
+    match = re.match(
+        r"postgresql\+asyncpg://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)",
+        db_url,
+    )
+    if not match:
+        raise RuntimeError(
+            "DATABASE_URL_MIGRATION is not a recognized postgresql+asyncpg URL. "
+            f"Refusing to clean database. URL (safe): {_db_url_for_log(db_url)}"
+        )
+
+    user, password, host, port, dbname = match.groups()
+    if not _is_safe_database_name(dbname):
+        raise RuntimeError(
+            f"Database name '{dbname}' does not look like a disposable test database. "
+            f"Refusing to drop tables. URL (safe): {_db_url_for_log(db_url)}"
+        )
+    _assert_worker_scoped(db_url)
+
+    async def _drop_all() -> None:
+        conn = await asyncpg.connect(
+            user=user,
+            password=password,
+            host=host,
+            port=int(port),
+            database=dbname,
+            timeout=5,
+        )
+        try:
+            await conn.execute(
+                """
+                DO $$ DECLARE
+                    r RECORD;
+                BEGIN
+                    FOR r IN (
+                        SELECT tablename FROM pg_tables
+                        WHERE schemaname = 'public'
+                    ) LOOP
+                        EXECUTE 'DROP TABLE IF EXISTS '
+                            || quote_ident(r.tablename) || ' CASCADE';
+                    END LOOP;
+                END $$;
+                """
+            )
+        finally:
+            await conn.close()
+
+    asyncio.run(_drop_all())
+
+
+def _run_alembic_upgrade(dry_run: bool = False, db_url: str = "") -> None:
+    """Apply Alembic migrations via subprocess (avoids import-time side-effects).
+
+    Raises RuntimeError if alembic fails or DB is unreachable.
+    """
+    # project_root is the repo root where alembic.ini lives
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    cmd = [
+        sys.executable, "-m", "alembic", "upgrade", "head",
+    ]
+    migration_url = _migration_database_url()
+    _assert_worker_scoped(migration_url)
+    env = {
+        **os.environ,
+        "PYTHONPATH": project_root,
+        "DATABASE_URL_MIGRATION": migration_url,
+    }
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=project_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            "Alembic upgrade timed out after 60s. "
+            "Check if PostgreSQL is reachable."
+        )
+    except Exception as e:
+        raise RuntimeError(f"Failed to run alembic: {e}")
+
+    if result.returncode != 0:
+        stderr = _sanitize_output(result.stderr.strip(), db_url)
+        safe_db_url = _db_url_for_log(db_url)
+        raise RuntimeError(
+            f"Alembic upgrade failed (exit {result.returncode}).\n"
+            f"DB URL (safe): {safe_db_url}\n"
+            f"stderr: {stderr}"
+        )
+
+    if dry_run:
+        stdout = _sanitize_output(result.stdout.strip(), db_url)
+        safe_db_url = _db_url_for_log(db_url)
+        print(f"[prepare_database] Alembic dry-run OK for {safe_db_url}")
+        if stdout:
+            print(f"[prepare_database] stdout: {stdout}")
+
+
+@pytest.fixture(scope="function")
+async def proxy_redis(toxiproxy_client):
+    """Compatibility name for the clean function-scoped proxy controller."""
+    return toxiproxy_client
+
+
+@pytest_asyncio.fixture(scope="function")
+async def app_via_proxy(proxy_redis, db_session, monkeypatch):
+    """Yield a healthy-lifespan app whose Redis traffic uses Toxiproxy."""
+    previous_host = settings.REDIS_HOST
+    previous_port = settings.REDIS_PORT
+    monkeypatch.setattr(settings, "REDIS_HOST", "localhost")
+    monkeypatch.setattr(settings, "REDIS_PORT", 26379)
+    try:
+        await close_pool()
+        app = create_app()
+
+        async def override_get_db():
+            yield db_session
+
+        async def override_get_db_with_tenant():
+            yield db_session
+
+        app.dependency_overrides.update(
+            {get_db: override_get_db, get_db_with_tenant: override_get_db_with_tenant}
+        )
+
+        async with app.router.lifespan_context(app):
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                yield client
+    finally:
+        await close_pool()
+        monkeypatch.setattr(settings, "REDIS_HOST", previous_host)
+        monkeypatch.setattr(settings, "REDIS_PORT", previous_port)
+
+
+@pytest.fixture(scope="function")
+def lock_test_overrides() -> Generator[
+    Callable[[AsyncClient, User], None], None, None
+]:
+    """Override only current-user resolution for real deactivation lock tests."""
+    installed_apps: list[Any] = []
+
+    def install(client: AsyncClient, current_user: User) -> None:
+        transport = getattr(client, "_transport", None)
+        app = getattr(transport, "app", None)
+        if app is None:
+            raise RuntimeError("app_via_proxy does not expose an ASGI app")
+
+        async def override_get_current_user() -> User:
+            return current_user
+
+        app.dependency_overrides[get_current_user] = override_get_current_user
+        installed_apps.append(app)
+
+    yield install
+
+    for app in reversed(installed_apps):
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+# ---------------------------------------------------------------------------
+# RLS harness — cross-tenant seed data for the row-level-security tests
+# ---------------------------------------------------------------------------
+
+#: Every table protected by row-level security in this project.
+PROTECTED_TABLES = [
+    "tenants",
+    "users",
+    "refresh_tokens",
+    "assets",
+    "scans",
+    "vulnerabilities",
+    "reports",
+]
+
+
+@pytest_asyncio.fixture
+async def seed_two_tenants(
+    db_session: AsyncSession,
+    seed_data,
+) -> dict:
+    """Seed representative rows for both tenants across all RLS tables.
+
+    Depends on the root `seed_data` fixture which already creates Tenant A,
+    Tenant B, and their users. This fixture adds one row per table per tenant.
+
+    Returns a dict with seeded row IDs keyed by table and tenant.
+    """
+    await set_tenant_context(db_session, UUID(TENANT_A_ID), is_superadmin=True)
+    await db_session.flush()
+
+    ids: dict[str, dict[str, UUID]] = {
+        "assets": {},
+        "scans": {},
+        "vulnerabilities": {},
+        "reports": {},
+        "refresh_tokens": {},
+    }
+
+    # --- Assets ---
+    asset_a_id = UUID("aaaaaaaa-0000-0000-0000-aaaaaaaaaaaa")
+    asset_b_id = UUID("bbbbbbbb-0000-0000-0000-bbbbbbbbbbbb")
+
+    await db_session.execute(
+        pg_insert(Asset)
+        .values(
+            id=asset_a_id,
+            tenant_id=UUID(TENANT_A_ID),
+            value="Alpha Asset",
+            asset_type="hostname",
+            status="active",
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.execute(
+        pg_insert(Asset)
+        .values(
+            id=asset_b_id,
+            tenant_id=UUID(TENANT_B_ID),
+            value="Beta Asset",
+            asset_type="hostname",
+            status="active",
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.flush()
+    ids["assets"]["tenant_a"] = asset_a_id
+    ids["assets"]["tenant_b"] = asset_b_id
+
+    # --- Scans ---
+    scan_a_id = UUID("aaaaaaaa-1111-0000-0000-aaaaaaaaaaaa")
+    scan_b_id = UUID("bbbbbbbb-1111-0000-0000-bbbbbbbbbbbb")
+
+    await db_session.execute(
+        pg_insert(Scan)
+        .values(
+            id=scan_a_id,
+            tenant_id=UUID(TENANT_A_ID),
+            asset_id=asset_a_id,
+            name="Alpha Scan",
+            scan_type="vulnerability",
+            status="completed",
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.execute(
+        pg_insert(Scan)
+        .values(
+            id=scan_b_id,
+            tenant_id=UUID(TENANT_B_ID),
+            asset_id=asset_b_id,
+            name="Beta Scan",
+            scan_type="vulnerability",
+            status="completed",
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.flush()
+    ids["scans"]["tenant_a"] = scan_a_id
+    ids["scans"]["tenant_b"] = scan_b_id
+
+    # --- Vulnerabilities ---
+    vuln_a_id = UUID("aaaaaaaa-2222-0000-0000-aaaaaaaaaaaa")
+    vuln_b_id = UUID("bbbbbbbb-2222-0000-0000-bbbbbbbbbbbb")
+
+    await db_session.execute(
+        pg_insert(Vulnerability)
+        .values(
+            id=vuln_a_id,
+            tenant_id=UUID(TENANT_A_ID),
+            scan_id=scan_a_id,
+            title="Alpha Vuln",
+            severity="high",
+            status="open",
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.execute(
+        pg_insert(Vulnerability)
+        .values(
+            id=vuln_b_id,
+            tenant_id=UUID(TENANT_B_ID),
+            scan_id=scan_b_id,
+            title="Beta Vuln",
+            severity="medium",
+            status="open",
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.flush()
+    ids["vulnerabilities"]["tenant_a"] = vuln_a_id
+    ids["vulnerabilities"]["tenant_b"] = vuln_b_id
+
+    # --- Reports ---
+    report_a_id = UUID("aaaaaaaa-3333-0000-0000-aaaaaaaaaaaa")
+    report_b_id = UUID("bbbbbbbb-3333-0000-0000-bbbbbbbbbbbb")
+
+    await db_session.execute(
+        pg_insert(Report)
+        .values(
+            id=report_a_id,
+            tenant_id=UUID(TENANT_A_ID),
+            asset_id=asset_a_id,
+            name="Alpha Report",
+            report_type="vulnerability",
+            status="completed",
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.execute(
+        pg_insert(Report)
+        .values(
+            id=report_b_id,
+            tenant_id=UUID(TENANT_B_ID),
+            asset_id=asset_b_id,
+            name="Beta Report",
+            report_type="vulnerability",
+            status="completed",
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.flush()
+    ids["reports"]["tenant_a"] = report_a_id
+    ids["reports"]["tenant_b"] = report_b_id
+
+    # --- Refresh Tokens ---
+    rt_a_id = UUID("aaaaaaaa-4444-0000-0000-aaaaaaaaaaaa")
+    rt_b_id = UUID("bbbbbbbb-4444-0000-0000-bbbbbbbbbbbb")
+
+    from datetime import datetime, timezone, timedelta
+
+    future = datetime.now(timezone.utc) + timedelta(days=7)
+
+    await db_session.execute(
+        pg_insert(RefreshToken)
+        .values(
+            id=rt_a_id,
+            user_id=UUID(ADMIN_A_ID),
+            token_hash="hash_alpha_refresh_token_for_testing",
+            expires_at=future,
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.execute(
+        pg_insert(RefreshToken)
+        .values(
+            id=rt_b_id,
+            user_id=UUID(ADMIN_B_ID),
+            token_hash="hash_beta_refresh_token_for_testing",
+            expires_at=future,
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    await db_session.flush()
+    ids["refresh_tokens"]["tenant_a"] = rt_a_id
+    ids["refresh_tokens"]["tenant_b"] = rt_b_id
+
+    return ids
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped fixture — runs ONCE per test session
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session", autouse=True)
+def prepare_database():
+    """Apply Alembic migrations to the test database.
+
+    Fails fast with a clear message if:
+    - DATABASE_URL is not set
+    - PostgreSQL is unreachable
+    - Alembic upgrade fails
+    """
+    db_url = _app_database_url()
+
+    if not db_url:
+        raise RuntimeError(
+            "DATABASE_URL not set. Cannot run integration tests. "
+            "Set it to a test PostgreSQL instance."
+        )
+
+    if root_conftest._XDIST_WORKER_ID:
+        # Create (idempotently, under the shared bootstrap lock) this worker's
+        # database and app role BEFORE the connectivity check: the worker DB
+        # does not exist yet on a fresh cluster. Serial runs skip this and
+        # keep the exact previous behavior (no maintenance-DB connection).
+        asyncio.run(root_conftest._bootstrap_worker_database())
+
+    # Quick connectivity check before trying migrations
+    try:
+        import asyncpg
+        import re
+        # Extract connection params from DATABASE_URL
+        # Format: postgresql+asyncpg://user:pass@host:port/dbname
+        match = re.match(
+            r"postgresql\+asyncpg://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)",
+            db_url,
+        )
+        if match:
+            user, password, host, port, dbname = match.groups()
+            async def _ping():
+                conn = await asyncpg.connect(
+                    user=user, password=password,
+                    host=host, port=int(port), database=dbname,
+                    timeout=5,
+                )
+                await conn.close()
+            asyncio.run(_ping())
+        else:
+            # Fallback: try via SQLAlchemy
+            from sqlalchemy.ext.asyncio import create_async_engine
+            from sqlalchemy import text
+            engine = create_async_engine(db_url, echo=False)
+            async def _ping():
+                async with engine.begin() as conn:
+                    await conn.execute(text("SELECT 1"))
+            asyncio.run(_ping())
+            asyncio.run(engine.dispose())
+    except Exception as e:
+        raise RuntimeError(
+            f"Cannot connect to test database. "
+            f"DB URL (safe): {_db_url_for_log(db_url)}. "
+            f"Error: {e}"
+        )
+
+    _clean_database()
+
+    _run_alembic_upgrade(db_url=db_url)
+
+    yield
+
+    # Teardown: run alembic downgrade to base (optional, CI may handle this)
+    # Skipped by default to preserve DB state for post-mortem inspection.

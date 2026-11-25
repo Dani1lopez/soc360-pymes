@@ -1,0 +1,522 @@
+"""Tests for event_bus.py (T2.2) — EventBus and EventConsumer classes."""
+
+# fmt: off
+from __future__ import annotations
+
+import uuid
+from unittest.mock import AsyncMock
+
+import pytest
+import pytest_asyncio
+from fakeredis.aioredis import FakeRedis
+from redis.exceptions import ConnectionError as RedisConnectionError
+
+
+class TestEventBusStreamName:
+    """Validate EventBus.stream_name()."""
+
+    @pytest.mark.asyncio
+    async def test_stream_name_returns_full_key(self):
+        """stream_name() MUST return 'events:auth.login' given 'auth.login'."""
+        from app.event_bus import EventBus
+
+        client = FakeRedis()
+        bus = EventBus(redis_client=client)
+        result = bus.stream_name("auth.login")
+        assert result == "events:auth.login"
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_stream_name_uses_prefix_from_settings(self):
+        """stream_name() MUST use settings.EVENT_STREAM_PREFIX as the prefix."""
+        from app.core.config import settings
+        from app.event_bus import EventBus
+
+        client = FakeRedis()
+        bus = EventBus(redis_client=client)
+        result = bus.stream_name("anything")
+        expected = f"{settings.EVENT_STREAM_PREFIX}:anything"
+        assert result == expected
+        await client.aclose()
+
+
+class TestEventBusPublish:
+    """Validate EventBus.publish()."""
+
+    @pytest_asyncio.fixture
+    async def client(self) -> FakeRedis:
+        r = FakeRedis()
+        yield r
+        await r.aclose()
+
+    @pytest.mark.asyncio
+    async def test_publish_returns_message_id(self, client: FakeRedis):
+        """publish() MUST return the XADD message ID (bytes)."""
+        from app.event_bus import EventBus
+        from app.event_schemas import AuthLoginEvent
+
+        bus = EventBus(redis_client=client)
+        event = AuthLoginEvent(
+            event_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            user_id="user-123",
+            email_hash="a" * 32,
+        )
+        await bus.publish(event)
+        length = await client.xlen("events:auth.login")
+        assert length == 1
+
+    @pytest.mark.asyncio
+    async def test_publish_uses_maxlen_from_settings(self, client: FakeRedis):
+        """publish() MUST use xadd maxlen with approximate=True from settings."""
+        from app.event_bus import EventBus
+        from app.event_schemas import AuthLoginEvent
+
+        bus = EventBus(redis_client=client)
+        # Publish 3 events with maxlen=2 (approximate)
+        for i in range(3):
+            event = AuthLoginEvent(
+                event_id=uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                user_id=f"user-{i}",
+                email_hash=f"{i:032x}",
+            )
+            await bus.publish(event)
+        # Stream length should be bounded (fakeredis approximates, allow up to 3)
+        length = await client.xlen("events:auth.login")
+        assert length <= 3
+
+    @pytest.mark.asyncio
+    async def test_publish_event_with_optional_fields(self, client: FakeRedis):
+        """publish() MUST correctly serialize ip_prefix and user_agent."""
+        from app.event_bus import EventBus
+        from app.event_schemas import AuthLoginEvent
+
+        bus = EventBus(redis_client=client)
+        event = AuthLoginEvent(
+            event_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            user_id="user-123",
+            email_hash="a" * 32,
+            ip_prefix="192.168.1.0/24",
+            user_agent="Mozilla/5.0",
+        )
+        msg_id = await bus.publish(event)
+        assert isinstance(msg_id, bytes)
+        assert b"-" in msg_id
+
+
+class TestEventBusPublishNoneFilter:
+    """Validate publish() filters None values before XADD (W1)."""
+
+    @pytest_asyncio.fixture
+    async def client(self) -> FakeRedis:
+        r = FakeRedis()
+        yield r
+        await r.aclose()
+
+    @pytest.mark.asyncio
+    async def test_publish_omits_none_tenant_id_from_redis(self, client: FakeRedis):
+        """publish() MUST omit tenant_id from Redis payload when it is None."""
+        from app.event_bus import EventBus
+        from app.event_schemas import AuthSuperadminLoginEvent
+
+        bus = EventBus(redis_client=client)
+
+        # Create a tenantless superadmin login event
+        event = AuthSuperadminLoginEvent(
+            event_id=uuid.uuid4(),
+            user_id="sa-user",
+            email_hash="a" * 32,
+        )
+        assert event.tenant_id is None  # precondition
+
+        msg_id = await bus.publish(event)
+        assert isinstance(msg_id, bytes)
+
+        # Read the raw message from Redis
+        stream = "events:system.auth.login"
+        messages = await client.xrange(stream)
+        assert len(messages) >= 1
+
+        _msg_id, fields = messages[0]
+        field_dict = {
+            k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+            for k, v in fields.items()
+        }
+        # tenant_id must NOT be in the XADD payload (None values filtered out)
+        assert "tenant_id" not in field_dict, (
+            f"tenant_id should be omitted from Redis when None, "
+            f"but found in payload keys: {list(field_dict.keys())}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_publish_keeps_non_none_tenant_id(self, client: FakeRedis):
+        """publish() MUST keep tenant_id in Redis payload when it is not None."""
+        from app.event_bus import EventBus
+        from app.event_schemas import AuthLoginEvent
+        from datetime import datetime, timezone
+
+        bus = EventBus(redis_client=client)
+        tenant_id = uuid.uuid4()
+
+        event = AuthLoginEvent(
+            event_id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            user_id="user-123",
+            email_hash="b" * 32,
+            ip_prefix="192.168.1.0/24",
+            user_agent="Mozilla/5.0",
+            timestamp=datetime.now(timezone.utc),
+        )
+        assert event.tenant_id is not None  # precondition
+
+        msg_id = await bus.publish(event)
+        assert isinstance(msg_id, bytes)
+
+        # Read the raw message from Redis
+        messages = await client.xrange("events:auth.login")
+        assert len(messages) >= 1
+
+        _msg_id, fields = messages[0]
+        field_dict = {
+            k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+            for k, v in fields.items()
+        }
+        # tenant_id MUST be present when not None
+        assert "tenant_id" in field_dict
+        assert field_dict["tenant_id"] == str(tenant_id)
+
+
+class TestEventConsumerInit:
+    """Validate EventConsumer initialization."""
+
+    @pytest.mark.asyncio
+    async def test_consumer_stores_params(self):
+        """EventConsumer MUST store redis_client, event_type, consumer_name, group_name."""
+        from app.event_bus import EventConsumer
+
+        client = FakeRedis()
+        consumer = EventConsumer(
+            redis_client=client,
+            event_type="auth.login",
+            consumer_name="worker-1",
+            group_name="soc360-consumers",
+        )
+        assert consumer.redis_client is client
+        assert consumer.event_type == "auth.login"
+        assert consumer.consumer_name == "worker-1"
+        assert consumer.group_name == "soc360-consumers"
+        await client.aclose()
+
+
+class TestEventConsumerReadPending:
+    """Validate EventConsumer.read_pending()."""
+
+    @pytest_asyncio.fixture
+    async def setup_stream_with_consumer_group(self) -> tuple[FakeRedis, bytes]:
+        """Create a stream with one consumer group and one pending message."""
+        client = FakeRedis()
+        stream_name = "events:auth.login"
+        group_name = "soc360-consumers"
+        # Create consumer group
+        await client.xgroup_create(stream_name, group_name, "0", mkstream=True)
+        # Add a message (this will be pending after reading)
+        msg_id = await client.xadd(stream_name, {"event": "login", "user_id": "u1"})
+        # Read the message (makes it pending in the group)
+        await client.xreadgroup(group_name, "worker-1", {stream_name: ">"}, count=1)
+        return client, msg_id
+
+    @pytest.mark.asyncio
+    async def test_read_pending_returns_list(self, setup_stream_with_consumer_group):
+        """read_pending() MUST return a list of pending messages."""
+        client, _ = setup_stream_with_consumer_group
+        from app.event_bus import EventConsumer
+
+        consumer = EventConsumer(
+            redis_client=client,
+            event_type="auth.login",
+            consumer_name="worker-1",
+            group_name="soc360-consumers",
+        )
+        pending = await consumer.read_pending()
+        assert isinstance(pending, list)
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_read_pending_returns_dict_per_message(self, setup_stream_with_consumer_group):
+        """read_pending() MUST return a dict with 'message_id' and 'data' per message."""
+        client, expected_msg_id = setup_stream_with_consumer_group
+        from app.event_bus import EventConsumer
+
+        consumer = EventConsumer(
+            redis_client=client,
+            event_type="auth.login",
+            consumer_name="worker-1",
+            group_name="soc360-consumers",
+        )
+        pending = await consumer.read_pending()
+        assert len(pending) >= 1
+        msg = pending[0]
+        assert isinstance(msg, dict)
+        assert "message_id" in msg
+        assert "data" in msg
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_read_pending_uses_batch_xclaim_single_call(self):
+        """read_pending() MUST use a single batch XCLAIM call for all pending messages (issue #100).
+        
+        This test verifies that when there are multiple pending messages, read_pending()
+        makes ONE XCLAIM call with all message_ids instead of N individual XCLAIM calls.
+        This is a performance optimization that reduces Redis round-trips from O(n) to O(1).
+        """
+        from unittest.mock import AsyncMock, patch
+        from app.event_bus import EventConsumer
+
+        # Create mock Redis client
+        mock_redis = AsyncMock()
+        
+        # Mock xpending_range to return 5 pending entries
+        pending_entries = [
+            {"message_id": b"1-0", "consumer": "worker-1", "time_since_delivered": 1000, "times_delivered": 1},
+            {"message_id": b"2-0", "consumer": "worker-1", "time_since_delivered": 1000, "times_delivered": 1},
+            {"message_id": b"3-0", "consumer": "worker-1", "time_since_delivered": 1000, "times_delivered": 1},
+            {"message_id": b"4-0", "consumer": "worker-1", "time_since_delivered": 1000, "times_delivered": 1},
+            {"message_id": b"5-0", "consumer": "worker-1", "time_since_delivered": 1000, "times_delivered": 1},
+        ]
+        mock_redis.xpending_range = AsyncMock(return_value=pending_entries)
+        
+        # Mock xclaim to return claimed messages
+        # xclaim should be called ONCE with all 5 message_ids
+        mock_redis.xclaim = AsyncMock(return_value=[
+            (b"1-0", {b"user_id": b"u1", b"event_type": b"auth.login"}),
+            (b"2-0", {b"user_id": b"u2", b"event_type": b"auth.login"}),
+            (b"3-0", {b"user_id": b"u3", b"event_type": b"auth.login"}),
+            (b"4-0", {b"user_id": b"u4", b"event_type": b"auth.login"}),
+            (b"5-0", {b"user_id": b"u5", b"event_type": b"auth.login"}),
+        ])
+        
+        consumer = EventConsumer(
+            redis_client=mock_redis,
+            event_type="auth.login",
+            consumer_name="worker-1",
+            group_name="soc360-consumers",
+        )
+        
+        # Mock _ensure_group_exists and _stream_key
+        with patch.object(consumer, "_ensure_group_exists", new_callable=AsyncMock):
+            with patch.object(consumer, "_stream_key", return_value="events:auth.login"):
+                result = await consumer.read_pending()
+        
+        # Verify xclaim was called EXACTLY ONCE (batch operation)
+        assert mock_redis.xclaim.call_count == 1, (
+            f"Expected xclaim to be called exactly 1 time (batch), "
+            f"but it was called {mock_redis.xclaim.call_count} times. "
+            f"This indicates the batch optimization is not working."
+        )
+        
+        # Verify xclaim was called with all 5 message_ids in a single call
+        call_args = mock_redis.xclaim.call_args
+        message_ids_arg = call_args.kwargs.get("message_ids", [])
+        assert len(message_ids_arg) == 5, (
+            f"Expected xclaim to be called with 5 message_ids, "
+            f"but it was called with {len(message_ids_arg)} message_ids."
+        )
+        
+        # Verify result has 5 messages
+        assert len(result) == 5
+        
+        await mock_redis.aclose()
+
+
+class TestEventConsumerAck:
+    """Validate EventConsumer.ack()."""
+
+    @pytest_asyncio.fixture
+    async def client_with_message(self) -> tuple[FakeRedis, bytes]:
+        """Create a stream, consumer group, add and read a message."""
+        client = FakeRedis()
+        stream_name = "events:auth.login"
+        group_name = "soc360-consumers"
+        await client.xgroup_create(stream_name, group_name, "0", mkstream=True)
+        msg_id = await client.xadd(stream_name, {"event": "login", "user_id": "u1"})
+        await client.xreadgroup(group_name, "worker-1", {stream_name: ">"}, count=1)
+        return client, msg_id
+
+    @pytest.mark.asyncio
+    async def test_ack_returns_none(self, client_with_message):
+        """ack() MUST return None."""
+        client, msg_id = client_with_message
+        from app.event_bus import EventConsumer
+
+        consumer = EventConsumer(
+            redis_client=client,
+            event_type="auth.login",
+            consumer_name="worker-1",
+            group_name="soc360-consumers",
+        )
+        result = await consumer.ack(msg_id)
+        assert result is None
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_ack_removes_from_pending(self, client_with_message):
+        """ack() MUST remove the message from the pending list."""
+        client, msg_id = client_with_message
+        from app.event_bus import EventConsumer
+
+        consumer = EventConsumer(
+            redis_client=client,
+            event_type="auth.login",
+            consumer_name="worker-1",
+            group_name="soc360-consumers",
+        )
+        # Verify it's pending
+        pending_before = await consumer.read_pending()
+        assert len(pending_before) == 1
+
+        # Acknowledge
+        await consumer.ack(msg_id)
+
+        # Verify it's no longer pending
+        pending_after = await consumer.read_pending()
+        assert len(pending_after) == 0
+        await client.aclose()
+
+
+class TestEventConsumerDelete:
+    """Validate EventConsumer.delete()."""
+
+    @pytest.mark.asyncio
+    async def test_delete_returns_none(self):
+        """delete() MUST return None."""
+        from app.event_bus import EventConsumer
+
+        client = FakeRedis()
+        msg_id = await client.xadd("events:auth.login", {"event": "login"})
+        consumer = EventConsumer(
+            redis_client=client,
+            event_type="auth.login",
+            consumer_name="worker-1",
+            group_name="soc360-consumers",
+        )
+        result = await consumer.delete(msg_id)
+        assert result is None
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_delete_removes_message_from_stream(self):
+        """delete() MUST remove the message from the Redis stream."""
+        from app.event_bus import EventConsumer
+
+        client = FakeRedis()
+        stream_name = "events:auth.login"
+        msg_id = await client.xadd(stream_name, {"event": "login"})
+        consumer = EventConsumer(
+            redis_client=client,
+            event_type="auth.login",
+            consumer_name="worker-1",
+            group_name="soc360-consumers",
+        )
+        # Verify message exists
+        length_before = await client.xlen(stream_name)
+        assert length_before == 1
+
+        # Delete
+        await consumer.delete(msg_id)
+
+        # Verify message is gone
+        length_after = await client.xlen(stream_name)
+        assert length_after == 0
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_delete_nonexistent_returns_none(self):
+        """delete() on a non-existent message MUST return None without error."""
+        from app.event_bus import EventConsumer
+
+        client = FakeRedis()
+        fake_id = b"1234567890-0"
+        consumer = EventConsumer(
+            redis_client=client,
+            event_type="auth.login",
+            consumer_name="worker-1",
+            group_name="soc360-consumers",
+        )
+        result = await consumer.delete(fake_id)
+        assert result is None
+        await client.aclose()
+
+
+class TestEventBusGetConsumer:
+    """Validate EventBus.get_consumer()."""
+
+    @pytest.mark.asyncio
+    async def test_get_consumer_returns_event_consumer_instance(self):
+        """get_consumer() MUST return an EventConsumer instance."""
+        from app.core.config import settings
+        from app.event_bus import EventBus
+
+        client = FakeRedis()
+        bus = EventBus(redis_client=client)
+        consumer = bus.get_consumer("worker-1", "auth.login")
+        from app.event_bus import EventConsumer
+
+        assert isinstance(consumer, EventConsumer)
+        assert consumer.event_type == "auth.login"
+        assert consumer.consumer_name == "worker-1"
+        assert consumer.group_name == settings.EVENT_CONSUMER_GROUP
+        await client.aclose()
+
+
+class TestEventBusRedisOutageBoundaries:
+    """Redis Streams transport failures are exposed as typed outages."""
+    @pytest.mark.asyncio
+    async def test_publish_classifies_xadd_transport_failure(self):
+        from app.core.exceptions import RedisOutageError
+        from app.event_bus import EventBus
+        from app.event_schemas import AuthLoginEvent
+        class BrokenRedis(FakeRedis):
+            async def xadd(self, *args, **kwargs):  # type: ignore[override]
+                raise RedisConnectionError("raw-redis-transport-detail")
+        client = BrokenRedis()
+        try:
+            event = AuthLoginEvent(
+                event_id=uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                user_id="user-outage",
+                email_hash="a" * 32,
+            )
+            with pytest.raises(RedisOutageError):
+                await EventBus(client).publish(event)
+        finally:
+            await client.aclose()
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("operation", ["group", "pending", "new", "ack"])
+    async def test_consumer_boundaries_classify_transport_failure(self, operation: str):
+        from app.core.exceptions import RedisOutageError
+        from app.event_bus import EventConsumer
+        redis = AsyncMock()
+        if operation == "group":
+            redis.xgroup_create.side_effect = RedisConnectionError("connection refused")
+        else:
+            redis.xgroup_create.return_value = None
+            method_name = {
+                "pending": "xpending_range",
+                "new": "xreadgroup",
+                "ack": "xack",
+            }[operation]
+            getattr(redis, method_name).side_effect = RedisConnectionError(
+                "connection refused"
+            )
+        consumer = EventConsumer(redis, "auth.login", "worker-1", "group-1")
+        with pytest.raises(RedisOutageError):
+            if operation == "group":
+                await consumer._ensure_group_exists()
+            elif operation == "pending":
+                await consumer.read_pending()
+            elif operation == "new":
+                await consumer.read_new(block=1)
+            else:
+                await consumer.ack("1-0")

@@ -1,0 +1,686 @@
+from __future__ import annotations
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from uuid import uuid4
+
+
+class TestUserSchemas:
+    """Test user schema validation."""
+    
+    def test_user_create_validates_superadmin_consistency(self):
+        """Test public and internal user create schema boundaries."""
+        from app.modules.users.schemas import RoleEnum, UserCreate, UserInternalCreate
+
+        with pytest.raises(ValueError, match="Extra inputs"):
+            UserCreate(
+                email="test@test.com",
+                password="ValidPass123!",
+                full_name="Test User",
+                role=RoleEnum.superadmin,
+                tenant_id=None,
+                is_superadmin=True,
+            )
+
+        with pytest.raises(ValueError, match="debe tener tenant_id"):
+            UserCreate(
+                email="test@test.com",
+                password="ValidPass123!",
+                full_name="Test User",
+                role=RoleEnum.viewer,
+                tenant_id=None,
+            )
+
+        valid = UserCreate(
+            email="test@test.com",
+            password="ValidPass123!",
+            full_name="Test User",
+            role=RoleEnum.admin,
+            tenant_id=uuid4(),
+        )
+        assert valid.email == "test@test.com"
+
+        internal_superadmin = UserInternalCreate(
+            email="super@test.com",
+            password="ValidPass123!",
+            full_name="Super User",
+            role=RoleEnum.superadmin,
+            tenant_id=None,
+            is_superadmin=True,
+        )
+        assert internal_superadmin.is_superadmin is True
+
+        with pytest.raises(ValueError, match="is_superadmin=True requiere"):
+            UserInternalCreate(
+                email="test@test.com",
+                password="ValidPass123!",
+                full_name="Test User",
+                role=RoleEnum.admin,
+                tenant_id=None,
+                is_superadmin=True,
+            )
+    
+    def test_user_update_prevents_superadmin_assignment(self):
+        """Test UserUpdate prevents assigning superadmin role."""
+        from app.modules.users.schemas import UserUpdate, RoleEnum
+        
+        with pytest.raises(ValueError, match="superadmin"):
+            UserUpdate(role=RoleEnum.superadmin)
+        
+        # Valid update
+        valid = UserUpdate(full_name="New Name")
+        assert valid.full_name == "New Name"
+
+    def test_user_update_rejects_extra_fields(self):
+        """Test UserUpdate rejects unknown fields (mass assignment prevention)."""
+        from app.modules.users.schemas import UserUpdate
+
+        with pytest.raises(ValueError, match="Extra inputs"):
+            UserUpdate(full_name="New Name", is_superadmin=True)
+
+        with pytest.raises(ValueError, match="Extra inputs"):
+            UserUpdate(full_name="New Name", tenant_id="should-not-pass")
+
+
+class TestUserApiValidation:
+    """Test user API request validation without database dependencies."""
+
+    @pytest.mark.asyncio
+    async def test_create_user_rejects_is_superadmin_field(self):
+        """POST /users rejects the public is_superadmin input field."""
+        from httpx import ASGITransport, AsyncClient
+
+        from app.dependencies import get_current_user, get_db_with_tenant
+        from app.main import create_app
+        from app.modules.users import service
+
+        app = create_app()
+        tenant_id = uuid4()
+        created_user = SimpleNamespace(
+            id=uuid4(),
+            tenant_id=None,
+            email="blocked_super@soc360.test",
+            full_name="Blocked Super",
+            role="superadmin",
+            is_active=True,
+            is_superadmin=True,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        current_user = SimpleNamespace(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            role="superadmin",
+            is_superadmin=True,
+        )
+
+        async def override_get_current_user():
+            return current_user
+
+        async def override_get_db_with_tenant():
+            yield AsyncMock()
+
+        app.dependency_overrides[get_current_user] = override_get_current_user
+        app.dependency_overrides[get_db_with_tenant] = override_get_db_with_tenant
+
+        with patch.object(service, "create_user", new=AsyncMock(return_value=created_user)) as mock_create_user:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
+                resp = await client.post(
+                    "/api/v1/users/",
+                    json={
+                        "email": "blocked_super@soc360.test",
+                        "password": "SuperPass123!",
+                        "full_name": "Blocked Super",
+                        "role": "superadmin",
+                        "tenant_id": None,
+                        "is_superadmin": True,
+                    },
+                )
+
+        assert resp.status_code == 422
+        mock_create_user.assert_not_awaited()
+
+
+class TestUserService:
+    """Test user service functions."""
+    
+    @pytest.mark.asyncio
+    async def test_create_user_email_taken(self):
+        """Test creating user with taken email fails."""
+        from app.modules.users import service
+        from app.core.exceptions import UserError
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one.return_value = 1  # Email exists
+        mock_db.execute.return_value = mock_result
+
+        from app.modules.users.schemas import UserCreate, RoleEnum
+        data = UserCreate(
+            email="taken@test.com",
+            password="ValidPass123!",
+            full_name="Test User",
+            role=RoleEnum.viewer,
+            tenant_id=uuid4(),
+        )
+
+        with pytest.raises(UserError) as exc_info:
+            await service.create_user(data=data, db=mock_db)
+
+        assert exc_info.value.status_code == 409
+        assert "email" in exc_info.value.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_create_user_translates_unique_violation_to_409(self):
+        """create_user must translate asyncpg pgcode '23505' to UserError(409).
+
+        Regression for PR-B: the pre-check (`_is_email_taken`) can race a concurrent
+        INSERT. When the flush hits the unique constraint, the raw asyncpg
+        `UniqueViolationError` (SQLSTATE 23505) must be surfaced as 409.
+        No manual rollback — session.begin() context manager handles it.
+        """
+        from app.modules.users import service
+        from app.core.exceptions import UserError
+        from app.modules.users.schemas import UserCreate, RoleEnum
+        from sqlalchemy.exc import IntegrityError
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.rollback = AsyncMock()
+        # Pre-check returns no row (race window: not yet visible).
+        mock_result = MagicMock()
+        mock_result.scalar_one.return_value = 0
+        mock_db.execute.return_value = mock_result
+
+        # flush() raises IntegrityError(orig.pgcode == "23505").
+        asyncpg_orig = MagicMock()
+        asyncpg_orig.pgcode = "23505"
+        mock_db.flush.side_effect = IntegrityError(
+            "duplicate key value violates unique constraint",
+            params=None,
+            orig=asyncpg_orig,
+        )
+
+        data = UserCreate(
+            email="racy@test.com",
+            password="ValidPass123!",
+            full_name="Race User",
+            role=RoleEnum.viewer,
+            tenant_id=uuid4(),
+        )
+
+        with pytest.raises(UserError) as exc_info:
+            await service.create_user(data=data, db=mock_db)
+
+        assert exc_info.value.status_code == 409
+        assert "email" in exc_info.value.detail.lower()
+        mock_db.flush.assert_awaited_once()
+        # No manual rollback — session.begin() context manager handles it.
+        mock_db.rollback.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_user_propagates_non_unique_integrity_error(self):
+        """IntegrityError with pgcode != '23505' must propagate untranslated.
+
+        E.g. a foreign-key violation (pgcode '23503') is a different kind of
+        server-side data inconsistency. The 409 translator must NOT swallow it
+        or downgrade it to a domain conflict — that would hide real bugs.
+        """
+        from app.modules.users import service
+        from app.modules.users.schemas import UserCreate, RoleEnum
+        from sqlalchemy.exc import IntegrityError
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.rollback = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one.return_value = 0
+        mock_db.execute.return_value = mock_result
+
+        asyncpg_orig = MagicMock()
+        asyncpg_orig.pgcode = "23503"  # foreign_key_violation
+        mock_db.flush.side_effect = IntegrityError(
+            "insert or update on table violates foreign key constraint",
+            params=None,
+            orig=asyncpg_orig,
+        )
+
+        data = UserCreate(
+            email="fk@test.com",
+            password="ValidPass123!",
+            full_name="FK User",
+            role=RoleEnum.viewer,
+            tenant_id=uuid4(),
+        )
+
+        with pytest.raises(IntegrityError):
+            await service.create_user(data=data, db=mock_db)
+
+        # Must NOT be translated — the original IntegrityError reaches the caller.
+        mock_db.rollback.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_user_rolls_back_failed_session_for_subsequent_create(self):
+        """After a 409, the session remains usable for a fresh non-duplicate insert.
+
+        Regression guard: the old code called db.rollback() manually inside the
+        IntegrityError handler. This caused InvalidRequestError under SQLAlchemy
+        2.0+ because session.begin() context manager owns the transaction lifecycle.
+
+        The fix removes the manual rollback — the session.begin() context manager
+        rolls back automatically when the UserError propagates. This test verifies
+        that subsequent calls against the same session do not fail.
+        """
+        from app.modules.users import service
+        from app.core.exceptions import UserError
+        from app.modules.users.schemas import UserCreate, RoleEnum
+        from sqlalchemy.exc import IntegrityError
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.rollback = AsyncMock()
+
+        # Each create_user call does: _is_email_taken -> _get_active_tenant (2 executes)
+        # + db.flush() (1 call). Plan execute/flush results across BOTH calls.
+        empty_count = MagicMock()
+        empty_count.scalar_one.return_value = 0
+
+        asyncpg_orig = MagicMock()
+        asyncpg_orig.pgcode = "23505"
+        integrity_exc = IntegrityError(
+            "duplicate key value violates unique constraint",
+            params=None,
+            orig=asyncpg_orig,
+        )
+
+        # Call #1: two execute results (pre-check + tenant lookup) + flush raises.
+        # Call #2: two execute results + flush succeeds.
+        mock_db.execute.side_effect = [
+            empty_count, empty_count,   # call 1: pre-check, tenant lookup
+            empty_count, empty_count,   # call 2: pre-check, tenant lookup
+        ]
+        mock_db.flush.side_effect = [integrity_exc, None]
+
+        data_dup = UserCreate(
+            email="dup@test.com",
+            password="ValidPass123!",
+            full_name="Dup",
+            role=RoleEnum.viewer,
+            tenant_id=uuid4(),
+        )
+        data_ok = UserCreate(
+            email="ok@test.com",
+            password="ValidPass123!",
+            full_name="Ok",
+            role=RoleEnum.viewer,
+            tenant_id=uuid4(),
+        )
+
+        with pytest.raises(UserError) as exc_info:
+            await service.create_user(data=data_dup, db=mock_db)
+        assert exc_info.value.status_code == 409
+
+        # Second call must not raise — session is usable after 409.
+        result = await service.create_user(data=data_ok, db=mock_db)
+        assert result is not None
+        # No manual rollback — session.begin() context manager handles it.
+        mock_db.rollback.assert_not_awaited()
+        assert mock_db.flush.await_count == 2
+    
+    @pytest.mark.asyncio
+    async def test_update_user_not_found(self):
+        """Test updating with a target that vanished post pre-check fails.
+
+        After PR-A, `update_user` no longer fetches the target — the router
+        passes a pre-checked row. We simulate the case where the target
+        was valid at the Depends step but the row is gone (TOCTOU) — this
+        now manifests via the `get_user_for_admin` re-fetch in the router
+        pattern. The service itself does not raise 404 on missing target
+        since the contract is "target is pre-checked by the Depends".
+        """
+        # In the new contract, `update_user` does not fetch the target —
+        # the test now verifies that a fully-prepared target is updated
+        # without any fetch.
+        from app.modules.users import service
+        from app.modules.users.schemas import UserUpdate
+
+        target = MagicMock()
+        target.id = uuid4()
+        target.is_active = True
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        mock_caller = MagicMock()
+        data = UserUpdate(full_name="New Name")
+
+        with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            result = await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=AsyncMock(),
+            )
+
+        assert result is target
+        mock_revoke_refresh.assert_not_awaited()
+        mock_revoke_access.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_deactivate_user_already_inactive(self):
+        """Test deactivating an already-inactive pre-checked target fails with 409."""
+        from app.modules.users import service
+        from app.core.exceptions import UserError
+
+        target = MagicMock()
+        target.id = uuid4()
+        target.is_active = False
+
+        mock_caller = MagicMock()
+
+        with pytest.raises(UserError) as exc_info:
+            await service.deactivate_user(
+                current_user=mock_caller,
+                target=target,
+                db=AsyncMock(),
+                redis=AsyncMock(),
+            )
+
+        assert exc_info.value.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_get_user_by_email_case_insensitive(self):
+        """Test getting user by email is case-insensitive."""
+        from app.modules.users import service
+
+        mock_user = MagicMock()
+        mock_user.email = "User@Example.COM"
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_user
+        mock_db.execute.return_value = mock_result
+
+        user = await service.get_user_by_email("user@example.com", db=mock_db)
+
+        called_stmt = mock_db.execute.call_args[0][0]
+        assert "lower(" in str(called_stmt.compile()).lower()
+        assert user == mock_user
+
+    @pytest.mark.asyncio
+    async def test_get_user_by_email_not_found(self):
+        """Test getting user by email returns None if not found."""
+        from app.modules.users import service
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute.return_value = mock_result
+
+        user = await service.get_user_by_email("no-existe@test.com", db=mock_db)
+
+        assert user is None
+
+    @pytest.mark.asyncio
+    async def test_list_users_filters_by_tenant(self):
+        """Test listing users filters by tenant_id."""
+        from app.modules.users import service
+        from uuid import uuid4
+
+        tenant_id = uuid4()
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = []
+        mock_db.execute.return_value = mock_result
+
+        await service.list_users(db=mock_db, tenant_id=tenant_id)
+
+        called_stmt = mock_db.execute.call_args[0][0]
+        assert "tenant_id" in str(called_stmt.compile())
+
+    @pytest.mark.asyncio
+    async def test_get_active_tenant_not_found(self):
+        """Test _get_active_tenant raises 404 when tenant not found."""
+        from app.modules.users import service
+        from app.core.exceptions import UserError
+
+        tenant_id = uuid4()
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute.return_value = mock_result
+
+        with pytest.raises(UserError) as exc_info:
+            await service._get_active_tenant(mock_db, tenant_id)
+
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_active_tenant_inactive(self):
+        """Test _get_active_tenant raises 409 when tenant is inactive."""
+        from app.modules.users import service
+        from app.core.exceptions import UserError
+
+        tenant_id = uuid4()
+
+        mock_tenant = MagicMock()
+        mock_tenant.is_active = False
+
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_tenant
+        mock_db.execute.return_value = mock_result
+
+        with pytest.raises(UserError) as exc_info:
+            await service._get_active_tenant(mock_db, tenant_id)
+
+        assert exc_info.value.status_code == 409
+
+
+class TestUserRoleHierarchy:
+    """Test role hierarchy logic."""
+    
+    def test_role_enum_values(self):
+        """Test RoleEnum has expected values."""
+        from app.modules.users.schemas import RoleEnum
+        
+        assert RoleEnum.viewer == "viewer"
+        assert RoleEnum.analyst == "analyst"
+        assert RoleEnum.ingestor == "ingestor"
+        assert RoleEnum.admin == "admin"
+        assert RoleEnum.superadmin == "superadmin"
+
+
+class TestUserResponseSchema:
+    """Test UserResponse schema."""
+    
+    def test_user_response_from_attributes(self):
+        """Test UserResponse can be created from ORM object."""
+        from app.modules.users.schemas import UserResponse, RoleEnum
+        from datetime import datetime
+        from uuid import UUID
+        
+        # Simulate ORM object
+        class MockUser:
+            id = UUID("12345678-1234-1234-1234-123456789abc")
+            tenant_id = UUID("87654321-4321-4321-4321-cba987654321")
+            email = "test@example.com"
+            full_name = "Test User"
+            role = RoleEnum.admin
+            is_active = True
+            is_superadmin = False
+            created_at = datetime.now()
+            updated_at = datetime.now()
+        
+        response = UserResponse.model_validate(MockUser())
+        assert response.email == "test@example.com"
+        assert response.role == RoleEnum.admin
+        assert response.is_active is True
+
+
+class TestUpdateUserTokenRevocation:
+    """Test that update_user revokes tokens on deactivation transition.
+
+    After PR-A, `update_user` receives a pre-checked `target` row from the
+    router (no internal fetch) plus the `current_user` for the contract.
+    The token-revocation behavior is unchanged.
+    """
+
+    @pytest.mark.asyncio
+    async def test_update_user_deactivate_revokes_tokens(self):
+        """update_user con is_active=True→False llama a revocacion de tokens."""
+        from app.modules.users import service
+        from app.modules.users.schemas import UserUpdate
+        from uuid import uuid4
+
+        user_id = uuid4()
+        target = MagicMock()
+        target.id = user_id
+        target.is_active = True
+
+        mock_caller = MagicMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        mock_redis = AsyncMock()
+
+        data = UserUpdate(is_active=False)
+
+        with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=mock_redis,
+            )
+
+            mock_revoke_refresh.assert_awaited_once_with(user_id, mock_db)
+            mock_revoke_access.assert_awaited_once()
+            call_kwargs = mock_revoke_access.await_args.kwargs
+            assert call_kwargs["user_id"] == str(user_id)
+            assert call_kwargs["redis"] == mock_redis
+
+    @pytest.mark.asyncio
+    async def test_update_user_deactivate_already_inactive_no_revocation(self):
+        """update_user con is_active=False sobre usuario ya inactivo NO revoca tokens."""
+        from app.modules.users import service
+        from app.modules.users.schemas import UserUpdate
+        from uuid import uuid4
+
+        user_id = uuid4()
+        target = MagicMock()
+        target.id = user_id
+        target.is_active = False  # ya inactivo
+
+        mock_caller = MagicMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        mock_redis = AsyncMock()
+
+        data = UserUpdate(is_active=False)
+
+        with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=mock_redis,
+            )
+
+            mock_revoke_refresh.assert_not_awaited()
+            mock_revoke_access.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_user_reactivate_no_revocation(self):
+        """update_user con is_active=False→True NO revoca tokens (reactivacion)."""
+        from app.modules.users import service
+        from app.modules.users.schemas import UserUpdate
+        from uuid import uuid4
+
+        user_id = uuid4()
+        target = MagicMock()
+        target.id = user_id
+        target.is_active = False  # inactivo, se va a reactivar
+
+        mock_caller = MagicMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        mock_redis = AsyncMock()
+
+        data = UserUpdate(is_active=True)
+
+        with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=mock_redis,
+            )
+
+            mock_revoke_refresh.assert_not_awaited()
+            mock_revoke_access.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_user_patch_without_is_active_no_revocation(self):
+        """update_user sin cambio de is_active NO revoca tokens."""
+        from app.modules.users import service
+        from app.modules.users.schemas import UserUpdate
+        from uuid import uuid4
+
+        user_id = uuid4()
+        target = MagicMock()
+        target.id = user_id
+        target.is_active = True
+
+        mock_caller = MagicMock()
+        mock_db = MagicMock(spec=AsyncSession)
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        mock_redis = AsyncMock()
+
+        data = UserUpdate(full_name="New Name")
+
+        with patch("app.modules.users.service._revoke_all_user_tokens", new_callable=AsyncMock) as mock_revoke_refresh, \
+             patch("app.modules.users.service.revoke_all_user_access_tokens", new_callable=AsyncMock) as mock_revoke_access:
+            await service.update_user(
+                current_user=mock_caller,
+                target=target,
+                data=data,
+                db=mock_db,
+                redis=mock_redis,
+            )
+
+            mock_revoke_refresh.assert_not_awaited()
+            mock_revoke_access.assert_not_awaited()

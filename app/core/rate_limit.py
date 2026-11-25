@@ -1,0 +1,238 @@
+"""Progressive lockout rate limiter for auth endpoints.
+
+Design: dual-key lockout (IP + email) with two different policies.
+- Failed attempts are tracked per IP and per email hash.
+- The per-account (email) bucket escalates: 3min → 15min → 1h → 4h → 24h.
+- The per-IP bucket only throttles for one short, fixed, non-escalating
+  window: an IP is often shared (office NAT, carrier CGNAT, the compose
+  network), so it must never hard-lock every user behind it.
+- Successful login resets the failure counter.
+- Lockout message is generic (doesn't reveal the duration).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import time
+from collections.abc import Mapping
+from dataclasses import dataclass
+
+from redis.asyncio import Redis
+
+from app.core.config import settings
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
+# Redis key prefixes
+_IP_PREFIX = "ratelimit:ip:"
+_EMAIL_PREFIX = "ratelimit:email:"
+
+# Lockout escalation table: (threshold, lockout_seconds)
+# When cumulative failures reach `threshold`, lockout is `lockout_seconds`.
+_LOCKOUT_TABLE: list[tuple[int, int]] = [
+    (5, 3 * 60),  # 5 failures  → 3 min
+    (10, 15 * 60),  # 10 failures → 15 min
+    (15, 60 * 60),  # 15 failures → 1 hour
+    (20, 4 * 60 * 60),  # 20 failures → 4 hours
+    (25, 24 * 60 * 60),  # 25 failures → 24 hours
+]
+
+# Per-IP throttle: fixed, non-escalating window. One IP is shared by many
+# users, so exceeding the first threshold only delays requests for a short
+# while instead of applying the escalating account lockout above.
+_IP_THROTTLE_THRESHOLD = 5
+
+
+def _hash_email(email: str) -> str:
+    """Hash email for Redis key — no PII stored."""
+    return hashlib.sha256(email.lower().strip().encode()).hexdigest()[:16]
+
+
+def _get_hash_field(
+    data: Mapping[str | bytes, str | bytes], field: str
+) -> str | bytes | int:
+    """Read a Redis hash field from text- or bytes-mode responses."""
+    if field in data:
+        return data[field]
+    return data.get(field.encode(), 0)
+
+
+def _get_lockout_seconds(failures: int) -> int:
+    """Return lockout duration for the given failure count.
+
+    Returns 0 if no lockout threshold has been reached.
+    For failures beyond the last threshold, uses the max lockout (24h).
+
+    Lockout only applies when failures EXCEED the threshold, not when they
+    equal it. This allows one more attempt at the threshold before locking.
+    """
+    # Find the highest threshold that failures has exceeded
+    result = 0
+    for threshold, seconds in _LOCKOUT_TABLE:
+        if failures > threshold:
+            result = seconds
+        else:
+            break
+    return result
+
+
+def _get_ip_throttle_seconds(failures: int) -> int:
+    """Return the per-IP throttle duration (0 = not throttled).
+
+    Deliberately NOT escalating: a shared IP is throttled for one short fixed
+    window, so an attacker spraying accounts can never lock every user of that
+    IP out for hours.
+    """
+    if failures > _IP_THROTTLE_THRESHOLD:
+        return settings.RATE_LIMIT_IP_THROTTLE_SECONDS
+    return 0
+
+
+@dataclass
+class LockoutStatus:
+    """Result of a rate limit check."""
+
+    is_locked: bool
+    retry_after: int | None = None  # seconds until unlock, None if not locked
+    failures: int = 0
+
+
+class RateLimiter:
+    """Progressive lockout rate limiter backed by Redis.
+
+    Usage:
+        limiter = RateLimiter(redis_client)
+        status = await limiter.check("192.168.1.1", "user@example.com")
+        if status.is_locked:
+            raise HTTPException(429, detail="Too many attempts")
+
+        # After failed login:
+        await limiter.record_failure("192.168.1.1", "user@example.com")
+
+        # After successful login:
+        await limiter.record_success("192.168.1.1", "user@example.com")
+    """
+
+    def __init__(self, redis: Redis) -> None:
+        self._redis = redis
+
+    async def check(self, ip: str, email: str) -> LockoutStatus:
+        """Check if IP or email is currently locked out.
+
+        Returns LockoutStatus with is_locked=True if either key is locked.
+        """
+        ip_key = f"{_IP_PREFIX}{ip}"
+        email_key = f"{_EMAIL_PREFIX}{_hash_email(email)}"
+
+        # Check both keys in parallel
+        ip_data = await self._redis.hgetall(ip_key)
+        email_data = await self._redis.hgetall(email_key)
+
+        now = time.time()
+
+        # Check IP lockout
+        ip_locked_until = float(_get_hash_field(ip_data, "locked_until"))
+        if ip_locked_until > now:
+            remaining = int(ip_locked_until - now)
+            logger.warning(
+                "rate_limit_locked", key_type="ip", ip=ip, retry_after=remaining
+            )
+            return LockoutStatus(
+                is_locked=True,
+                retry_after=remaining,
+                failures=int(_get_hash_field(ip_data, "failures")),
+            )
+
+        # Check email lockout
+        email_locked_until = float(_get_hash_field(email_data, "locked_until"))
+        if email_locked_until > now:
+            remaining = int(email_locked_until - now)
+            logger.warning(
+                "rate_limit_locked",
+                key_type="email",
+                email_hash=_hash_email(email),
+                retry_after=remaining,
+            )
+            return LockoutStatus(
+                is_locked=True,
+                retry_after=remaining,
+                failures=int(_get_hash_field(email_data, "failures")),
+            )
+
+        # Not locked — return current failure count
+        max_failures = max(
+            int(_get_hash_field(ip_data, "failures")),
+            int(_get_hash_field(email_data, "failures")),
+        )
+        return LockoutStatus(is_locked=False, failures=max_failures)
+
+    async def record_failure(self, ip: str, email: str) -> LockoutStatus:
+        """Record a failed login attempt for both IP and email.
+
+        The email bucket escalates and extends an active lockout. The IP bucket
+        only ever applies one fixed short throttle window and never extends it
+        while it is active, so a shared IP cannot be hard-locked.
+        """
+        ip_key = f"{_IP_PREFIX}{ip}"
+        email_key = f"{_EMAIL_PREFIX}{_hash_email(email)}"
+        now = time.time()
+
+        for key in (ip_key, email_key):
+            # Increment failure count atomically
+            failures = await self._redis.hincrby(key, "failures", 1)
+            # Set TTL for auto-cleanup (24h + buffer)
+            await self._redis.expire(key, settings.RATE_LIMIT_WINDOW_SECONDS + 3600)
+
+            if key == ip_key:
+                throttle_seconds = _get_ip_throttle_seconds(failures)
+                if throttle_seconds <= 0:
+                    continue
+                current_locked = float(
+                    await self._redis.hget(key, "locked_until") or 0
+                )
+                if current_locked > now:
+                    # Fixed window: sustained failures cannot stretch it.
+                    continue
+                await self._redis.hset(
+                    key, "locked_until", str(now + throttle_seconds)
+                )
+                logger.warning(
+                    "rate_limit_ip_throttled",
+                    failures=failures,
+                    throttle_seconds=throttle_seconds,
+                )
+                continue
+
+            # Per-account lockout: escalating and extended while active.
+            lockout_seconds = _get_lockout_seconds(failures)
+            if lockout_seconds > 0:
+                # If already locked, extend from current locked_until
+                current_locked = float(await self._redis.hget(key, "locked_until") or 0)
+                base_time = max(now, current_locked)
+                new_locked_until = base_time + lockout_seconds
+
+                await self._redis.hset(key, "locked_until", str(new_locked_until))
+                logger.warning(
+                    "rate_limit_lockout_applied",
+                    key=key.split(":")[1],  # "ip" or "email"
+                    failures=failures,
+                    lockout_seconds=lockout_seconds,
+                    locked_until=new_locked_until,
+                )
+
+        # Return the combined status
+        return await self.check(ip, email)
+
+    async def record_success(self, ip: str, email: str) -> None:
+        """Reset failure counters after successful login.
+
+        Clears both IP and email failure tracking.
+        """
+        ip_key = f"{_IP_PREFIX}{ip}"
+        email_key = f"{_EMAIL_PREFIX}{_hash_email(email)}"
+
+        await self._redis.delete(ip_key)
+        await self._redis.delete(email_key)
+
+        logger.info("rate_limit_reset", ip=ip, email_hash=_hash_email(email))

@@ -1,0 +1,54 @@
+[project]
+name = "soc360-pymes"
+version = "0.1.0"
+description = "SOC as a Service backend for small and medium businesses."
+license = { text = "MIT" }
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.32.1",
+    "sqlalchemy[asyncio]==2.0.36",
+    "asyncpg==0.30.0",
+    "alembic==1.14.0",
+    "redis[hiredis]==5.2.1",
+    "celery[redis]==5.4.0",
+    "PyJWT[crypto]>=2.8,<3",
+    "bcrypt>=4.0",
+    "python-multipart==0.0.12",
+    "pydantic==2.10.4",
+    "pydantic-settings==2.7.0",
+    "httpx==0.27.2",
+    "structlog==24.4.0",
+    "email-validator==2.3.0",
+    "prometheus-client>=0.26.0",
+    "defusedxml>=0.7.1",
+    # The DNS TXT ownership challenge (H2, S5) needs real TXT lookups. It was
+    # present only as a transitive dependency, and importing an undeclared
+    # package breaks the API image the day that transitive edge disappears.
+    "dnspython==2.8.0",
+    "langgraph==1.2.14",
+    # The production server. entrypoint.sh runs Gunicorn, but it was missing
+    # from the dependencies, so the API image could never start: the API had
+    # only ever been run with uvicorn on the developer machine.
+    "gunicorn==23.0.0",
+    # Gunicorn's default worker is synchronous and cannot serve an ASGI
+    # application, so FastAPI needs a worker that speaks ASGI. This is the
+    # maintained package for that; uvicorn's own uvicorn.workers module is
+    # deprecated.
+    "uvicorn-worker>=0.2,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.24.0",
+    "pytest-xdist==3.6.1",
+    "httpx==0.27.2",
+    "ruff==0.8.4",
+    "mypy==1.13.0",
+    "anyio==4.12.1",
+    "fakeredis==2.34.1",
+]
+
+[tool.uv]
+package = false

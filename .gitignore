@@ -1,0 +1,130 @@
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.pyright_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+
+# ---------------------------------------------------------------------------
+# Secrets and credentials — never commit these
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.secret
+*.kdbx
+id_rsa*
+id_ed25519*
+.netrc
+.pgpass
+secrets/
+credentials.json
+service-account*.json
+lab/configs/*.env
+!lab/configs/*.env.example
+
+# ---------------------------------------------------------------------------
+# Docker runtime data
+# ---------------------------------------------------------------------------
+postgres-data/
+redis-data/
+docker/postgres-data/
+docker/redis-data/
+
+# ---------------------------------------------------------------------------
+# Editors and IDEs
+# ---------------------------------------------------------------------------
+.vscode/settings.json
+.idea/
+*.swp
+
+# ---------------------------------------------------------------------------
+# Operating system
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+
+# ---------------------------------------------------------------------------
+# Logs
+# ---------------------------------------------------------------------------
+*.log
+logs/
+
+# ---------------------------------------------------------------------------
+# Frontend (F4)
+# ---------------------------------------------------------------------------
+frontend/node_modules/
+frontend/dist/
+# Playwright end-to-end smoke artifacts
+frontend/test-results/
+frontend/playwright-report/
+
+# ---------------------------------------------------------------------------
+# Scan results — may contain client-sensitive data
+# ---------------------------------------------------------------------------
+*.xml
+*.nmap
+# Synthetic parser fixtures (RFC 5737 documentation addresses only)
+!tests/fixtures/nmap/*.xml
+scans/results/
+reports/generated/
+
+# ---------------------------------------------------------------------------
+# Monitoring local data (Grafana / Prometheus)
+# ---------------------------------------------------------------------------
+infrastructure/monitoring/grafana/data/
+infrastructure/monitoring/prometheus/data/
+
+# ---------------------------------------------------------------------------
+# Agent and AI tooling artifacts — local only
+# ---------------------------------------------------------------------------
+.ollama/
+agents/cache/
+.atl/
+.codegraph/
+.pi/
+.claude/
+.cursor/
+.windsurf/
+.opencode/
+.continue/
+.copilot/
+.commandcode/
+.sdd/
+.gga
+.aider*
+graphify-out/
+skills/
+.worktrees/
+
+# Agent instruction files (not published)
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+
+# ---------------------------------------------------------------------------
+# Local planning, specs and session notes (not published)
+# ---------------------------------------------------------------------------
+odd/
+openspec/
+docs/notes/
+docs/audits/

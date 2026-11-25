@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from enum import Enum
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from app.core.types import EmailStr
+
+
+class RoleEnum(str, Enum):
+    viewer = "viewer"
+    analyst = "analyst"
+    ingestor = "ingestor"
+    admin = "admin"
+    superadmin = "superadmin"
+
+
+class UserCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr = Field(..., description="Email unico del usuario")
+    password: str = Field(..., min_length=12, max_length=128)
+    full_name: str = Field(..., min_length=1, max_length=255)
+    role: RoleEnum = Field(..., description="Rol del usuario")
+    tenant_id: uuid.UUID | None = Field(..., description="Tenant requerido para creación pública")
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_bytes(cls, v: str) -> str:
+        """Reject passwords over bcrypt's 72-byte input limit."""
+        if len(v.encode("utf-8")) > 72:
+            raise ValueError(
+                "Password exceeds 72 bytes (UTF-8). Choose a shorter password."
+            )
+        return v
+    
+    @model_validator(mode="after")
+    def check_public_user_consistency(self) -> UserCreate:
+        if self.tenant_id is None:
+            raise ValueError("Un usuario debe tener tenant_id")
+        if self.role == RoleEnum.superadmin:
+            raise ValueError("role='superadmin' requiere creación interna")
+        return self
+
+
+class UserInternalCreate(UserCreate):
+    is_superadmin: bool = False
+
+    @model_validator(mode="after")
+    def check_public_user_consistency(self) -> UserInternalCreate:
+        if self.is_superadmin and self.tenant_id is not None:
+            raise ValueError("Un superadmin no puede pertenecer a un tenant")
+        if not self.is_superadmin and self.tenant_id is None:
+            raise ValueError("Un usuario normal debe tener tenant_id")
+        if self.is_superadmin and self.role != RoleEnum.superadmin:
+            raise ValueError("is_superadmin=True requiere role='superadmin'")
+        return self
+
+
+class UserUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr | None = Field(None, max_length=255)
+    full_name: str | None = Field(None, min_length=1, max_length=255)
+    role: RoleEnum | None = None
+    is_active: bool | None = None
+    
+    @model_validator(mode="after")
+    def check_role_not_superadmin(self) -> UserUpdate:
+        if self.role == RoleEnum.superadmin:
+            raise ValueError(
+                "No se puede asignar role='superadmin' via update. "
+                "Los superadmins se crean directamente."
+            )
+        return self
+
+
+class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: uuid.UUID
+    tenant_id: uuid.UUID | None
+    email: str
+    full_name: str
+    role: RoleEnum
+    is_active: bool
+    is_superadmin: bool
+    created_at: datetime
+    updated_at: datetime

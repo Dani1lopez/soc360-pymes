@@ -45,8 +45,8 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import AsyncSessionLocal, get_session_with_tenant
-from app.dependencies import get_db
+from app.core.database import AsyncSessionLocal, get_session_with_tenant, set_tenant_context
+from app.dependencies import get_db, get_db_with_tenant
 from app.dependencies.auth import get_current_user
 from app.modules.assets.models import Asset
 from app.modules.tenants.models import Tenant
@@ -800,10 +800,21 @@ def _install_production_like_db_lifecycle(app: Any, identity: SimpleNamespace) -
             async with session.begin():
                 yield session
 
+    async def _production_get_db_with_tenant() -> AsyncGenerator[AsyncSession, None]:
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                await set_tenant_context(
+                    session,
+                    identity.tenant_id,
+                    is_superadmin=identity.is_superadmin,
+                )
+                yield session
+
     async def _stub_current_user() -> SimpleNamespace:
         return identity
 
     app.dependency_overrides[get_db] = _production_get_db
+    app.dependency_overrides[get_db_with_tenant] = _production_get_db_with_tenant
     app.dependency_overrides[get_current_user] = _stub_current_user
 
 

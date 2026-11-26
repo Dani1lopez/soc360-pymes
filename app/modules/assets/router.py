@@ -28,7 +28,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from app.core.database import get_session_with_tenant
-from app.dependencies import DBDep
+from app.dependencies import DBWithTenantDep
 from app.dependencies.auth import require_any_role
 from app.dependencies.event_deps import get_event_bus
 from app.event_bus import EventBus
@@ -153,7 +153,7 @@ async def _stream_csv(
 )
 async def create_asset(
     payload: AssetCreateRequest,
-    db: DBDep,
+    db: DBWithTenantDep,
     event_bus: EventBusDep,
     current_user: User = Depends(require_any_role("admin", "superadmin")),
 ) -> AssetResponse:
@@ -217,7 +217,7 @@ async def create_asset(
     summary="List assets (paginated) or export them as CSV",
 )
 async def list_assets(
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: User = Depends(
         require_any_role("admin", "analyst", "viewer", "superadmin")
     ),
@@ -266,7 +266,7 @@ async def list_assets(
 )
 async def get_asset(
     asset_id: uuid.UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: User = Depends(
         require_any_role("admin", "analyst", "viewer", "superadmin")
     ),
@@ -293,7 +293,7 @@ async def get_asset(
 async def update_asset(
     asset_id: uuid.UUID,
     payload: AssetUpdate,
-    db: DBDep,
+    db: DBWithTenantDep,
     event_bus: EventBusDep,
     current_user: User = Depends(require_any_role("admin", "superadmin")),
 ) -> AssetResponse:
@@ -334,7 +334,7 @@ async def update_asset(
 )
 async def delete_asset(
     asset_id: uuid.UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     event_bus: EventBusDep,
     current_user: User = Depends(require_any_role("admin", "superadmin")),
 ) -> None:

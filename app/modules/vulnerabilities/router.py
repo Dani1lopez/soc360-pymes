@@ -38,7 +38,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 
-from app.dependencies import DBDep
+from app.dependencies import DBWithTenantDep
 from app.dependencies.auth import require_any_role
 from app.dependencies.event_deps import get_event_bus
 from app.event_bus import EventBus
@@ -117,7 +117,7 @@ def _caller_tenant_id(current_user: User) -> uuid.UUID | None:
 )
 async def create_vulnerability(
     payload: VulnerabilityCreate,
-    db: DBDep,
+    db: DBWithTenantDep,
     event_bus: EventBusDep,
     current_user: User = Depends(require_any_role("admin", "superadmin")),
 ) -> VulnerabilityResponse:
@@ -155,7 +155,7 @@ async def create_vulnerability(
     summary="List vulnerabilities (paginated), optionally filtered by scan",
 )
 async def list_vulnerabilities(
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: User = Depends(
         require_any_role("admin", "analyst", "viewer", "superadmin")
     ),
@@ -196,7 +196,7 @@ async def list_vulnerabilities(
 )
 async def get_vulnerability(
     vulnerability_id: uuid.UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: User = Depends(
         require_any_role("admin", "analyst", "viewer", "superadmin")
     ),
@@ -225,7 +225,7 @@ async def get_vulnerability(
 async def update_vulnerability(
     vulnerability_id: uuid.UUID,
     payload: VulnerabilityUpdate,
-    db: DBDep,
+    db: DBWithTenantDep,
     event_bus: EventBusDep,
     current_user: User = Depends(require_any_role("admin", "superadmin")),
 ) -> VulnerabilityResponse:
@@ -255,7 +255,7 @@ async def update_vulnerability(
 )
 async def delete_vulnerability(
     vulnerability_id: uuid.UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     event_bus: EventBusDep,
     current_user: User = Depends(require_any_role("admin", "superadmin")),
 ) -> None:

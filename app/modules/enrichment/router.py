@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.config import settings
-from app.dependencies import DBDep
+from app.dependencies import DBWithTenantDep
 from app.dependencies.auth import require_any_role
 from app.modules.enrichment import queries
 from app.modules.enrichment.dispatch import enqueue_enrichment
@@ -51,7 +51,7 @@ def _require_enabled() -> None:
 )
 async def get_enrichment(
     vulnerability_id: UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: User = Depends(require_any_role("admin", "analyst", "viewer", "superadmin")),
 ) -> VulnerabilityEnrichmentRead:
     vulnerability = await queries.visible_vulnerability(db, vulnerability_id, _caller_tenant_id(current_user))
@@ -78,7 +78,7 @@ async def get_enrichment(
 )
 async def request_enrichment(
     vulnerability_id: UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     enqueuer: EnqueuerDep,
     current_user: User = Depends(require_any_role("admin", "analyst", "superadmin")),
 ) -> EnrichmentQueued:
@@ -98,7 +98,7 @@ async def request_enrichment(
 )
 async def request_scan_enrichment(
     scan_id: UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     enqueuer: EnqueuerDep,
     current_user: User = Depends(require_any_role("admin", "analyst", "superadmin")),
 ) -> ScanEnrichmentQueued:

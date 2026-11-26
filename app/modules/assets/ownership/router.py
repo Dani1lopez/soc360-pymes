@@ -14,7 +14,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.dependencies import DBDep
+from app.dependencies import DBWithTenantDep
 from app.dependencies.auth import require_any_role
 from app.modules.assets.ownership import service
 from app.modules.assets.ownership.schemas import (
@@ -69,7 +69,7 @@ ResolverDep = Annotated[Resolver | None, Depends(get_target_resolver)]
 async def declare_ownership(
     asset_id: uuid.UUID,
     payload: OwnershipDeclarationRequest,
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: WriteRole,
 ) -> OwnershipDeclarationResponse:
     try:
@@ -92,7 +92,7 @@ async def declare_ownership(
 )
 async def list_declarations(
     asset_id: uuid.UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: ReadRole,
 ) -> OwnershipDeclarationListResponse:
     try:
@@ -115,7 +115,7 @@ async def list_declarations(
 )
 async def verify_ownership(
     asset_id: uuid.UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: WriteRole,
     txt_lookup: TxtLookupDep,
     http_fetch: HttpFetchDep,
@@ -167,7 +167,7 @@ async def verify_ownership(
 )
 async def approve_ownership(
     asset_id: uuid.UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: ApproveRole,
 ) -> OwnershipDeclarationResponse:
     """Turn a pending ``declaration`` into the verified row a scan requires.
@@ -210,7 +210,7 @@ async def approve_ownership(
 )
 async def revoke_ownership(
     asset_id: uuid.UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: WriteRole,
 ) -> OwnershipDeclarationResponse:
     try:

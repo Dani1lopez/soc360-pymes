@@ -96,3 +96,40 @@ async def test_constructive_ddl_fails(
     """Spec #14: CREATE TABLE must raise permission denied."""
     with pytest.raises(ProgrammingError):
         await db_session.execute(text("CREATE TABLE hacker_table (id int)"))
+
+
+@pytest.mark.asyncio
+async def test_all_tenant_tables_have_rls_enabled_and_forced(
+    db_session: AsyncSession,
+):
+    """S10 (M1): Every business table in public must have RLS enabled and forced."""
+    expected_tables = {
+        "tenants",
+        "users",
+        "refresh_tokens",
+        "assets",
+        "scans",
+        "vulnerabilities",
+        "reports",
+        "vulnerability_enrichments",
+        "asset_ownership_declarations",
+    }
+    result = await db_session.execute(
+        text(
+            "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity "
+            "FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'public' "
+            "AND c.relkind IN ('r', 'p') "
+            "AND c.relname != 'alembic_version'"
+        )
+    )
+    rows = result.fetchall()
+    found_tables = {row[0] for row in rows}
+    assert expected_tables <= found_tables, (
+        f"Missing expected tables: {sorted(expected_tables - found_tables)}"
+    )
+    not_enabled = [row[0] for row in rows if not row[1]]
+    not_forced = [row[0] for row in rows if not row[2]]
+    assert not not_enabled, f"Tables missing ENABLE ROW LEVEL SECURITY: {not_enabled}"
+    assert not not_forced, f"Tables missing FORCE ROW LEVEL SECURITY: {not_forced}"

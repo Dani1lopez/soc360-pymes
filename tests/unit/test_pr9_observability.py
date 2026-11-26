@@ -58,6 +58,8 @@ async def test_login_passes_canonical_flow_label_to_event_bus() -> None:
         role="admin",
         is_superadmin=False,
         is_active=True,
+        # Default of User.credential_version (app/modules/users/models.py).
+        credential_version=0,
     )
     tenant = SimpleNamespace(is_active=True)
     db = MagicMock(spec=AsyncSession)

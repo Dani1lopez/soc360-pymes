@@ -24,6 +24,9 @@ class TestGetCurrentUserTenantContext:
         mock_user.is_superadmin = False
         mock_user.tenant_id = uuid4()
         mock_user.id = uuid4()
+        # Explicit int version: the strict typed claim check compares the
+        # JWT's credential_version (missing claim = 0) against the user's.
+        mock_user.credential_version = 0
 
         mock_tenant = MagicMock()
         mock_tenant.is_active = True

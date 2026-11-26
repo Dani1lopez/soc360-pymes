@@ -93,8 +93,11 @@ def create_access_token(
     role: str,
     is_superadmin: bool,
     expires_delta: timedelta | None = None,
+    credential_version: int = 0,
 ) -> tuple[str, str]:
     """Crea un access token JWT firmado con HS256"""
+    if type(credential_version) is not int or credential_version < 0:
+        raise ValueError("Invalid credential version")
     if is_superadmin and tenant_id is not None:
         raise ValueError("Superadmin no puede tener tenant_id")
     
@@ -114,6 +117,7 @@ def create_access_token(
         "tenant_id": tenant_id,
         "role": role,
         "is_superadmin": is_superadmin,
+        "credential_version": credential_version,
         "iat": int(now.timestamp()),
         "exp": int(expire.timestamp()),
     }
@@ -371,6 +375,52 @@ async def revoke_all_user_access_tokens(
     if flow_id is not None:
         extra["flow"] = flow_id
     logger.info("Todos los JTIs del usuario revocados", extra=extra)
+
+
+@_observe_operation_latency
+async def revoke_captured_user_access_tokens(
+    user_id: str,
+    jtis: list[str],
+    redis: Redis,
+    ttl_seconds: int,
+    *,
+    flow_id: str | None = None,
+) -> None:
+    """Denylista y des-trackea SOLO los JTIs capturados previamente.
+
+    A diferencia de ``revoke_all_user_access_tokens``, nunca lee el set
+    completo ``active_jtis`` en el momento de la revocacion ni borra el set
+    entero: los JTIs trackeados por logins o rotaciones concurrentes
+    posteriores a la captura deben seguir vivos y trackeados. Cada JTI
+    capturado se deniega (SET ordenado, REQ-140-R05) y se remueve del set
+    (SREM) individualmente.
+    """
+    if not jtis:
+        return
+    for jti in jtis:
+        try:
+            await redis.set(f"{_DENYLIST_PREFIX}{jti}", "1", ex=ttl_seconds)
+        except asyncio.CancelledError:
+            _record_cancellation(flow_id)
+            raise
+        except Exception as exc:
+            _record_outage(flow_id)
+            raise classify_redis_error(exc) from exc
+        try:
+            await redis.srem(f"{_ACTIVE_JTIS_PREFIX}{user_id}", jti)
+        except asyncio.CancelledError:
+            _record_cancellation(flow_id)
+            raise
+        except Exception as exc:
+            _record_outage(flow_id)
+            raise classify_redis_error(exc) from exc
+    extra = {
+        "user_id": user_id,
+        "count": len(jtis),
+    }
+    if flow_id is not None:
+        extra["flow"] = flow_id
+    logger.info("JTIs capturados del usuario revocados", extra=extra)
 
 
 @_observe_operation_latency

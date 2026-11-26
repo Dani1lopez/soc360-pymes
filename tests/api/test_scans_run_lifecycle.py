@@ -33,7 +33,7 @@ from app.core.database import (
     get_session_with_tenant,
     set_tenant_context,
 )
-from app.dependencies import get_db
+from app.dependencies import get_db, get_db_with_tenant
 from app.dependencies.auth import get_current_user
 from app.modules.assets.models import Asset
 from app.modules.assets.ownership.models import AssetOwnershipDeclaration
@@ -171,6 +171,7 @@ def _install_production_lifecycle(app: Any, identity: SimpleNamespace) -> None:
 
     dispatcher = _RecordingDispatcher()
     app.dependency_overrides[get_db] = _production_get_db
+    app.dependency_overrides[get_db_with_tenant] = _production_get_db
     app.dependency_overrides[get_current_user] = _stub_current_user
     app.dependency_overrides[get_scan_dispatcher] = lambda: dispatcher
     app.state.lifecycle_dispatcher = dispatcher

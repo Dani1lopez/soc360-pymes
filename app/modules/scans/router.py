@@ -43,7 +43,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.dependencies import DBDep
+from app.dependencies import DBWithTenantDep
 from app.dependencies.auth import require_any_role
 from app.dependencies.event_deps import get_event_bus
 from app.event_bus import EventBus
@@ -125,7 +125,7 @@ def _caller_tenant_id(current_user: User) -> uuid.UUID | None:
 )
 async def create_scan(
     payload: ScanCreateRequest,
-    db: DBDep,
+    db: DBWithTenantDep,
     event_bus: EventBusDep,
     current_user: User = Depends(require_any_role("admin", "superadmin")),
 ) -> ScanResponse:
@@ -173,7 +173,7 @@ async def create_scan(
     summary="List scans (paginated), optionally filtered by asset",
 )
 async def list_scans(
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: User = Depends(
         require_any_role("admin", "analyst", "viewer", "superadmin")
     ),
@@ -214,7 +214,7 @@ async def list_scans(
 )
 async def get_scan(
     scan_id: uuid.UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: User = Depends(
         require_any_role("admin", "analyst", "viewer", "superadmin")
     ),
@@ -243,7 +243,7 @@ async def get_scan(
 async def update_scan(
     scan_id: uuid.UUID,
     payload: ScanUpdate,
-    db: DBDep,
+    db: DBWithTenantDep,
     event_bus: EventBusDep,
     current_user: User = Depends(require_any_role("admin", "superadmin")),
 ) -> ScanResponse:
@@ -281,7 +281,7 @@ async def update_scan(
 )
 async def delete_scan(
     scan_id: uuid.UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     event_bus: EventBusDep,
     current_user: User = Depends(require_any_role("admin", "superadmin")),
 ) -> None:
@@ -319,7 +319,7 @@ def _require_execution_enabled() -> None:
 )
 async def run_scan(
     scan_id: uuid.UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     dispatcher: Annotated[ScanDispatcher, Depends(get_scan_dispatcher)],
     current_user: User = Depends(require_any_role("admin", "superadmin")),
 ) -> ScanResponse:
@@ -365,7 +365,7 @@ async def run_scan(
 )
 async def cancel_scan(
     scan_id: uuid.UUID,
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: User = Depends(require_any_role("admin", "superadmin")),
 ) -> ScanResponse:
     """Stop an open scan, regardless of the execution kill switch.

@@ -466,6 +466,65 @@ async def test_expired_refresh_token_rejects_without_revoking_sessions(
     assert still_works.status_code == 200
 
 
+async def test_expired_rotated_token_is_not_treated_as_reuse(
+    production_tx_client, db_session: AsyncSession, seed_data
+):
+    """S3: replaying an *expired* predecessor revokes nothing.
+
+    R1 keeps its rotation marker after rotating, so it still matches the reuse
+    lookup. Its expiry must be honoured first: an expired cookie is a plain
+    rejection, not evidence that the live successor was replayed.
+    """
+    client, fake_redis = production_tx_client
+    await _release_fixture_savepoint(db_session)
+
+    user_id = UUID(ADMIN_A_ID)
+    login_response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": ADMIN_A_EMAIL, "password": ADMIN_A_PASSWORD},
+    )
+    assert login_response.status_code == 200
+    access = login_response.json()["access_token"]
+    first = login_response.cookies.get("refresh_token")
+    assert first is not None
+    rotated = await _refresh(client, first)
+    assert rotated.status_code == 200
+    second = rotated.cookies.get("refresh_token")
+    assert second is not None
+
+    # Expire the rotated predecessor without touching its rotation marker.
+    await db_session.execute(
+        update(RefreshToken)
+        .where(RefreshToken.token_hash == _hash_refresh_token(first))
+        .values(expires_at=datetime(2000, 1, 1, tzinfo=timezone.utc))
+    )
+    await db_session.commit()
+    jtis_before = await _active_jtis(fake_redis, ADMIN_A_ID)
+    active_before = await _active_count(db_session, user_id)
+    # Non-trivial baseline: the committed version must match the live JWT.
+    version_before = await _credential_version(db_session)
+    assert version_before == decode_access_token(access)["credential_version"]
+
+    expired = await _refresh(client, first)
+
+    assert expired.status_code == 401
+    assert expired.json()["detail"] == REFRESH_INVALID_DETAIL
+    assert "set-cookie" not in {k.lower() for k in expired.headers}
+    assert await _active_count(db_session, user_id) == active_before
+    assert await _active_jtis(fake_redis, ADMIN_A_ID) == jtis_before
+    # S3: no revocation side effects — the credential version in the DB is
+    # untouched and the existing access JWT still authenticates.
+    assert await _credential_version(db_session) == version_before
+    still_works = await client.get(
+        "/api/v1/users/me", headers={"Authorization": f"Bearer {access}"}
+    )
+    assert still_works.status_code == 200
+
+    # The live successor still renews: its family was never revoked.
+    successor = await _refresh(client, second)
+    assert successor.status_code == 200
+
+
 async def test_revoked_without_rotation_is_not_treated_as_reuse(
     production_tx_client, db_session: AsyncSession, seed_data
 ):

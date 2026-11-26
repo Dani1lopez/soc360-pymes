@@ -303,13 +303,16 @@ async def _find_rotated_refresh_token(
 
     Se llama tras adquirir el advisory lock por usuario, por lo que observa
     la rotacion anterior ya confirmada. Solo matchea filas con marca explicita
-    de rotacion; logout y otras revocaciones no constituyen reuso.
+    de rotacion; logout y otras revocaciones no constituyen reuso. Un
+    predecesor ya expirado tampoco es reuso (S3): su expiracion se evalua con
+    la misma condicion que la busqueda activa, antes de revocar nada.
     """
     stmt = (
         select(RefreshToken)
         .where(RefreshToken.token_hash == token_hash)
         .where(RefreshToken.revoked_at.is_not(None))
         .where(RefreshToken.rotated_to_id.is_not(None))
+        .where(RefreshToken.expires_at > datetime.now(timezone.utc))
         .with_for_update()
     )
     return await db.scalar(stmt)

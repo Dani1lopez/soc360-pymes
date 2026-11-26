@@ -24,11 +24,13 @@ from app.core.outage import (
 )
 from app.core.security import (
     create_access_token,
+    get_active_jtis,
     hash_password,
     hash_password_async,
     verify_password_async,
     validate_password_length,
     revoke_access_token,
+    revoke_captured_user_access_tokens,
     track_jti,
     untrack_jti,
     revoke_all_user_access_tokens,
@@ -241,8 +243,16 @@ async def _create_refresh_token(
     user_id: UUID,
     db: AsyncSession,
     created_from_ip: str | None = None,
+    *,
+    rotated_from: RefreshToken | None = None,
 ) -> str:
-    """Genera un refresh token seguro, lo hashea y guarda en BD"""
+    """Genera un refresh token seguro, lo hashea y guarda en BD.
+
+    ``rotated_from`` linkea el token nuevo con el que reemplaza: el nuevo hereda
+    la familia de reuse detection y el anterior registra la rotacion de forma
+    explicita (``rotated_to_id``), para que la deteccion de reuso no tenga que
+    adivinar por que se revoco una fila.
+    """
     await _acquire_session_cap_lock(user_id, db)
     active_count = await db.scalar(
         select(func.count()).select_from(RefreshToken)
@@ -264,15 +274,109 @@ async def _create_refresh_token(
     
     raw_token = secrets.token_urlsafe(64)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    
-    db.add(RefreshToken(
+    record = RefreshToken(
+        id=uuid4(),
         user_id=user_id,
         token_hash=token_hash,
         expires_at=datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
         created_from_ip=created_from_ip,
-    ))
+        family_id=rotated_from.family_id if rotated_from is not None else uuid4(),
+    )
+
+    db.add(record)
+    if rotated_from is not None:
+        # Flush the successor before linking it: the FK is a plain column with
+        # no ORM relationship, so the unit of work would otherwise emit the
+        # UPDATE of ``rotated_from`` before the INSERT of ``record`` and
+        # violate ``fk_refresh_tokens_rotated_to_id``.
+        await db.flush()
+        rotated_from.rotated_to_id = record.id
     
     return raw_token
+
+
+async def _find_rotated_refresh_token(
+    token_hash: str,
+    db: AsyncSession,
+) -> RefreshToken | None:
+    """Busca una fila ya rotada para *token_hash* (posible reuso).
+
+    Se llama tras adquirir el advisory lock por usuario, por lo que observa
+    la rotacion anterior ya confirmada. Solo matchea filas con marca explicita
+    de rotacion; logout y otras revocaciones no constituyen reuso. Un
+    predecesor ya expirado tampoco es reuso (S3): su expiracion se evalua con
+    la misma condicion que la busqueda activa, antes de revocar nada.
+    """
+    stmt = (
+        select(RefreshToken)
+        .where(RefreshToken.token_hash == token_hash)
+        .where(RefreshToken.revoked_at.is_not(None))
+        .where(RefreshToken.rotated_to_id.is_not(None))
+        .where(RefreshToken.expires_at > datetime.now(timezone.utc))
+        .with_for_update()
+    )
+    return await db.scalar(stmt)
+
+
+async def _revoke_reused_token_family(
+    record: RefreshToken,
+    db: AsyncSession,
+    redis: Redis,
+) -> None:
+    """Revoca la familia del token reusado y los access tokens del usuario.
+
+    La respuesta de este camino es un 401, asi que la transaccion del request
+    se revertiria: el ``commit`` deja la revocacion persistida antes de
+    rechazar. La denylist de access tokens es best-effort: si Redis falla, el
+    refresh de la familia ya quedo revocado y el cliente igual recibe 401.
+
+    Los JTIs previos se capturan MIENTRAS el advisory lock por usuario sigue
+    retenido (antes del commit que lo libera): un login o rotacion concurrente
+    posterior al commit trackea su propio JTI con la version de credenciales
+    nueva, y NO debe ser denegado ni des-trackeado por esta limpieza. Por eso
+    nunca se borra el set entero ``active_jtis`` en el replay.
+    """
+    logger.warning(
+        "refresh_token_reuse_detected",
+        user_id=str(record.user_id),
+        family_id=str(record.family_id),
+    )
+    user_id = str(record.user_id)
+    try:
+        prior_jtis = await get_active_jtis(user_id, redis)
+    except (RedisError, RedisOutageError) as exc:
+        prior_jtis = []
+        logger.warning(
+            "refresh_reuse_jti_snapshot_failed",
+            user_id=user_id,
+            reason=exc.__class__.__name__,
+        )
+    await db.execute(
+        update(User)
+        .where(User.id == record.user_id)
+        .values(credential_version=User.credential_version + 1)
+    )
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.family_id == record.family_id)
+        .where(RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(timezone.utc))
+    )
+    await db.commit()
+
+    try:
+        await revoke_captured_user_access_tokens(
+            user_id=user_id,
+            jtis=prior_jtis,
+            redis=redis,
+            ttl_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        )
+    except (RedisError, RedisOutageError) as exc:
+        logger.warning(
+            "refresh_reuse_access_token_revoke_failed",
+            user_id=user_id,
+            reason=exc.__class__.__name__,
+        )
 
 
 async def _revoke_all_user_tokens(
@@ -345,6 +449,8 @@ async def login(
 
     await _check_tenant_active(user, tenant)
 
+    await _acquire_session_cap_lock(user.id, db)
+    await db.refresh(user)
     user.last_login_at = datetime.now(timezone.utc)
 
     access_token, jti = create_access_token(
@@ -352,6 +458,7 @@ async def login(
         tenant_id=str(user.tenant_id) if user.tenant_id else None,
         role=user.role,
         is_superadmin=user.is_superadmin,
+        credential_version=user.credential_version,
     )
     await track_jti(str(user.id), jti, redis)
     refresh_token = await _create_refresh_token(user.id, db, created_from_ip=request_ip)
@@ -415,15 +522,27 @@ async def refresh_tokens(
     await set_tenant_context(db, tenant_id=None, is_superadmin=True)
     token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
     async def _rotate_refresh_token() -> tuple[User, str]:
+        user_id = await db.scalar(
+            select(RefreshToken.user_id).where(RefreshToken.token_hash == token_hash)
+        )
+        if user_id is not None:
+            await _acquire_session_cap_lock(user_id, db)
         stmt = (
             select(RefreshToken)
             .where(RefreshToken.token_hash == token_hash)
             .where(RefreshToken.revoked_at.is_(None))
             .where(RefreshToken.expires_at > datetime.now(timezone.utc))
-            .with_for_update(skip_locked=True)
+            .with_for_update()
         )
         record = await db.scalar(stmt)
         if not record:
+            # Defensive branch (S2): si el token ya fue rotado, se esta
+            # re-presentando. Se revoca la familia y los access tokens activos
+            # del usuario antes de rechazar. Un token desconocido o expirado no
+            # matchea esta busqueda y no revoca nada (S3).
+            reused = await _find_rotated_refresh_token(token_hash, db)
+            if reused is not None:
+                await _revoke_reused_token_family(reused, db, redis)
             raise AuthError(
                 status_code=401,
                 detail="Refresh token invalido o expirado",
@@ -439,7 +558,7 @@ async def refresh_tokens(
 
         record.revoked_at = datetime.now(timezone.utc)
         new_refresh_token = await _create_refresh_token(
-            user.id, db, created_from_ip=request_ip
+            user.id, db, created_from_ip=request_ip, rotated_from=record
         )
         return user, new_refresh_token
 
@@ -454,6 +573,7 @@ async def refresh_tokens(
         tenant_id=str(user.tenant_id) if user.tenant_id else None,
         role=user.role,
         is_superadmin=user.is_superadmin,
+        credential_version=user.credential_version,
     )
     
     # Revocar el access token viejo si se proporcionó

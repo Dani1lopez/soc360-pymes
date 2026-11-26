@@ -196,6 +196,12 @@ class TestAuthService:
         mock_record.revoked_at = None
 
         async def fake_scalar(stmt):
+            # The rotation path resolves the owning user first (to take the
+            # per-user advisory lock) and only then loads the rotating row.
+            # Answering both queries with the row would hand a MagicMock to the
+            # lock and never exercise the user-scoped serialization.
+            if list(stmt.selected_columns.keys()) == ["user_id"]:
+                return mock_user.id
             return mock_record
 
         mock_db.scalar = fake_scalar
@@ -230,6 +236,16 @@ class TestAuthService:
         call_kwargs = mock_set_ctx.await_args.kwargs
         assert call_kwargs.get("tenant_id") is None
         assert call_kwargs.get("is_superadmin") is True
+
+        # The advisory lock must be taken for the owner resolved from the token
+        # row, which proves the user_id SELECT ran before the rotation.
+        advisory_calls = [
+            db_call
+            for db_call in mock_db.execute.await_args_list
+            if db_call.args and db_call.args[0] is service._ADVISORY_LOCK_SQL
+        ]
+        assert len(advisory_calls) == 1
+        assert advisory_calls[0].args[1] == {"user_id": str(mock_user.id)}
 
 
 class TestAuthRouterHelpers:
@@ -931,6 +947,10 @@ class TestGetActiveUserByIdTenantJoin:
         mock_record.revoked_at = None
 
         async def fake_scalar(stmt):
+            # See the RLS-bootstrap test above: the user_id SELECT feeds the
+            # per-user advisory lock, so it must not answer with the row.
+            if list(stmt.selected_columns.keys()) == ["user_id"]:
+                return mock_user.id
             return mock_record
 
         mock_db.scalar = fake_scalar
@@ -952,7 +972,7 @@ class TestGetActiveUserByIdTenantJoin:
             patch(
                 "app.modules.auth.service._create_refresh_token",
                 new=AsyncMock(return_value="new_refresh"),
-            ),
+            ) as mock_create_refresh,
             patch("app.modules.auth.service.set_tenant_context", new=AsyncMock()),
         ):
             await service.refresh_tokens(
@@ -963,6 +983,22 @@ class TestGetActiveUserByIdTenantJoin:
 
         mock_get.assert_awaited_once_with(mock_user.id, mock_db)
         mock_check.assert_awaited_once_with(mock_user, mock_tenant)
+
+        # Rotation lineage: the presented row is revoked and its successor is
+        # created with rotated_from pointing at it (same family), not as an
+        # unrelated fresh token.
+        assert mock_record.revoked_at is not None
+        mock_create_refresh.assert_awaited_once()
+        assert mock_create_refresh.await_args.kwargs["rotated_from"] is mock_record
+
+        # The per-user lock must be bound to the token owner's id, which only
+        # happens when the user_id SELECT is answered with a UUID.
+        lock_owner_ids = [
+            db_call.args[1]["user_id"]
+            for db_call in mock_db.execute.await_args_list
+            if db_call.args and db_call.args[0] is service._ADVISORY_LOCK_SQL
+        ]
+        assert lock_owner_ids == [str(mock_user.id)]
 
 
 class TestSingleLoginLockoutMechanism:

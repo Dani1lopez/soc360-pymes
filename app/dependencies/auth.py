@@ -98,6 +98,17 @@ async def get_current_user(
         )
 
     user = row.User
+    credential_version = payload.get("credential_version", 0)
+    if (
+        type(credential_version) is not int
+        or credential_version < 0
+        or credential_version != user.credential_version
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token revocado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     if not user.is_superadmin:
         if not row.Tenant or not row.Tenant.is_active:

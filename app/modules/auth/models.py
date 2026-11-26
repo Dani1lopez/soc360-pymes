@@ -39,6 +39,25 @@ class RefreshToken(Base):
         nullable=False,
         unique=True,
     )
+
+    #Reuse detection: a login starts a family, every rotation stays in it.
+    #server_default keeps direct inserts (scripts, fixtures) working and gives
+    #each row its own family when no rotation context is available.
+    family_id: Mapped[PyUUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+        server_default=text("gen_random_uuid()"),
+    )
+
+    #Rotation state: points at the token that replaced this one. NULL means the
+    #row was never rotated, so it must not be treated as a replayed token.
+    rotated_to_id: Mapped[PyUUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("refresh_tokens.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
     
     expires_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),

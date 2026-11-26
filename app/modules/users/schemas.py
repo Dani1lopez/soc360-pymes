@@ -5,6 +5,8 @@ from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.core.security import validate_password_policy
 from app.core.types import EmailStr
 
 
@@ -27,13 +29,8 @@ class UserCreate(BaseModel):
 
     @field_validator("password")
     @classmethod
-    def validate_password_bytes(cls, v: str) -> str:
-        """Reject passwords over bcrypt's 72-byte input limit."""
-        if len(v.encode("utf-8")) > 72:
-            raise ValueError(
-                "Password exceeds 72 bytes (UTF-8). Choose a shorter password."
-            )
-        return v
+    def validate_password(cls, v: str) -> str:
+        return validate_password_policy(v)
     
     @model_validator(mode="after")
     def check_public_user_consistency(self) -> UserCreate:

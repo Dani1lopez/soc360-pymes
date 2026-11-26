@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import asyncio
+import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -47,6 +48,23 @@ def validate_password_length(password: str) -> None:
         )
 
 
+def validate_password_policy(password: str) -> str:
+    """Shared Pydantic-level password policy for user creation and password change."""
+    if len(password.encode("utf-8")) > 72:
+        raise ValueError(
+            "Password exceeds 72 bytes (UTF-8). Choose a shorter password."
+        )
+    if len(password) < 12:
+        raise ValueError("La contraseña debe de tener al menos 12 caracteres")
+    if not re.search(r"[A-Z]", password):
+        raise ValueError("Debe de contener al menos una mayuscula")
+    if not re.search(r"[a-z]", password):
+        raise ValueError("Debe de contenener al menos una minuscula")
+    if not re.search(r"\d", password):
+        raise ValueError("Debe de contener algun numero")
+    return password
+
+
 def verify_password(plain: str, hashed: str) -> bool:
     """Verify password against bcrypt hash."""
     return bcrypt.checkpw(
@@ -86,6 +104,9 @@ def has_minimum_role(user_role: str, required_role: str) -> bool:
     return ROLE_HIERARCHY.get(user_role, -1) >= ROLE_HIERARCHY.get(required_role, -1)
 
 
+ACCESS_TOKEN_TYPE = "access"
+
+
 def create_access_token(
     *,
     user_id: str,
@@ -114,6 +135,8 @@ def create_access_token(
     payload: dict[str, Any] = {
         "sub": user_id,
         "jti": jti,
+        "typ": ACCESS_TOKEN_TYPE,
+        "aud": settings.JWT_AUDIENCE,
         "tenant_id": tenant_id,
         "role": role,
         "is_superadmin": is_superadmin,
@@ -132,7 +155,11 @@ def decode_access_token(token: str) -> dict[str, Any]:
         token,
         settings.SECRET_KEY,
         algorithms=[settings.JWT_ALGORITHM],
+        audience=settings.JWT_AUDIENCE,
     )
+
+    if payload.get("typ") != ACCESS_TOKEN_TYPE:
+        raise InvalidTokenError("Tipo de token invalido")
     
     required_fields = {"sub", "jti", "role", "is_superadmin", "tenant_id"}
     missing = required_fields - payload.keys()

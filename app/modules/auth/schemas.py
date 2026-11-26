@@ -4,6 +4,8 @@ import re
 
 from pydantic import BaseModel, field_validator
 
+from app.core.security import validate_password_policy
+
 
 class LoginRequest(BaseModel):
     email: str
@@ -30,23 +32,5 @@ class ChangePasswordRequest(BaseModel):
 
     @field_validator("new_password")
     @classmethod
-    def validate_new_password_bytes(cls, v: str) -> str:
-        """Reject passwords over bcrypt's 72-byte input limit."""
-        if len(v.encode("utf-8")) > 72:
-            raise ValueError(
-                "Password exceeds 72 bytes (UTF-8). Choose a shorter password."
-            )
-        return v
-
-    @field_validator("new_password")
-    @classmethod
-    def validate_strength(cls, v: str) -> str:
-        if len(v) < 12:
-            raise ValueError("La contraseña debe de tener al menos 12 caracteres")
-        if not re.search(r"[A-Z]", v):
-            raise ValueError("Debe de contener al menos una mayuscula")
-        if not re.search(r"[a-z]", v):
-            raise ValueError("Debe de contenener al menos una minuscula")
-        if not re.search(r"\d", v):
-            raise ValueError("Debe de contener algun numero")
-        return v
+    def validate_new_password(cls, v: str) -> str:
+        return validate_password_policy(v)

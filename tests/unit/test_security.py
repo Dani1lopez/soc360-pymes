@@ -28,11 +28,11 @@ from app.modules.users.schemas import RoleEnum, UserCreate
 
 
 class TestUserCreatePasswordSchema:
-    """Pydantic-level validation of password length (issue #130)."""
+    """Pydantic-level validation of password length and policy (issue #130, L4)."""
 
     def test_71_bytes_ok(self):
         # 71 ASCII chars = 71 bytes UTF-8
-        password = "a" * 71
+        password = "Aa1" + ("b" * 68)
         user = UserCreate(
             email="a@b.com",
             password=password,
@@ -45,7 +45,7 @@ class TestUserCreatePasswordSchema:
 
     def test_72_bytes_ok(self):
         # 72 ASCII chars = 72 bytes UTF-8 (the boundary)
-        password = "a" * 72
+        password = "Aa1" + ("b" * 69)
         user = UserCreate(
             email="a@b.com",
             password=password,
@@ -61,7 +61,7 @@ class TestUserCreatePasswordSchema:
         with pytest.raises(ValidationError) as exc:
             UserCreate(
                 email="a@b.com",
-                password="a" * 73,
+                password="Aa1" + ("b" * 70),
                 full_name="Test User",
                 role=RoleEnum.admin,
                 tenant_id=uuid4(),
@@ -70,8 +70,8 @@ class TestUserCreatePasswordSchema:
         assert "password" in str(exc.value).lower() or "72" in str(exc.value)
 
     def test_multibyte_at_boundary_ok(self):
-        # "ñ" is 2 bytes in UTF-8; 36 "ñ"s = 72 bytes (boundary)
-        password = "ñ" * 36
+        # "Aa1b" (4 bytes) + 34 "ñ"s (68 bytes) = 72 bytes (boundary)
+        password = "Aa1b" + ("ñ" * 34)
         user = UserCreate(
             email="a@b.com",
             password=password,
@@ -83,11 +83,41 @@ class TestUserCreatePasswordSchema:
         assert user.password == password
 
     def test_multibyte_over_boundary_raises(self):
-        # 37 "ñ"s = 74 bytes (over the limit)
+        # "Aa1" (3 bytes) + 35 "ñ"s (70 bytes) = 73 bytes (over the limit)
         with pytest.raises(ValidationError):
             UserCreate(
                 email="a@b.com",
-                password="ñ" * 37,
+                password="Aa1" + ("ñ" * 35),
+                full_name="Test User",
+                role=RoleEnum.admin,
+                tenant_id=uuid4(),
+            )
+
+    def test_rejects_missing_uppercase(self):
+        with pytest.raises(ValidationError, match="mayuscula"):
+            UserCreate(
+                email="a@b.com",
+                password="lowercase1234",
+                full_name="Test User",
+                role=RoleEnum.admin,
+                tenant_id=uuid4(),
+            )
+
+    def test_rejects_missing_lowercase(self):
+        with pytest.raises(ValidationError, match="minuscula"):
+            UserCreate(
+                email="a@b.com",
+                password="UPPERCASE1234",
+                full_name="Test User",
+                role=RoleEnum.admin,
+                tenant_id=uuid4(),
+            )
+
+    def test_rejects_missing_digit(self):
+        with pytest.raises(ValidationError, match="numero"):
+            UserCreate(
+                email="a@b.com",
+                password="NoNumbersHere!",
                 full_name="Test User",
                 role=RoleEnum.admin,
                 tenant_id=uuid4(),

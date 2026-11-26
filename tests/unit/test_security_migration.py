@@ -7,11 +7,12 @@ externally observable contract, not the internal library used.
 """
 from __future__ import annotations
 
-import time
 import uuid
 from datetime import timedelta
 
+import jwt
 import pytest
+from jwt import InvalidTokenError
 
 from app.core.security import (
     create_access_token,
@@ -50,6 +51,8 @@ class TestJWTApproval:
 
         assert payload["sub"] == user_id
         assert payload["jti"] == jti
+        assert payload["typ"] == "access"
+        assert payload["aud"] == settings.JWT_AUDIENCE
         assert payload["tenant_id"] == tenant_id
         assert payload["role"] == "admin"
         assert payload["is_superadmin"] is False
@@ -182,6 +185,62 @@ class TestJWTApproval:
         )
         payload = decode_access_token(token)
         assert payload["sub"] == user_id
+
+    def test_rejects_missing_typ_claim(self):
+        token, _ = create_access_token(
+            user_id=str(uuid.uuid4()),
+            tenant_id=str(uuid.uuid4()),
+            role="viewer",
+            is_superadmin=False,
+        )
+        payload = decode_access_token(token)
+        payload.pop("typ")
+        forged = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+        with pytest.raises(InvalidTokenError):
+            decode_access_token(forged)
+
+    def test_rejects_wrong_typ_claim(self):
+        token, _ = create_access_token(
+            user_id=str(uuid.uuid4()),
+            tenant_id=str(uuid.uuid4()),
+            role="viewer",
+            is_superadmin=False,
+        )
+        payload = decode_access_token(token)
+        payload["typ"] = "refresh"
+        forged = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+        with pytest.raises(InvalidTokenError):
+            decode_access_token(forged)
+
+    def test_rejects_missing_aud_claim(self):
+        token, _ = create_access_token(
+            user_id=str(uuid.uuid4()),
+            tenant_id=str(uuid.uuid4()),
+            role="viewer",
+            is_superadmin=False,
+        )
+        payload = decode_access_token(token)
+        payload.pop("aud")
+        forged = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+        with pytest.raises(InvalidTokenError):
+            decode_access_token(forged)
+
+    def test_rejects_wrong_aud_claim(self):
+        token, _ = create_access_token(
+            user_id=str(uuid.uuid4()),
+            tenant_id=str(uuid.uuid4()),
+            role="viewer",
+            is_superadmin=False,
+        )
+        payload = decode_access_token(token)
+        payload["aud"] = "other-service"
+        forged = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+        with pytest.raises(InvalidTokenError):
+            decode_access_token(forged)
 
 
 # ---------------------------------------------------------------------------

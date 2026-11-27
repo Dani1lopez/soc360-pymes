@@ -400,7 +400,7 @@ The following endpoints are currently available:
 | `POST` | `/api/v1/vulnerabilities/{id}/enrichment` | Queue missing, failed or stale functions (admin/analyst/superadmin) |
 | `POST` | `/api/v1/scans/{id}/enrichment` | Queue findings with incomplete successful function coverage (admin/analyst/superadmin) |
 | `GET` | `/health` | Liveness probe (status + version) |
-| `GET` | `/health/db/indexes` | Invalid DB index probe (k8s target) |
+| `GET` | `/health/db/indexes` | Invalid DB index probe (k8s target; requires the same `x-metrics-token` header as `/metrics`, otherwise returns 401) |
 | `GET` | `/metrics` | Prometheus scrape endpoint (token-authenticated, not in schema) |
 
 Enrichment POSTs return 202 with queued counts, or 503 if disabled or publishing

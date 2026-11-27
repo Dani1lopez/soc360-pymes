@@ -166,6 +166,10 @@ class TestVerifyMetricsToken:
         assert metrics_auth.verify_metrics_token("new-abc") is True
         assert metrics_auth.verify_metrics_token("old-xyz") is True
 
+    def test_previous_token_without_current_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _install_tokens(monkeypatch, previous="old-xyz")
+        assert metrics_auth.verify_metrics_token("old-xyz") is False
+
     def test_unrelated_token_rejected_when_both_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _install_tokens(monkeypatch, current="new-abc", previous="old-xyz")
         assert metrics_auth.verify_metrics_token("never-set") is False

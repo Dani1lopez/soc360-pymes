@@ -1,7 +1,7 @@
 """Slice 3 (F2) — Vulnerabilities API tests.
 
 Proportionate scope per the active freeze on overengineering: happy path per
-endpoint, RBAC 403 for ``ingestor``, and cross-tenant 404. Not the exhaustive
+endpoint, and cross-tenant 404. Not the exhaustive
 matrix ``tests/api/test_scans.py`` carries — see that file's docstring for
 what deliberately is NOT duplicated here.
 """
@@ -313,54 +313,6 @@ class TestHappyPath:
         )
         assert resp.status_code == 422, resp.text
         assert resp.json()["detail"] == "tenant_id mismatch"
-
-
-# ---------------------------------------------------------------------------
-# RBAC — ingestor is denied everywhere
-# ---------------------------------------------------------------------------
-class TestRbac:
-    @pytest.mark.asyncio
-    async def test_ingestor_is_denied_on_every_vulnerabilities_operation(
-        self,
-        tenant_client: AsyncClient,
-        ingestor_a_headers: dict,
-        admin_a_headers: dict,
-        db_session: AsyncSession,
-    ) -> None:
-        asset_id = await _seed_asset(db_session, "192.0.2.9")
-        scan = await _seed_scan(db_session, asset_id=asset_id, name="rbac-ingestor")
-        vuln = await _seed_vulnerability(db_session, scan_id=scan.id, title="rbac")
-
-        post = await tenant_client.post(
-            "/api/v1/vulnerabilities/",
-            headers=ingestor_a_headers,
-            json=_vuln_payload(TENANT_A_ID, scan.id),
-        )
-        assert post.status_code == 403, f"POST expected 403, got {post.status_code}"
-
-        get_list = await tenant_client.get(
-            "/api/v1/vulnerabilities/", headers=ingestor_a_headers
-        )
-        assert get_list.status_code == 403, f"GET list expected 403, got {get_list.status_code}"
-
-        get_by_id = await tenant_client.get(
-            f"/api/v1/vulnerabilities/{vuln.id}", headers=ingestor_a_headers
-        )
-        assert get_by_id.status_code == 403, (
-            f"GET by-id expected 403, got {get_by_id.status_code}"
-        )
-
-        patch = await tenant_client.patch(
-            f"/api/v1/vulnerabilities/{vuln.id}",
-            headers=ingestor_a_headers,
-            json={"status": "fixed"},
-        )
-        assert patch.status_code == 403, f"PATCH expected 403, got {patch.status_code}"
-
-        delete = await tenant_client.delete(
-            f"/api/v1/vulnerabilities/{vuln.id}", headers=ingestor_a_headers
-        )
-        assert delete.status_code == 403, f"DELETE expected 403, got {delete.status_code}"
 
 
 # ---------------------------------------------------------------------------

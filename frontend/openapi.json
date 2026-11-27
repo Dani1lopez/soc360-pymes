@@ -978,7 +978,6 @@
         "enum": [
           "viewer",
           "analyst",
-          "ingestor",
           "admin",
           "superadmin"
         ],

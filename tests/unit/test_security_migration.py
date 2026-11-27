@@ -140,7 +140,7 @@ class TestJWTApproval:
 
     def test_token_with_different_roles(self):
         """All valid roles produce decodable tokens."""
-        for role in ("viewer", "analyst", "ingestor", "admin", "superadmin"):
+        for role in ("viewer", "analyst", "admin", "superadmin"):
             user_id = str(uuid.uuid4())
             tenant_id = str(uuid.uuid4()) if role != "superadmin" else None
             is_sa = role == "superadmin"

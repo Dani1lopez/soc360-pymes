@@ -38,20 +38,18 @@ async def test_cancel_missing_cross_tenant(tenant_client, admin_a_headers, db_se
         assert response.json()["detail"] == "scan not found"
 
 
-@pytest.mark.parametrize("role", ["analyst", "viewer", "ingestor"])
+@pytest.mark.parametrize("role", ["analyst", "viewer"])
 async def test_cancel_rbac(
     role,
     tenant_client,
     db_session,
     analyst_a_headers,
     viewer_a_headers,
-    ingestor_a_headers,
 ):
     scan = await seed(db_session)
     headers = {
         "analyst": analyst_a_headers,
         "viewer": viewer_a_headers,
-        "ingestor": ingestor_a_headers,
     }[role]
     response = await tenant_client.post(
         f"/api/v1/scans/{scan.id}/cancel", headers=headers

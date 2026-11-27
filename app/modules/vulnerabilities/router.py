@@ -9,9 +9,6 @@ RBAC matrix — exact allowlists only; ``superadmin`` is never implicit:
 * PATCH  — ``admin`` OR ``superadmin``
 * DELETE — ``admin`` OR ``superadmin``
 
-``ingestor`` is in NO allowlist: every vulnerabilities operation answers 403
-from the dependency itself, before any existence or tenant check.
-
 Tenant rules:
 
 * POST requires ``tenant_id`` in the body (required field on

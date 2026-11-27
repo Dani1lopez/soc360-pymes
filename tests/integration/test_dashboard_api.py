@@ -82,12 +82,9 @@ async def test_tenant_roles(
         _summary(response, TENANT_A_ID)
 
 
-@pytest.mark.parametrize("authenticated", [False, True])
-async def test_denied_roles(client, ingestor_a_headers, authenticated):
-    response = await client.get(
-        URL, headers=ingestor_a_headers if authenticated else {}
-    )
-    assert response.status_code == (403 if authenticated else 401)
+async def test_unauthenticated_returns_401(client):
+    response = await client.get(URL)
+    assert response.status_code == 401
 
 
 @pytest.mark.parametrize(

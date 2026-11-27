@@ -84,7 +84,6 @@ async def test_disabled_precedes_rbac(tenant_client, viewer_a_headers, monkeypat
         ("superadmin", 202),
         ("analyst", 403),
         ("viewer", 403),
-        ("ingestor", 403),
     ],
 )
 async def test_rbac(
@@ -97,14 +96,12 @@ async def test_rbac(
     superadmin_headers,
     analyst_a_headers,
     viewer_a_headers,
-    ingestor_a_headers,
 ):
     headers = {
         "admin": admin_a_headers,
         "superadmin": superadmin_headers,
         "analyst": analyst_a_headers,
         "viewer": viewer_a_headers,
-        "ingestor": ingestor_a_headers,
     }[role]
     scan = await seed(db_session)
     response = await tenant_client.post(f"/api/v1/scans/{scan.id}/run", headers=headers)

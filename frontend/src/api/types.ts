@@ -1111,7 +1111,7 @@ export interface components {
          * RoleEnum
          * @enum {string}
          */
-        RoleEnum: "viewer" | "analyst" | "ingestor" | "admin" | "superadmin";
+        RoleEnum: "viewer" | "analyst" | "admin" | "superadmin";
         /** ScanEnrichmentQueued */
         ScanEnrichmentQueued: {
             /** Queued */

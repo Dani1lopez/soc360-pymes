@@ -3,13 +3,7 @@ import { assignableUserRoles } from "./user-roles";
 
 describe("assignableUserRoles", () => {
   it("lets a superadmin create every role", () => {
-    expect(assignableUserRoles("superadmin")).toEqual([
-      "admin",
-      "analyst",
-      "viewer",
-      "ingestor",
-      "superadmin",
-    ]);
+    expect(assignableUserRoles("superadmin")).toEqual(["admin", "analyst", "viewer", "superadmin"]);
   });
 
   it("stops an admin at tenant roles", () => {

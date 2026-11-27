@@ -27,7 +27,7 @@ class User(Base):
             name="chk_user_has_tenant",
         ),
         CheckConstraint(
-            "role IN ('viewer', 'analyst', 'ingestor', 'admin', 'superadmin')",
+            "role IN ('viewer', 'analyst', 'admin', 'superadmin')",
             name="chk_valid_role",
         ),
         Index("ix_users_tenant_active", "tenant_id", "is_active"),

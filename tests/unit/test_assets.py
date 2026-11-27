@@ -1472,6 +1472,17 @@ class TestAssetSchemas:
 
 # ---------------------------------------------------------------------------
 # T10.3 — Service unit tests (AsyncMock for AsyncSession and EventBus)
+def _mock_quota_execute(max_assets: int = 10, current: int = 0) -> AsyncMock:
+    """Stub ``db.execute`` for the tenant lock and asset count queries."""
+    from types import SimpleNamespace
+
+    tenant_res = MagicMock()
+    tenant_res.scalar_one_or_none.return_value = SimpleNamespace(max_assets=max_assets)
+    count_res = MagicMock()
+    count_res.scalar_one.return_value = current
+    return AsyncMock(side_effect=[tenant_res, count_res])
+
+
 # ---------------------------------------------------------------------------
 class TestAssetService:
     """RED tests for the asset service module-level functions."""
@@ -1481,6 +1492,7 @@ class TestAssetService:
         """create_asset MUST flush + commit, then publish(stream='asset.events')."""
         db = MagicMock()
         # AsyncMock for the async methods we'll exercise
+        db.execute = _mock_quota_execute()
         db.add = MagicMock()
         db.commit = AsyncMock()
         db.refresh = AsyncMock()
@@ -1634,6 +1646,7 @@ class TestAssetService:
         from app.modules.assets.schemas import IpAssetCreate
 
         db = MagicMock()
+        db.execute = _mock_quota_execute()
         db.add = MagicMock()
         # First flush raises IntegrityError, second flush (after rollback) succeeds.
         err = IntegrityError("INSERT", {}, Exception("uq_assets_tenant_type_value"))
@@ -1656,6 +1669,66 @@ class TestAssetService:
                 db=db,
                 event_bus=event_bus,
             )
+        event_bus.publish.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_asset_raises_limit_exceeded_at_max_assets(self) -> None:
+        """create_asset MUST raise AssetLimitExceededError when current >= max_assets."""
+        from app.modules.assets import service
+        from app.modules.assets.schemas import IpAssetCreate
+
+        db = MagicMock()
+        db.execute = _mock_quota_execute(max_assets=2, current=2)
+        db.add = MagicMock()
+        db.commit = AsyncMock()
+        event_bus = MagicMock()
+        event_bus.publish = AsyncMock()
+
+        data = IpAssetCreate(
+            tenant_id=uuid.uuid4(),
+            value="192.0.2.10",
+            type="ip",
+        )
+        with pytest.raises(service.AssetLimitExceededError):
+            await service.create_asset(
+                data=data,
+                tenant_id=data.tenant_id,
+                db=db,
+                event_bus=event_bus,
+            )
+        db.add.assert_not_called()
+        db.commit.assert_not_awaited()
+        event_bus.publish.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_asset_raises_tenant_not_found_when_missing(self) -> None:
+        """create_asset MUST raise AssetTenantNotFoundError when tenant is missing."""
+        from app.modules.assets import service
+        from app.modules.assets.schemas import IpAssetCreate
+
+        tenant_res = MagicMock()
+        tenant_res.scalar_one_or_none.return_value = None
+        db = MagicMock()
+        db.execute = AsyncMock(return_value=tenant_res)
+        db.add = MagicMock()
+        db.commit = AsyncMock()
+        event_bus = MagicMock()
+        event_bus.publish = AsyncMock()
+
+        data = IpAssetCreate(
+            tenant_id=uuid.uuid4(),
+            value="192.0.2.10",
+            type="ip",
+        )
+        with pytest.raises(service.AssetTenantNotFoundError):
+            await service.create_asset(
+                data=data,
+                tenant_id=data.tenant_id,
+                db=db,
+                event_bus=event_bus,
+            )
+        db.add.assert_not_called()
+        db.commit.assert_not_awaited()
         event_bus.publish.assert_not_awaited()
 
 
@@ -1894,6 +1967,7 @@ class TestAssetServiceFullContract:
         from app.modules.assets.schemas import IpAssetCreate
 
         db = MagicMock()
+        db.execute = _mock_quota_execute()
         db.add = MagicMock()
         db.commit = AsyncMock()
         db.refresh = AsyncMock()

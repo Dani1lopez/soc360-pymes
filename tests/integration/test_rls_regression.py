@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from app.core.database import set_tenant_context
+from app.core.database import engine, get_db, set_tenant_context
 from tests.conftest import TENANT_A_ID
 
 pytestmark = pytest.mark.integration
@@ -65,3 +65,28 @@ async def test_superadmin_context_does_not_leak_to_next_tenant_request(
     )
 
     assert result.scalar_one() == "false"
+
+
+async def test_rls_context_survives_in_service_commit_under_get_db() -> None:
+    """M2: A commit inside a request must preserve RLS context on the next query."""
+    tenant_id = UUID(TENANT_A_ID)
+    gen = get_db()
+    db = await gen.__anext__()
+    try:
+        await set_tenant_context(db, tenant_id=tenant_id, is_superadmin=False)
+        await db.commit()
+
+        # Subsequent query on the same session starts a new transaction and
+        # must still carry the caller's SET LOCAL tenant context.
+        tenant_setting = (
+            await db.execute(text("SELECT current_setting('app.current_tenant')"))
+        ).scalar_one()
+        superadmin_setting = (
+            await db.execute(text("SELECT current_setting('app.is_superadmin')"))
+        ).scalar_one()
+
+        assert tenant_setting == str(tenant_id)
+        assert superadmin_setting == "false"
+    finally:
+        await gen.aclose()
+        await engine.dispose()

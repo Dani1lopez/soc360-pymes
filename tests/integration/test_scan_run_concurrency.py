@@ -143,11 +143,14 @@ async def test_dispatch_real_commit_rls(isolated_db_session, committed_scans):
         # The service restores the transaction-local context after its commit.
         assert scan is not None and scan.dispatched_at is not None
         await db.commit()
-        # A bare commit drops the context: RLS now hides the row.
+        # M2: after_begin re-applies SET LOCAL on the new transaction so the
+        # caller's tenant row remains visible and RLS stays scoped to tenant_id.
         assert (
             await db.execute(select(Scan.id).where(Scan.id == scan_ids[0]))
-        ).scalar_one_or_none() is None
-        await set_tenant_context(db, tenant_id, False)
+        ).scalar_one_or_none() == scan_ids[0]
+        assert (
+            await db.execute(text("SELECT current_setting('app.current_tenant')"))
+        ).scalar_one() == str(tenant_id)
         assert (
             await db.execute(select(Scan.dispatched_at).where(Scan.id == scan_ids[0]))
         ).scalar_one() is not None

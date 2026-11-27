@@ -98,12 +98,7 @@ async def _consumer_loop(
                     messages = await consumer.read_new(block=_XREADGROUP_BLOCK_MS)
 
                 for msg in messages:
-                    raw_msg_id = msg["message_id"]
-                    msg_id = (
-                        raw_msg_id.decode()
-                        if isinstance(raw_msg_id, bytes)
-                        else raw_msg_id
-                    )
+                    msg_id = msg["message_id"]
                     acknowledgement_eligible = await EventBus._dispatch_event(
                         "auth.login",
                         msg.get("data", {}),

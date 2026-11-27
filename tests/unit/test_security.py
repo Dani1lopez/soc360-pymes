@@ -229,8 +229,6 @@ class TestRoleHelpers:
             ("admin", "viewer", True),
             ("viewer", "admin", False),
             ("superadmin", "admin", True),
-            ("analyst", "ingestor", True),
-            ("ingestor", "analyst", True),
             ("analyst", "admin", False),
             ("unknown", "viewer", False),
             ("viewer", "unknown", True),
@@ -249,13 +247,11 @@ class TestRoleHelpers:
         [
             ("admin", "viewer", True),
             ("admin", "analyst", True),
-            ("admin", "ingestor", True),
             ("admin", "admin", False),
             ("viewer", "admin", False),
             ("superadmin", "admin", True),
             ("superadmin", "superadmin", False),
             ("analyst", "viewer", True),
-            ("analyst", "ingestor", False),
             ("unknown", "viewer", False),
         ],
     )

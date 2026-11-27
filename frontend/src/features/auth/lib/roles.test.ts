@@ -6,7 +6,6 @@ describe("hasAnyRole", () => {
   it.each<[Role, boolean, boolean]>([
     ["viewer", true, false],
     ["analyst", true, false],
-    ["ingestor", false, false],
     ["admin", true, true],
     ["superadmin", true, true],
   ])("mirrors the backend allowlists for %s", (role, canRead, canAdmin) => {

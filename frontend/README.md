@@ -151,8 +151,7 @@ no hierarchy, and no `is_superadmin` shortcut.
 | `_authenticated/_reader` | `READ_ROLES`: viewer, analyst, admin, superadmin | `/` (panel), `/assets`, `/scans`, `/scans/$id`, `/vulnerabilities`, `/vulnerabilities/$id`, `/reports` |
 | `_authenticated/_admin`  | `ADMIN_ROLES`: admin, superadmin                 | `/users`, `/settings`                                                                                  |
 
-A role outside a group's allowlist lands on `/forbidden`. The `ingestor` role is
-for machines and reaches no page. Every page is real: the panel aggregates
+A role outside a group's allowlist lands on `/forbidden`. Every page is real: the panel aggregates
 `/dashboard/summary`, the reader pages manage assets, scans, findings (with their
 enrichment panel) and report metadata, and the admin group manages users, the
 tenant configuration and the password change. Each group has its own

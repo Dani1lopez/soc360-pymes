@@ -120,16 +120,6 @@ def _rbac_cases() -> list[tuple[str, str, int, dict[str, Any]]]:
                 "body": {"tenant_id": TENANT_A_ID, "type": "ip", "value": "192.0.2.13"},
             },
         ),
-        (
-            "POST_ingestor_a",
-            "ingestor_a",
-            403,
-            {
-                "verb": "POST",
-                "url": "/api/v1/assets/",
-                "body": {"tenant_id": TENANT_A_ID, "type": "ip", "value": "192.0.2.14"},
-            },
-        ),
         # ----- GET /assets (list) -----
         ("GET_list_admin_a", "admin_a", 200, {"verb": "GET", "url": "/api/v1/assets/"}),
         (
@@ -150,16 +140,10 @@ def _rbac_cases() -> list[tuple[str, str, int, dict[str, Any]]]:
             200,
             {"verb": "GET", "url": "/api/v1/assets/"},
         ),
-        (
-            "GET_list_ingestor_a",
-            "ingestor_a",
-            403,
-            {"verb": "GET", "url": "/api/v1/assets/"},
-        ),
         # ----- GET /assets/{id} (own tenant) -----
         # Each "own" case uses an id that the role can see: admin_a / analyst_a /
         # viewer_a / superadmin see their own tenant (admin_a) AND
-        # superadmin also sees cross-tenant. ingestor is always 403.
+        # superadmin also sees cross-tenant.
         # The fixture pre-creates an asset per role via seed.
         (
             "GET_by_id_admin_a",
@@ -185,15 +169,9 @@ def _rbac_cases() -> list[tuple[str, str, int, dict[str, Any]]]:
             200,
             {"verb": "GET", "url": "/api/v1/assets/__OWN__"},
         ),
-        (
-            "GET_by_id_ingestor_a",
-            "ingestor_a",
-            403,
-            {"verb": "GET", "url": "/api/v1/assets/__OWN__"},
-        ),
         # ----- GET /assets/{id} (cross-tenant) -----
         # Non-superadmin users get 404 for cross-tenant lookups (no leak);
-        # superadmin gets 200; ingestor is 403 regardless.
+        # superadmin gets 200.
         (
             "GET_by_id_cross_admin_b",
             "admin_b",
@@ -259,16 +237,6 @@ def _rbac_cases() -> list[tuple[str, str, int, dict[str, Any]]]:
                 "body": {"value": "192.0.2.23"},
             },
         ),
-        (
-            "PATCH_ingestor_a",
-            "ingestor_a",
-            403,
-            {
-                "verb": "PATCH",
-                "url": "/api/v1/assets/__OWN__",
-                "body": {"value": "192.0.2.24"},
-            },
-        ),
         # ----- DELETE /assets/{id} -----
         (
             "DELETE_admin_a",
@@ -292,12 +260,6 @@ def _rbac_cases() -> list[tuple[str, str, int, dict[str, Any]]]:
             "DELETE_superadmin",
             "superadmin",
             204,
-            {"verb": "DELETE", "url": "/api/v1/assets/__OWN__"},
-        ),
-        (
-            "DELETE_ingestor_a",
-            "ingestor_a",
-            403,
             {"verb": "DELETE", "url": "/api/v1/assets/__OWN__"},
         ),
         # ----- GET /assets?export=csv -----
@@ -325,12 +287,6 @@ def _rbac_cases() -> list[tuple[str, str, int, dict[str, Any]]]:
             200,
             {"verb": "GET", "url": "/api/v1/assets/?export=csv"},
         ),
-        (
-            "CSV_ingestor_a",
-            "ingestor_a",
-            403,
-            {"verb": "GET", "url": "/api/v1/assets/?export=csv"},
-        ),
     ]
 
 
@@ -340,7 +296,6 @@ _ROLE_TO_HEADERS = {
     "analyst_a": "analyst_a_headers",
     "viewer_a": "viewer_a_headers",
     "superadmin": "superadmin_headers",
-    "ingestor_a": "ingestor_a_headers",
 }
 
 
@@ -427,7 +382,6 @@ class TestRBACMatrix:
         analyst_a_headers,
         viewer_a_headers,
         superadmin_headers,
-        ingestor_a_headers,
         label: str,
         role: str,
         expected: int,
@@ -465,7 +419,6 @@ class TestRBACMatrix:
             "viewer_a": viewer_a_headers,
             "superadmin": superadmin_headers,
             "admin_b": admin_b_headers,
-            "ingestor_a": ingestor_a_headers,
         }[role]
 
         if verb == "GET":

@@ -221,9 +221,9 @@ def require_any_role(*roles: str):
     canonical reader roles for read endpoints).
 
     ``superadmin`` is NOT implicitly included — callers MUST pass it
-    explicitly when they want to admit superadmins. The five canonical F1
-    roles are ``viewer``, ``analyst``, ``ingestor``, ``admin`` and
-    ``superadmin`` (see ``app.modules.users.models.User``).
+    explicitly when they want to admit superadmins. The four canonical
+    roles are ``viewer``, ``analyst``, ``admin`` and ``superadmin``
+    (see ``app.modules.users.models.User``).
     """
 
     async def _check(

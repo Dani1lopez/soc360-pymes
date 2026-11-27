@@ -86,7 +86,6 @@ async def verify_password_async(plain: str, hashed: str) -> bool:
 ROLE_HIERARCHY: dict[str, int] = {
     "viewer": 0,
     "analyst": 1,
-    "ingestor": 1,
     "admin": 2,
     "superadmin": 99,
 }

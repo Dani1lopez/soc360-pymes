@@ -268,11 +268,6 @@ ADMIN_A_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 ANALYST_A_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 VIEWER_A_ID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
 ADMIN_B_ID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
-# Slice 1 (F2): ``ingestor`` is one of the five canonical F1 roles and is
-# explicitly DENIED on every Assets endpoint (D-006 / RBAC matrix). The
-# tests/conftest seed_data fixture inserts an ingestor user bound to
-# TENANT_A so the T11.2 RBAC matrix can verify the 403 cases.
-INGESTOR_A_ID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
 
 # Arbitrary advisory-lock key used only to serialize one-time, cluster-wide
 # test bootstrap steps (CREATE DATABASE, CREATE/ALTER ROLE) across
@@ -657,23 +652,6 @@ async def seed_data(db_session: AsyncSession):
         )
         .on_conflict_do_nothing(index_elements=["id"])
     )
-    # Ingestor (F1 canonical role) — T11.2 RBAC matrix requires a
-    # user with role='ingestor' to exercise the six 403 denials on
-    # the Assets endpoints (D-006).
-    await db_session.execute(
-        pg_insert(User)
-        .values(
-            id=UUID(INGESTOR_A_ID),
-            tenant_id=UUID(TENANT_A_ID),
-            email="ingestor@soc360.test",
-            hashed_password=_seed_password_hash("IngestorAlpha123!"),
-            full_name="Ingestor Alpha",
-            role="ingestor",
-            is_active=True,
-            is_superadmin=False,
-        )
-        .on_conflict_do_nothing(index_elements=["id"])
-    )
     await db_session.flush()
 
     # Fetch persisted records for test use
@@ -684,7 +662,6 @@ async def seed_data(db_session: AsyncSession):
     analyst_a = await db_session.get(User, UUID(ANALYST_A_ID))
     viewer_a = await db_session.get(User, UUID(VIEWER_A_ID))
     admin_b = await db_session.get(User, UUID(ADMIN_B_ID))
-    ingestor_a = await db_session.get(User, UUID(INGESTOR_A_ID))
 
     return {
         "tenant_a": tenant_a,
@@ -694,7 +671,6 @@ async def seed_data(db_session: AsyncSession):
         "analyst_a": analyst_a,
         "viewer_a": viewer_a,
         "admin_b": admin_b,
-        "ingestor_a": ingestor_a,
     }
 
 
@@ -1137,14 +1113,6 @@ async def admin_b_token(client: AsyncClient, seed_data) -> str:
 
 
 @pytest_asyncio.fixture
-async def ingestor_a_token(client: AsyncClient, seed_data) -> str:
-    # F1 canonical ``ingestor`` role — T11.2 RBAC matrix requires the
-    # 403 denials on every Assets endpoint. The seed inserts this user
-    # alongside the other roles.
-    return await _get_token(client, "ingestor@soc360.test", "IngestorAlpha123!")
-
-
-@pytest_asyncio.fixture
 async def superadmin_headers(superadmin_token: str) -> dict:
     return {"Authorization": f"Bearer {superadmin_token}"}
 
@@ -1167,11 +1135,6 @@ async def viewer_a_headers(viewer_a_token: str) -> dict:
 @pytest_asyncio.fixture
 async def admin_b_headers(admin_b_token: str) -> dict:
     return {"Authorization": f"Bearer {admin_b_token}"}
-
-
-@pytest_asyncio.fixture
-async def ingestor_a_headers(ingestor_a_token: str) -> dict:
-    return {"Authorization": f"Bearer {ingestor_a_token}"}
 
 
 # ---------------------------------------------------------------------------

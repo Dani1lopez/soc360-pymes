@@ -5,7 +5,6 @@ and that the RBAC/tenant contract basics hold at the HTTP boundary:
 
 * router registration under ``/api/v1/scans``
 * unauthenticated POST is 401
-* ``ingestor`` is 403 across the representative RBAC operations
 * POST with an asset invisible to the caller is 404 and persists nothing
 * POST with a cross-tenant ``tenant_id`` is 422 ``tenant_id mismatch``
 * out-of-range pagination is 422
@@ -385,7 +384,7 @@ _RBAC_OPERATIONS: tuple[str, ...] = (
     "PATCH",
     "DELETE",
 )
-_RBAC_ROLES: tuple[str, ...] = ("admin", "analyst", "viewer", "ingestor", "superadmin")
+_RBAC_ROLES: tuple[str, ...] = ("admin", "analyst", "viewer", "superadmin")
 _WRITE_ROLES = frozenset({"admin", "superadmin"})
 _READ_ROLES = frozenset({"admin", "analyst", "viewer", "superadmin"})
 
@@ -394,8 +393,7 @@ def _expected_rbac_status(operation: str, role: str) -> int:
     """The EXACT status the (operation, role) cell must produce.
 
     Writes (POST/PATCH/DELETE) allow only ``admin`` and ``superadmin``;
-    reads allow ``admin``/``analyst``/``viewer``/``superadmin``; ``ingestor``
-    is in no allowlist and is denied on every operation.
+    reads allow ``admin``/``analyst``/``viewer``/``superadmin``.
     """
     if operation == "POST":
         return 201 if role in _WRITE_ROLES else 403
@@ -411,11 +409,11 @@ _RBAC_CASES: list[tuple[str, str, int]] = [
     for operation in _RBAC_OPERATIONS
     for role in _RBAC_ROLES
 ]
-assert len(_RBAC_CASES) == 25, "the RBAC matrix must stay 5 operations x 5 roles"
+assert len(_RBAC_CASES) == 20, "the RBAC matrix must stay 5 operations x 4 roles"
 
 
 class TestRbacMatrix:
-    """Parametrized 25-cell RBAC matrix: 5 operations x 5 roles.
+    """Parametrized 20-cell RBAC matrix: 5 operations x 4 roles.
 
     Each cell is an individual test reporting its own id
     (``<operation>_<role>_<expected>``) so a regression pinpoints the exact
@@ -436,7 +434,6 @@ class TestRbacMatrix:
         analyst_a_headers: dict,
         viewer_a_headers: dict,
         superadmin_headers: dict,
-        ingestor_a_headers: dict,
         operation: str,
         role: str,
         expected: int,
@@ -444,7 +441,6 @@ class TestRbacMatrix:
         headers = {
             "analyst": analyst_a_headers,
             "viewer": viewer_a_headers,
-            "ingestor": ingestor_a_headers,
             "admin": admin_a_headers,
             "superadmin": superadmin_headers,
         }[role]

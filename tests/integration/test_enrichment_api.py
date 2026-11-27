@@ -112,9 +112,9 @@ async def test_get_shape_level_scope_and_private_hash(tenant_client, admin_a_hea
     assert "private-cache-identity" not in response.text
 
 
-@pytest.mark.parametrize("role,method,expected", [("viewer", "get", 200), ("viewer", "post", 403), ("ingestor", "get", 403), ("analyst", "post", 202)])
-async def test_rbac(tenant_client, db_session, enqueuer, viewer_a_headers, ingestor_a_headers, analyst_a_headers, role, method, expected):
-    headers = {"viewer": viewer_a_headers, "ingestor": ingestor_a_headers, "analyst": analyst_a_headers}[role]
+@pytest.mark.parametrize("role,method,expected", [("viewer", "get", 200), ("viewer", "post", 403), ("analyst", "post", 202)])
+async def test_rbac(tenant_client, db_session, enqueuer, viewer_a_headers, analyst_a_headers, role, method, expected):
+    headers = {"viewer": viewer_a_headers, "analyst": analyst_a_headers}[role]
     _, (vulnerability,) = await _seed(db_session)
     response = await getattr(tenant_client, method)(_url(vulnerability), headers=headers)
     assert response.status_code == expected, response.text

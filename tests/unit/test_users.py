@@ -506,7 +506,6 @@ class TestUserRoleHierarchy:
         
         assert RoleEnum.viewer == "viewer"
         assert RoleEnum.analyst == "analyst"
-        assert RoleEnum.ingestor == "ingestor"
         assert RoleEnum.admin == "admin"
         assert RoleEnum.superadmin == "superadmin"
 

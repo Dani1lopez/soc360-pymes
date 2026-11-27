@@ -13,7 +13,6 @@ from app.core.types import EmailStr
 class RoleEnum(str, Enum):
     viewer = "viewer"
     analyst = "analyst"
-    ingestor = "ingestor"
     admin = "admin"
     superadmin = "superadmin"
 

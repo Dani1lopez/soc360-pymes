@@ -19,7 +19,7 @@ async def test_superadmin_can_create_any_role(
     client: AsyncClient, superadmin_headers, seed_data
 ):
     """Superadmin puede crear usuarios de cualquier rol."""
-    for role in ["viewer", "analyst", "ingestor", "admin"]:
+    for role in ["viewer", "analyst", "admin"]:
         resp = await client.post(
             "/api/v1/users/",
             json={
@@ -158,10 +158,10 @@ async def test_viewer_cannot_create_any_user(
         assert resp.status_code == 403
 
 
-async def test_admin_can_create_ingestor(
+async def test_admin_cannot_create_ingestor(
     client: AsyncClient, admin_a_headers, seed_data
 ):
-    """Admin puede crear usuario con rol ingestor."""
+    """El rol ingestor eliminado es rechazado con 422."""
     resp = await client.post(
         "/api/v1/users/",
         json={
@@ -173,8 +173,7 @@ async def test_admin_can_create_ingestor(
         },
         headers=admin_a_headers,
     )
-    assert resp.status_code == 201
-    assert resp.json()["role"] == "ingestor"
+    assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------
@@ -454,22 +453,7 @@ async def test_role_hierarchy_edge_cases(
     client: AsyncClient, admin_a_headers, superadmin_headers, seed_data
 ):
     """Casos borde de la jerarquia de roles."""
-    # Admin intenta crear ingestor (deberia poder, ingestor tiene nivel 1, admin tiene 2)
-    resp = await client.post(
-        "/api/v1/users/",
-        json={
-            "email": "ingestor-test@alpha.test",
-            "password": "Password123!",
-            "full_name": "Ingestor Test",
-            "role": "ingestor",
-            "tenant_id": TENANT_A_ID,
-        },
-        headers=admin_a_headers,
-    )
-    assert resp.status_code == 201
-    
-    # Verificar que ingestor y analyst tienen el mismo nivel (1)
-    # Admin puede crear ambos
+    # Admin puede crear analyst (nivel 1 < admin nivel 2)
     resp = await client.post(
         "/api/v1/users/",
         json={

@@ -40,10 +40,7 @@ function mount(path: string, role: Role, failed = false) {
   );
   return router;
 }
-test.each([
-  ["viewer", "/users"],
-  ["ingestor", "/"],
-] as const)("denies %s at %s", async (role, path) => {
+test.each([["viewer", "/users"]] as const)("denies %s at %s", async (role, path) => {
   const router = mount(path, role);
   expect(await screen.findByRole("heading", { name: "Acceso denegado" })).toBeInTheDocument();
   expect(router.state.location.pathname).toBe("/forbidden");

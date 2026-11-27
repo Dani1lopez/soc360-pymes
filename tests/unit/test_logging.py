@@ -38,6 +38,13 @@ def test_filter_sensitive_data_redacts_secret_keys(key: str) -> None:
     assert result["event"] == "auth_action"
 
 
+def test_filter_sensitive_data_masks_scoped_ipv6_without_leaking_zone() -> None:
+    result = _filter_sensitive_data(None, "info", {"client_ip": "fe80::1%eth0"})
+
+    assert result == {"client_ip": "fe80:0000:***"}
+    assert "eth0" not in result["client_ip"]
+
+
 def test_filter_sensitive_data_masks_ips_and_emails() -> None:
     event = {
         "event": "login_attempt",

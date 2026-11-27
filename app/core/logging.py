@@ -34,14 +34,14 @@ def _mask_ip(value: Any) -> Any:
         return value
     raw = value.strip()
     try:
-        addr = ipaddress.ip_address(raw)
-    except ValueError:
+        addr = ipaddress.ip_address(raw.split("%", 1)[0])
+        if isinstance(addr, ipaddress.IPv4Address):
+            octets = raw.split(".")
+            return f"{octets[0]}.{octets[1]}.***.***"
+        groups = ipaddress.IPv6Address(int(addr)).exploded.split(":")
+        return f"{groups[0]}:{groups[1]}:***"
+    except Exception:
         return "***"
-    if isinstance(addr, ipaddress.IPv4Address):
-        octets = raw.split(".")
-        return f"{octets[0]}.{octets[1]}.***.***"
-    groups = addr.exploded.split(":")
-    return f"{groups[0]}:{groups[1]}:***"
 
 
 def _mask_email(value: Any) -> Any:

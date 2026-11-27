@@ -12,6 +12,16 @@ class AppError(Exception):
 class AuthError(AppError):
     """Excepcion de autenticacion con codigo HTTP y mensaje."""
 
+    def __init__(
+        self,
+        detail: Any = None,
+        status_code: int = 400,
+        *,
+        record_email: bool = True,
+    ) -> None:
+        self.record_email = record_email
+        super().__init__(detail=detail, status_code=status_code)
+
 
 class ServiceUnavailableError(AppError):
     """Service is unavailable (e.g., Redis down) — fail closed."""

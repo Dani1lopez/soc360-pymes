@@ -167,18 +167,27 @@ class RateLimiter:
         )
         return LockoutStatus(is_locked=False, failures=max_failures)
 
-    async def record_failure(self, ip: str, email: str) -> LockoutStatus:
-        """Record a failed login attempt for both IP and email.
+    async def record_failure(
+        self,
+        ip: str,
+        email: str,
+        *,
+        record_email: bool = True,
+    ) -> LockoutStatus:
+        """Record a failed login attempt for IP and optionally email.
 
         The email bucket escalates and extends an active lockout. The IP bucket
         only ever applies one fixed short throttle window and never extends it
-        while it is active, so a shared IP cannot be hard-locked.
+        while it is active, so a shared IP cannot be hard-locked. When
+        ``record_email`` is False (e.g., unknown account), only the IP bucket
+        is updated so non-existent emails do not bloat Redis.
         """
         ip_key = f"{_IP_PREFIX}{ip}"
         email_key = f"{_EMAIL_PREFIX}{_hash_email(email)}"
         now = time.time()
+        keys = (ip_key, email_key) if record_email else (ip_key,)
 
-        for key in (ip_key, email_key):
+        for key in keys:
             # Increment failure count atomically
             failures = await self._redis.hincrby(key, "failures", 1)
             # Set TTL for auto-cleanup (24h + buffer)

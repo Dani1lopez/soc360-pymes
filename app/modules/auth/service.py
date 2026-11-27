@@ -439,6 +439,7 @@ async def login(
         raise AuthError(
             status_code=401,
             detail="Credenciales incorrectas",
+            record_email=False,
         )
 
     if not password_ok:

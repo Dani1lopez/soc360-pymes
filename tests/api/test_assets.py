@@ -42,7 +42,7 @@ from uuid import UUID, uuid4
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal, get_session_with_tenant, set_tenant_context
@@ -1395,6 +1395,110 @@ class TestSemanticValidation422:
         )
         assert resp.status_code == 422, resp.text
         assert "value must be a valid FQDN" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# M6 — Tenant plan max_assets enforcement (403)
+# ---------------------------------------------------------------------------
+class TestAssetPlanLimit:
+    """Enforce ``Tenant.max_assets`` in ``POST /api/v1/assets/``."""
+
+    @pytest.mark.asyncio
+    async def test_post_respects_max_assets_and_recovers_after_delete(
+        self,
+        tenant_client: AsyncClient,
+        admin_a_headers,
+        db_session: AsyncSession,
+        seed_data,
+    ) -> None:
+        await db_session.execute(
+            update(Tenant).where(Tenant.id == UUID(TENANT_A_ID)).values(max_assets=2)
+        )
+        await db_session.flush()
+
+        first = await tenant_client.post(
+            "/api/v1/assets/",
+            headers=admin_a_headers,
+            json={"tenant_id": TENANT_A_ID, "type": "ip", "value": "198.51.100.1"},
+        )
+        assert first.status_code == 201, first.text
+
+        second = await tenant_client.post(
+            "/api/v1/assets/",
+            headers=admin_a_headers,
+            json={"tenant_id": TENANT_A_ID, "type": "ip", "value": "198.51.100.2"},
+        )
+        assert second.status_code == 201, second.text
+
+        # Third create hits quota -> 403.
+        third = await tenant_client.post(
+            "/api/v1/assets/",
+            headers=admin_a_headers,
+            json={"tenant_id": TENANT_A_ID, "type": "ip", "value": "198.51.100.3"},
+        )
+        assert third.status_code == 403, third.text
+
+        # Duplicate at the limit MUST still return 403 (not 409).
+        dup_at_limit = await tenant_client.post(
+            "/api/v1/assets/",
+            headers=admin_a_headers,
+            json={"tenant_id": TENANT_A_ID, "type": "ip", "value": "198.51.100.1"},
+        )
+        assert dup_at_limit.status_code == 403, dup_at_limit.text
+
+        # Deleting one frees a slot -> create succeeds again.
+        first_id = first.json()["id"]
+        deleted = await tenant_client.delete(
+            f"/api/v1/assets/{first_id}",
+            headers=admin_a_headers,
+        )
+        assert deleted.status_code == 204, deleted.text
+
+        fourth = await tenant_client.post(
+            "/api/v1/assets/",
+            headers=admin_a_headers,
+            json={"tenant_id": TENANT_A_ID, "type": "ip", "value": "198.51.100.4"},
+        )
+        assert fourth.status_code == 201, fourth.text
+
+    @pytest.mark.asyncio
+    async def test_post_blocked_when_existing_assets_exceed_downgraded_limit(
+        self,
+        tenant_client: AsyncClient,
+        admin_a_headers,
+        db_session: AsyncSession,
+        seed_data,
+    ) -> None:
+        # Start with 3 assets, then downgrade max_assets to 1.
+        for host in ("198.51.100.11", "198.51.100.12", "198.51.100.13"):
+            resp = await tenant_client.post(
+                "/api/v1/assets/",
+                headers=admin_a_headers,
+                json={"tenant_id": TENANT_A_ID, "type": "ip", "value": host},
+            )
+            assert resp.status_code == 201, resp.text
+
+        await db_session.execute(
+            update(Tenant).where(Tenant.id == UUID(TENANT_A_ID)).values(max_assets=1)
+        )
+        await db_session.flush()
+
+        blocked = await tenant_client.post(
+            "/api/v1/assets/",
+            headers=admin_a_headers,
+            json={"tenant_id": TENANT_A_ID, "type": "ip", "value": "198.51.100.14"},
+        )
+        assert blocked.status_code == 403, blocked.text
+
+        # Existing 3 rows are preserved.
+        count = (
+            await db_session.execute(
+                select(func.count())
+                .select_from(Asset)
+                .where(Asset.tenant_id == UUID(TENANT_A_ID))
+            )
+        ).scalar_one()
+        assert count == 3
 
 
 # ---------------------------------------------------------------------------

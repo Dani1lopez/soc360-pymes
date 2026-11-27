@@ -40,7 +40,6 @@ from app.modules.assets.schemas import (
     AssetResponse,
     AssetUpdate,
 )
-from app.modules.tenants.models import Tenant
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/assets", tags=["assets"])
@@ -172,14 +171,6 @@ async def create_asset(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="tenant_id is required",
             )
-        tenant = (
-            await db.execute(select(Tenant).where(Tenant.id == payload.tenant_id))
-        ).scalar_one_or_none()
-        if tenant is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="tenant not found",
-            )
         effective_tenant_id = payload.tenant_id
     else:
         if payload.tenant_id != current_user.tenant_id:
@@ -196,6 +187,15 @@ async def create_asset(
             db=db,
             event_bus=event_bus,
         )
+    except service.AssetLimitExceededError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        ) from exc
+    except service.AssetTenantNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="tenant not found",
+        ) from exc
     except service.AssetDuplicateError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     except ValueError as exc:

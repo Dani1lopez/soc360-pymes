@@ -42,9 +42,12 @@ from app.modules.assets.schemas import (
     AssetCreateRequest,
     AssetUpdate,
 )
+from app.modules.tenants.models import Tenant
 
 __all__ = [
     "AssetDuplicateError",
+    "AssetLimitExceededError",
+    "AssetTenantNotFoundError",
     "_validate_asset_value",
     "create_asset",
     "delete_asset",
@@ -68,6 +71,18 @@ _UNIQUE_CONSTRAINT_NAME = "uq_assets_tenant_type_value"
 class AssetDuplicateError(Exception):
     """Raised when an INSERT/UPDATE collides with the unique constraint
     ``uq_assets_tenant_type_value``. The router maps this to HTTP 409.
+    """
+
+
+class AssetLimitExceededError(Exception):
+    """Raised when a tenant has reached its configured ``max_assets`` quota.
+    The router maps this to HTTP 403.
+    """
+
+
+class AssetTenantNotFoundError(Exception):
+    """Raised when the target tenant does not exist during asset creation.
+    The router maps this to HTTP 422.
     """
 
 
@@ -206,9 +221,11 @@ async def create_asset(
 
     Performs:
       1. semantic value validation (``_validate_asset_value``);
-      2. INSERT + ``flush`` (so the unique-constraint check fires here);
-      3. ``commit``;
-      4. publish ``AssetCreatedEvent`` on ``asset.events`` only AFTER
+      2. lock the tenant row (``SELECT ... FOR UPDATE``) and enforce
+         ``max_assets`` against the current asset count;
+      3. INSERT + ``flush`` (so the unique-constraint check fires here);
+      4. ``commit``;
+      5. publish ``AssetCreatedEvent`` on ``asset.events`` only AFTER
          commit succeeds.
 
     Other :class:`sqlalchemy.exc.IntegrityError` propagate.
@@ -216,6 +233,27 @@ async def create_asset(
     # data.value is the PUBLIC field; we re-validate against the supplied
     # discriminator (e.g. data.type == "ip").
     canonical_value = _validate_asset_value(data.type, data.value)
+
+    # Lock the tenant row first so concurrent creates serialize per tenant,
+    # and check the quota before the duplicate check so a full tenant does
+    # not leak which assets already exist via 409 vs 403.
+    tenant = (
+        await db.execute(
+            select(Tenant).where(Tenant.id == tenant_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if tenant is None:
+        raise AssetTenantNotFoundError(f"tenant {tenant_id} not found")
+
+    current = (
+        await db.execute(
+            select(func.count()).select_from(Asset).where(Asset.tenant_id == tenant_id)
+        )
+    ).scalar_one()
+    if current >= tenant.max_assets:
+        raise AssetLimitExceededError(
+            f"asset limit reached ({tenant.max_assets}) for this tenant"
+        )
 
     asset = Asset(
         tenant_id=tenant_id,

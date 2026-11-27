@@ -136,7 +136,9 @@ async def set_tenant_context(
     """
     for sql, params in _build_tenant_context_statements(tenant_id, is_superadmin):
         await db.execute(text(sql), params)
-    db.info[_TENANT_CONTEXT_KEY] = (tenant_id, is_superadmin)
+    info = getattr(db, "info", None)
+    if isinstance(info, dict):
+        info[_TENANT_CONTEXT_KEY] = (tenant_id, is_superadmin)
 
     logger.debug(
         "tenant_context_set", 

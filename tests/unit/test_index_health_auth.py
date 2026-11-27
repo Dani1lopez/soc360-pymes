@@ -8,8 +8,9 @@ from app import main
 from app.core import metrics_auth
 
 
-def test_index_health_rejects_previous_only_token(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("path", ["/health/db/indexes", "/metrics"])
+def test_endpoints_reject_previous_only_token(
+    path: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     engine = Mock()
     try:
@@ -20,7 +21,7 @@ def test_index_health_rejects_previous_only_token(
             )
             patch.setattr(main, "engine", engine)
             response = TestClient(main.create_app()).get(
-                "/health/db/indexes", headers={"x-metrics-token": "previous"}
+                path, headers={"x-metrics-token": "previous"}
             )
             assert (response.status_code, response.json()) == (
                 401,

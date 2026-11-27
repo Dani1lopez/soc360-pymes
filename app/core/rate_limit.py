@@ -134,7 +134,7 @@ class RateLimiter:
         # Check IP lockout
         ip_locked_until = float(_get_hash_field(ip_data, "locked_until"))
         if ip_locked_until > now:
-            remaining = int(ip_locked_until - now)
+            remaining = max(1, int(ip_locked_until - now))
             logger.warning(
                 "rate_limit_locked", key_type="ip", ip=ip, retry_after=remaining
             )
@@ -147,7 +147,7 @@ class RateLimiter:
         # Check email lockout
         email_locked_until = float(_get_hash_field(email_data, "locked_until"))
         if email_locked_until > now:
-            remaining = int(email_locked_until - now)
+            remaining = max(1, int(email_locked_until - now))
             logger.warning(
                 "rate_limit_locked",
                 key_type="email",
@@ -185,53 +185,65 @@ class RateLimiter:
         ip_key = f"{_IP_PREFIX}{ip}"
         email_key = f"{_EMAIL_PREFIX}{_hash_email(email)}"
         now = time.time()
-        keys = (ip_key, email_key) if record_email else (ip_key,)
 
-        for key in keys:
-            # Increment failure count atomically
-            failures = await self._redis.hincrby(key, "failures", 1)
-            # Set TTL for auto-cleanup (24h + buffer)
-            await self._redis.expire(key, settings.RATE_LIMIT_WINDOW_SECONDS + 3600)
-
-            if key == ip_key:
-                throttle_seconds = _get_ip_throttle_seconds(failures)
-                if throttle_seconds <= 0:
-                    continue
-                current_locked = float(
-                    await self._redis.hget(key, "locked_until") or 0
-                )
-                if current_locked > now:
-                    # Fixed window: sustained failures cannot stretch it.
-                    continue
-                await self._redis.hset(
-                    key, "locked_until", str(now + throttle_seconds)
-                )
-                logger.warning(
-                    "rate_limit_ip_throttled",
-                    failures=failures,
-                    throttle_seconds=throttle_seconds,
-                )
-                continue
-
-            # Per-account lockout: escalating and extended while active.
-            lockout_seconds = _get_lockout_seconds(failures)
-            if lockout_seconds > 0:
-                # If already locked, extend from current locked_until
-                current_locked = float(await self._redis.hget(key, "locked_until") or 0)
-                base_time = max(now, current_locked)
-                new_locked_until = base_time + lockout_seconds
-
-                await self._redis.hset(key, "locked_until", str(new_locked_until))
-                logger.warning(
-                    "rate_limit_lockout_applied",
-                    key=key.split(":")[1],  # "ip" or "email"
-                    failures=failures,
-                    lockout_seconds=lockout_seconds,
-                    locked_until=new_locked_until,
-                )
+        await self._record_ip_failure(ip_key, now)
+        if record_email:
+            await self._record_email_failure(email_key, now)
 
         # Return the combined status
         return await self.check(ip, email)
+
+    async def _record_ip_failure(self, ip_key: str, now: float) -> None:
+        """Record a failed attempt in the fixed-window per-IP throttle bucket."""
+        current_locked = float(await self._redis.hget(ip_key, "locked_until") or 0)
+        if current_locked > now:
+            # Fixed window is active: sustained failures cannot stretch locked_until or TTL.
+            await self._redis.hincrby(ip_key, "failures", 1)
+            return
+
+        if current_locked > 0:
+            # Previous throttle window expired: start a fresh counting window.
+            await self._redis.delete(ip_key)
+
+        failures = await self._redis.hincrby(ip_key, "failures", 1)
+        window_seconds = settings.RATE_LIMIT_IP_THROTTLE_SECONDS
+        if failures == 1 or await self._redis.ttl(ip_key) < 0:
+            await self._redis.expire(ip_key, window_seconds)
+
+        throttle_seconds = _get_ip_throttle_seconds(failures)
+        if throttle_seconds <= 0:
+            return
+
+        await self._redis.hset(ip_key, "locked_until", str(now + throttle_seconds))
+        await self._redis.expire(ip_key, throttle_seconds)
+        logger.warning(
+            "rate_limit_ip_throttled",
+            failures=failures,
+            throttle_seconds=throttle_seconds,
+        )
+
+    async def _record_email_failure(self, email_key: str, now: float) -> None:
+        """Record a failed attempt in the escalating per-email lockout bucket."""
+        failures = await self._redis.hincrby(email_key, "failures", 1)
+        await self._redis.expire(email_key, settings.RATE_LIMIT_WINDOW_SECONDS + 3600)
+
+        lockout_seconds = _get_lockout_seconds(failures)
+        if lockout_seconds > 0:
+            # If already locked, extend from current locked_until
+            current_locked = float(
+                await self._redis.hget(email_key, "locked_until") or 0
+            )
+            base_time = max(now, current_locked)
+            new_locked_until = base_time + lockout_seconds
+
+            await self._redis.hset(email_key, "locked_until", str(new_locked_until))
+            logger.warning(
+                "rate_limit_lockout_applied",
+                key=email_key.split(":")[1],  # "email"
+                failures=failures,
+                lockout_seconds=lockout_seconds,
+                locked_until=new_locked_until,
+            )
 
     async def record_success(self, ip: str, email: str) -> None:
         """Reset failure counters after successful login.

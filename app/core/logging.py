@@ -1,16 +1,77 @@
 from __future__ import annotations
 
+import ipaddress
 import logging
+from typing import Any
+
 import structlog
+
 from app.core.config import settings
 
-_SENSITIVE_KEYS = {"password", "token", "secret", "api_key", "authorization"}
+_SENSITIVE_KEYS = {
+    "password",
+    "current_password",
+    "new_password",
+    "password_hash",
+    "token",
+    "refresh_token",
+    "access_token",
+    "secret",
+    "api_key",
+    "authorization",
+}
+_IP_KEYS = {"ip", "client_ip", "request_ip"}
+_EMAIL_KEYS = {"email", "user_email"}
+_MAX_REDACTION_DEPTH = 5
+
+
+def _mask_ip(value: Any) -> Any:
+    """Mask IPv4/IPv6 addresses while keeping non-string/empty values safe."""
+    if not isinstance(value, str) or not value.strip():
+        return value
+    raw = value.strip()
+    try:
+        addr = ipaddress.ip_address(raw)
+    except ValueError:
+        return "***"
+    if isinstance(addr, ipaddress.IPv4Address):
+        octets = raw.split(".")
+        return f"{octets[0]}.{octets[1]}.***.***"
+    groups = addr.exploded.split(":")
+    return f"{groups[0]}:{groups[1]}:***"
+
+
+def _mask_email(value: Any) -> Any:
+    """Mask email local-part while preserving domain for debugging."""
+    if not isinstance(value, str) or not value.strip():
+        return value
+    raw = value.strip()
+    if "@" not in raw:
+        return "***"
+    local, domain = raw.split("@", 1)
+    if not local:
+        return f"***@{domain}"
+    return f"{local[0]}***@{domain}"
+
+
+def _sanitize_mapping(mapping: dict[str, Any], *, depth: int = 0) -> None:
+    """Redact sensitive keys and mask PII fields in-place."""
+    for key in list(mapping.keys()):
+        low = key.lower()
+        val = mapping[key]
+        if low in _SENSITIVE_KEYS:
+            mapping[key] = "***REDACTED***"
+        elif low in _IP_KEYS:
+            mapping[key] = _mask_ip(val)
+        elif low in _EMAIL_KEYS:
+            mapping[key] = _mask_email(val)
+        elif isinstance(val, dict) and depth < _MAX_REDACTION_DEPTH:
+            _sanitize_mapping(val, depth=depth + 1)
+
 
 def _filter_sensitive_data(logger, method, event_dict):
     """Redacta campos sensibles para que nunca aparezcan en logs"""
-    for key in list(event_dict.keys()):
-        if key.lower() in _SENSITIVE_KEYS:
-            event_dict[key] = "***REDACTED***"
+    _sanitize_mapping(event_dict)
     return event_dict
 
 def setup_logging() -> None:

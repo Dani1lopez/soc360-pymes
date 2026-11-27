@@ -80,12 +80,27 @@ _CSV_COLUMNS: tuple[str, ...] = (
 )
 
 
+_CSV_FORMULA_PREFIXES: tuple[str, ...] = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _sanitize_csv_cell(value: str | None) -> str:
+    """Neutralize spreadsheet formula-injection prefixes."""
+    if not value:
+        return "" if value is None else value
+    stripped = value.lstrip(" ")
+    if value.startswith(_CSV_FORMULA_PREFIXES) or stripped.startswith(
+        _CSV_FORMULA_PREFIXES
+    ):
+        return f"'{value}"
+    return value
+
+
 def _row_to_csv_dict(asset: AssetResponse) -> dict[str, Any]:
     """Project a response into the CSV whitelist (same order as _CSV_COLUMNS)."""
     return {
         "id": str(asset.id),
-        "type": asset.type,
-        "value": asset.value,
+        "type": _sanitize_csv_cell(asset.type),
+        "value": _sanitize_csv_cell(asset.value),
         "tenant_id": str(asset.tenant_id),
         "created_at": asset.created_at.isoformat(),
         "updated_at": asset.updated_at.isoformat(),

@@ -328,7 +328,11 @@ def create_app() -> FastAPI:
         tags=["system"],
         summary="List invalid public-schema indexes (k8s probe target).",
     )
-    async def db_index_health():
+    async def db_index_health(request: Request):
+        presented = _extract_header(request)
+        if not presented or not verify_metrics_token(presented):
+            return _unauthorized_response()
+
         sql = text(
             "SELECT c.relname AS indexname "
             "FROM pg_index i "

@@ -54,25 +54,33 @@ def _mask_email(value: Any) -> Any:
     return f"{local[0]}***@{domain}"
 
 
-def _sanitize_mapping(mapping: dict[str, Any], *, depth: int = 0) -> None:
-    """Redact sensitive keys and mask PII fields in-place."""
-    for key in list(mapping.keys()):
-        low = key.lower()
-        val = mapping[key]
-        if low in _SENSITIVE_KEYS:
-            mapping[key] = "***REDACTED***"
-        elif low in _IP_KEYS:
-            mapping[key] = _mask_ip(val)
-        elif low in _EMAIL_KEYS:
-            mapping[key] = _mask_email(val)
-        elif isinstance(val, dict) and depth < _MAX_REDACTION_DEPTH:
-            _sanitize_mapping(val, depth=depth + 1)
+def _sanitize_mapping(mapping: dict[Any, Any], *, depth: int = 0) -> dict[Any, Any]:
+    """Return a sanitized copy of mapping with secrets redacted and PII masked."""
+    sanitized: dict[Any, Any] = {}
+    for key, val in mapping.items():
+        if isinstance(key, str):
+            low = key.lower()
+            if low in _SENSITIVE_KEYS:
+                sanitized[key] = "***REDACTED***"
+                continue
+            if low in _IP_KEYS:
+                sanitized[key] = _mask_ip(val)
+                continue
+            if low in _EMAIL_KEYS:
+                sanitized[key] = _mask_email(val)
+                continue
+        if isinstance(val, dict) and depth < _MAX_REDACTION_DEPTH:
+            sanitized[key] = _sanitize_mapping(val, depth=depth + 1)
+        else:
+            sanitized[key] = val
+    return sanitized
 
 
-def _filter_sensitive_data(logger, method, event_dict):
+def _filter_sensitive_data(
+    logger: Any, method: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
     """Redacta campos sensibles para que nunca aparezcan en logs"""
-    _sanitize_mapping(event_dict)
-    return event_dict
+    return _sanitize_mapping(event_dict)
 
 def setup_logging() -> None:
     renderer = (

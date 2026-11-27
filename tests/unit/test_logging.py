@@ -79,3 +79,21 @@ def test_filter_sensitive_data_handles_edge_cases_and_nested_dicts() -> None:
         "email": "b***@corp.test",
         "max_tokens": 512,
     }
+
+
+def test_filter_sensitive_data_does_not_mutate_caller_dicts_or_crash_on_non_str_keys() -> None:
+    caller_payload = {"refresh_token": "rt-secret", 1: "numeric-key", "ip": "10.0.0.1"}
+    event = {"event": "test", "payload": caller_payload}
+
+    result = _filter_sensitive_data(None, "info", event)
+
+    assert result["payload"] == {
+        "refresh_token": "***REDACTED***",
+        1: "numeric-key",
+        "ip": "10.0.***.***",
+    }
+    assert caller_payload == {
+        "refresh_token": "rt-secret",
+        1: "numeric-key",
+        "ip": "10.0.0.1",
+    }

@@ -437,9 +437,10 @@ async def test_revocation_cancellation_records_metric_and_reraises() -> None:
     assert METRIC_CANCELLATION.labels(flow=flow)._value.get() == before + 1
 
 
-def test_outage_catalog_docstring_matches_29_flow_catalog() -> None:
+def test_outage_catalog_docstring_matches_26_flow_catalog() -> None:
     from app.core import outage
 
     assert outage.__doc__ is not None
-    assert "29-FlowId" in outage.__doc__
+    assert "26-FlowId" in outage.__doc__
+    assert "29-FlowId" not in outage.__doc__
     assert "25-FlowId" not in outage.__doc__

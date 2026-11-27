@@ -1,7 +1,7 @@
 """Unit tests for PR2 outage primitives — DB-free, Redis-free.
 
 Covers the typed foundation: RedisOutageError hierarchy, TemporaryUnavailableError,
-AsyncWaiter Protocol, 29-FlowId catalog, FlowPolicy, RetryableOp enum,
+AsyncWaiter Protocol, 26-FlowId catalog, FlowPolicy, RetryableOp enum,
 and the pure classify_redis_error helper.
 """
 
@@ -281,7 +281,7 @@ class TestAsyncWaiterProtocol:
 
 
 # ---------------------------------------------------------------------------
-# 29-FlowId catalog
+# 26-FlowId catalog
 # ---------------------------------------------------------------------------
 
 EXPECTED_FLOW_IDS = frozenset(
@@ -299,9 +299,6 @@ EXPECTED_FLOW_IDS = frozenset(
         "auth_logout_service",
         "auth_change_password_service",
         "auth_current_user_dep",
-        "auth_account_lockout_check",
-        "auth_failed_attempt_record",
-        "auth_login_attempts_clear",
         "auth_login_event_publish",
         "auth_change_password_revoke",
         "users_update_user_revoke",
@@ -327,14 +324,6 @@ _RUNTIME_LOCK_EVIDENCE = (
 _SCAN_PRIMITIVE_EVIDENCE = "AST audit: no app scan path; direct primitive matrix only"
 
 FLOW_ID_EVIDENCE: tuple[FlowIdEvidence, ...] = (
-    (
-        "auth_account_lockout_check",
-        "app.modules.auth.service._check_account_lockout",
-        "account_lockout_check",
-        "fail_open",
-        "catalog-only",
-        _CATALOG_ONLY_EVIDENCE,
-    ),
     (
         "auth_change_password_rate_precheck",
         "app.modules.auth.router.change_password",
@@ -372,22 +361,6 @@ FLOW_ID_EVIDENCE: tuple[FlowIdEvidence, ...] = (
         "app.dependencies.auth.get_current_user",
         "current_user",
         "fail_closed",
-        "catalog-only",
-        _CATALOG_ONLY_EVIDENCE,
-    ),
-    (
-        "auth_failed_attempt_record",
-        "app.modules.auth.service._record_failed_attempt",
-        "failed_attempt_record",
-        "best_effort",
-        "catalog-only",
-        _CATALOG_ONLY_EVIDENCE,
-    ),
-    (
-        "auth_login_attempts_clear",
-        "app.modules.auth.service._clear_login_attempts",
-        "attempts_clear",
-        "best_effort",
         "catalog-only",
         _CATALOG_ONLY_EVIDENCE,
     ),
@@ -563,13 +536,13 @@ FLOW_ID_EVIDENCE: tuple[FlowIdEvidence, ...] = (
 
 
 class TestFlowIdCatalog:
-    """Exactly 29 FlowId constants MUST exist and match spec rev 9."""
+    """Exactly 26 active FlowId constants MUST exist."""
 
     def test_catalog_has_complete_evidence_matrix(self) -> None:
         """Every catalog entry MUST have a six-field governance row."""
         rows = FLOW_ID_EVIDENCE
 
-        assert len(rows) == len(set(rows)) == len(ALL_FLOW_IDS) == 29
+        assert len(rows) == len(set(rows)) == len(ALL_FLOW_IDS) == 26
         assert {row[0] for row in rows} == set(ALL_FLOW_IDS)
         assert all(len(row) == 6 for row in rows)
         assert all(
@@ -577,12 +550,12 @@ class TestFlowIdCatalog:
             for row in rows
         )
 
-    def test_catalog_has_exactly_29_items(self) -> None:
-        """ALL_FLOW_IDS MUST contain exactly 29 identifiers."""
-        assert len(ALL_FLOW_IDS) == 29, f"Expected 29 FlowIds, got {len(ALL_FLOW_IDS)}"
+    def test_catalog_has_exactly_26_items(self) -> None:
+        """ALL_FLOW_IDS MUST contain exactly 26 identifiers."""
+        assert len(ALL_FLOW_IDS) == 26, f"Expected 26 FlowIds, got {len(ALL_FLOW_IDS)}"
 
     def test_catalog_matches_spec_set(self) -> None:
-        """ALL_FLOW_IDS MUST contain exactly the 29 spec identifiers."""
+        """ALL_FLOW_IDS MUST contain exactly the 26 active identifiers."""
         actual = frozenset(ALL_FLOW_IDS)
         assert actual == EXPECTED_FLOW_IDS, (
             f"Missing: {sorted(EXPECTED_FLOW_IDS - actual)}\n"
@@ -609,7 +582,7 @@ class TestFlowIdCatalog:
             "scan_complete_lock",
             "scan_cancel_lock",
         }
-        assert sum(row[4] == "catalog-only" for row in FLOW_ID_EVIDENCE) == 23
+        assert sum(row[4] == "catalog-only" for row in FLOW_ID_EVIDENCE) == 20
 
     def test_every_flow_id_is_a_string(self) -> None:
         """Every FlowId constant MUST be a str."""
@@ -629,16 +602,16 @@ class TestFlowIdCatalog:
 
 
 class TestFlowPolicy:
-    """FlowPolicy maps each of the 29 FlowIds to a policy behaviour."""
+    """FlowPolicy maps each of the 26 FlowIds to a policy behaviour."""
 
-    def test_policy_map_keys_equal_exact_29(self) -> None:
-        """FlowPolicy MUST have exactly 29 keys."""
+    def test_policy_map_keys_equal_exact_26(self) -> None:
+        """FlowPolicy MUST have exactly 26 keys."""
         assert (
-            len(FlowPolicy) == 29
-        ), f"FlowPolicy has {len(FlowPolicy)} keys, expected 29"
+            len(FlowPolicy) == 26
+        ), f"FlowPolicy has {len(FlowPolicy)} keys, expected 26"
 
     def test_policy_map_keys_match_flow_ids(self) -> None:
-        """FlowPolicy keys MUST be exactly the 29 FlowId constants."""
+        """FlowPolicy keys MUST be exactly the 26 FlowId constants."""
         policy_keys = frozenset(FlowPolicy.keys())
         assert policy_keys == EXPECTED_FLOW_IDS, (
             f"Policy keys mismatch.\n"

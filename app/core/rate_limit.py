@@ -236,3 +236,67 @@ class RateLimiter:
         await self._redis.delete(email_key)
 
         logger.info("rate_limit_reset", ip=ip, email_hash=_hash_email(email))
+
+
+_USER_PREFIX = "ratelimit:user:"
+
+
+@dataclass
+class UserRateLimitStatus:
+    """Result of a per-user fixed-window rate limit check."""
+
+    allowed: bool
+    limit: int
+    remaining: int
+    retry_after: int = 0
+
+
+class UserRateLimiter:
+    """Fixed-window per-user rate limiter backed by Redis."""
+
+    def __init__(self, redis: Redis) -> None:
+        self._redis = redis
+
+    async def check_and_increment(
+        self,
+        user_id: str,
+        bucket: str,
+        limit: int,
+        window_seconds: int,
+    ) -> UserRateLimitStatus:
+        """Increment the user's bucket counter and check against ``limit``."""
+        key = f"{_USER_PREFIX}{bucket}:{user_id}"
+        count = await self._redis.incr(key)
+        ttl: int | None = None
+        if count == 1:
+            await self._redis.expire(key, window_seconds)
+            ttl = window_seconds
+        else:
+            ttl = await self._redis.ttl(key)
+            if ttl < 0:
+                await self._redis.expire(key, window_seconds)
+                ttl = window_seconds
+
+        if count > limit:
+            retry_after = max(1, int(ttl) if ttl and ttl > 0 else window_seconds)
+            logger.warning(
+                "user_rate_limit_exceeded",
+                user_id=user_id,
+                bucket=bucket,
+                count=count,
+                limit=limit,
+                retry_after=retry_after,
+            )
+            return UserRateLimitStatus(
+                allowed=False,
+                limit=limit,
+                remaining=0,
+                retry_after=retry_after,
+            )
+
+        return UserRateLimitStatus(
+            allowed=True,
+            limit=limit,
+            remaining=max(0, limit - count),
+            retry_after=0,
+        )

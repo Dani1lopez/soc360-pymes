@@ -164,6 +164,12 @@ class Settings(BaseSettings):
     # short fixed window instead of the escalating per-account lockout. Kept in
     # 1..300s: a shared IP must never be hard-locked for hours.
     RATE_LIMIT_IP_THROTTLE_SECONDS: int = Field(default=60, ge=1, le=300)
+    # Per-user fixed-window limits for authenticated mutating endpoints and
+    # expensive enrichment dispatches.
+    RATE_LIMIT_USER_MUTATION_REQUESTS: int = Field(default=60, ge=1)
+    RATE_LIMIT_USER_MUTATION_WINDOW_SECONDS: int = Field(default=60, ge=1)
+    RATE_LIMIT_ENRICHMENT_REQUESTS: int = Field(default=10, ge=1)
+    RATE_LIMIT_ENRICHMENT_WINDOW_SECONDS: int = Field(default=60, ge=1)
 
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]

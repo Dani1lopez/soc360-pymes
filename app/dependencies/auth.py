@@ -4,18 +4,20 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt import InvalidTokenError
 from redis.asyncio import Redis
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db, set_tenant_context
 from app.core.exceptions import ServiceUnavailableError
 from app.core.logging import get_logger
 from app.core.metrics import METRIC_OUTAGES
 from app.core.outage import _FLOW_ID_AUTH_CURRENT_USER_DEP
+from app.core.rate_limit import UserRateLimiter
 from app.core.redis import check_redis_healthy, get_redis
 from app.core.security import decode_access_token, has_minimum_role, is_token_revoked
 from app.modules.tenants.models import Tenant
@@ -26,11 +28,41 @@ logger = get_logger(__name__)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _get_request(request: Request) -> Request:
+    return request
+
+
+async def _enforce_user_rate_limit(
+    user_id: UUID,
+    bucket: str,
+    limit: int,
+    window_seconds: int,
+    redis: Redis,
+) -> None:
+    if not settings.RATE_LIMIT_ENABLED:
+        return
+    rl_status = await UserRateLimiter(redis).check_and_increment(
+        str(user_id),
+        bucket,
+        limit,
+        window_seconds,
+    )
+    if not rl_status.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many requests",
+            headers={"Retry-After": str(rl_status.retry_after)},
+        )
+
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
+    request: Request | None = Depends(_get_request),
 ) -> User:
     try:
         payload = decode_access_token(token)
@@ -135,7 +167,29 @@ async def get_current_user(
         await set_tenant_context(db, user.tenant_id, False)
 
     user.current_jti = jti
+    if isinstance(request, Request) and request.method.upper() in _MUTATING_METHODS:
+        await _enforce_user_rate_limit(
+            user.id,
+            "mutation",
+            settings.RATE_LIMIT_USER_MUTATION_REQUESTS,
+            settings.RATE_LIMIT_USER_MUTATION_WINDOW_SECONDS,
+            redis,
+        )
     return user
+
+
+async def enforce_enrichment_rate_limit(
+    current_user: User = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+) -> None:
+    """Enforce the stricter per-user rate limit on enrichment dispatches."""
+    await _enforce_user_rate_limit(
+        current_user.id,
+        "enrichment",
+        settings.RATE_LIMIT_ENRICHMENT_REQUESTS,
+        settings.RATE_LIMIT_ENRICHMENT_WINDOW_SECONDS,
+        redis,
+    )
 
 
 def require_role(minimum_role: str):

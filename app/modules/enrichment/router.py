@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.config import settings
 from app.dependencies import DBWithTenantDep
-from app.dependencies.auth import require_any_role
+from app.dependencies.auth import enforce_enrichment_rate_limit, require_any_role
 from app.modules.enrichment import queries
 from app.modules.enrichment.dispatch import enqueue_enrichment
 from app.modules.enrichment.prompts import functions_for_level
@@ -75,6 +75,7 @@ async def get_enrichment(
     "/vulnerabilities/{vulnerability_id}/enrichment",
     response_model=EnrichmentQueued,
     status_code=202,
+    dependencies=[Depends(enforce_enrichment_rate_limit)],
 )
 async def request_enrichment(
     vulnerability_id: UUID,
@@ -95,6 +96,7 @@ async def request_enrichment(
     "/scans/{scan_id}/enrichment",
     response_model=ScanEnrichmentQueued,
     status_code=202,
+    dependencies=[Depends(enforce_enrichment_rate_limit)],
 )
 async def request_scan_enrichment(
     scan_id: UUID,

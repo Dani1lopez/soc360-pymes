@@ -1,4 +1,4 @@
-"""Typed outage foundation — 29-FlowId catalog, policy, retry classification.
+"""Typed outage foundation — 26-FlowId catalog, policy, retry classification.
 
 PR2 #260: pure primitives with no Redis import, no I/O, and no router coupling.
 All identifiers match spec rev 9 and design rev 9 exactly.
@@ -46,7 +46,7 @@ class RedisLockWaiter:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 29-FlowId catalog (exact set — spec rev 9 §29-FlowId)
+# 26-FlowId catalog (exact active set — spec rev 9 + F4 orphan removal)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _FLOW_ID_AUTH_LOGIN_RATE_PRECHECK = "auth_login_rate_precheck"
@@ -65,9 +65,6 @@ _FLOW_ID_AUTH_LOGOUT_SERVICE = "auth_logout_service"
 _FLOW_ID_AUTH_CHANGE_PASSWORD_SERVICE = "auth_change_password_service"
 
 _FLOW_ID_AUTH_CURRENT_USER_DEP = "auth_current_user_dep"
-_FLOW_ID_AUTH_ACCOUNT_LOCKOUT_CHECK = "auth_account_lockout_check"
-_FLOW_ID_AUTH_FAILED_ATTEMPT_RECORD = "auth_failed_attempt_record"
-_FLOW_ID_AUTH_LOGIN_ATTEMPTS_CLEAR = "auth_login_attempts_clear"
 _FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH = "auth_login_event_publish"
 _FLOW_ID_AUTH_CHANGE_PASSWORD_REVOKE = "auth_change_password_revoke"
 
@@ -102,9 +99,6 @@ ALL_FLOW_IDS: list[str] = sorted(
         _FLOW_ID_AUTH_LOGOUT_SERVICE,
         _FLOW_ID_AUTH_CHANGE_PASSWORD_SERVICE,
         _FLOW_ID_AUTH_CURRENT_USER_DEP,
-        _FLOW_ID_AUTH_ACCOUNT_LOCKOUT_CHECK,
-        _FLOW_ID_AUTH_FAILED_ATTEMPT_RECORD,
-        _FLOW_ID_AUTH_LOGIN_ATTEMPTS_CLEAR,
         _FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH,
         _FLOW_ID_AUTH_CHANGE_PASSWORD_REVOKE,
         _FLOW_ID_USERS_UPDATE_USER_REVOKE,
@@ -144,9 +138,6 @@ FlowPolicy: dict[str, str] = {
     _FLOW_ID_AUTH_CHANGE_PASSWORD_SERVICE: "fail_closed",
     # ── dependencies ──
     _FLOW_ID_AUTH_CURRENT_USER_DEP: "fail_closed",
-    _FLOW_ID_AUTH_ACCOUNT_LOCKOUT_CHECK: "fail_open",
-    _FLOW_ID_AUTH_FAILED_ATTEMPT_RECORD: "best_effort",
-    _FLOW_ID_AUTH_LOGIN_ATTEMPTS_CLEAR: "best_effort",
     _FLOW_ID_AUTH_LOGIN_EVENT_PUBLISH: "best_effort",
     # ── revocation ──
     _FLOW_ID_AUTH_CHANGE_PASSWORD_REVOKE: "fail_closed",

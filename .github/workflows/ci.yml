@@ -96,6 +96,8 @@ jobs:
           BEGIN
             IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='soc360_app') THEN
               CREATE ROLE soc360_app WITH LOGIN PASSWORD 'soc360_test_password' NOSUPERUSER NOBYPASSRLS;
+            ELSE
+              ALTER ROLE soc360_app WITH NOSUPERUSER NOBYPASSRLS;
             END IF;
           END
           $$;

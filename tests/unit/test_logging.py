@@ -20,7 +20,12 @@ from app.core.logging import _filter_sensitive_data
         "secret",
         "api_key",
         "authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
         "Refresh_Token",
+        "Set-Cookie",
+        "X-API-Key",
         "PASSWORD_HASH",
     ],
 )
@@ -81,7 +86,42 @@ def test_filter_sensitive_data_handles_edge_cases_and_nested_dicts() -> None:
     }
 
 
-def test_filter_sensitive_data_does_not_mutate_caller_dicts_or_crash_on_non_str_keys() -> None:
+def test_filter_sensitive_data_redacts_dicts_inside_lists_and_tuples_without_mutation() -> (
+    None
+):
+    user = {"password": "fixture"}
+    nested = [{"token": "fixture"}]
+    users = [user, nested]
+    tuple_users = ({"api_key": "fixture"},)
+    event = {"users": users, "tuple_users": tuple_users}
+
+    result = _filter_sensitive_data(None, "info", event)
+
+    assert result["users"] == [
+        {"password": "***REDACTED***"},
+        [{"token": "***REDACTED***"}],
+    ]
+    assert result["tuple_users"] == ({"api_key": "***REDACTED***"},)
+    assert isinstance(result["tuple_users"], tuple)
+    assert users == [user, nested] == [{"password": "fixture"}, [{"token": "fixture"}]]
+    assert tuple_users == ({"api_key": "fixture"},)
+
+
+def test_redacts_through_depth_five_without_mutating_input() -> None:
+    event = {"token": "fixture"}
+    for _ in range(5):
+        event = {"nested": event}
+    result = _filter_sensitive_data(None, "info", event)
+    original = event
+    for _ in range(5):
+        original, result = original["nested"], result["nested"]
+    assert result == {"token": "***REDACTED***"}
+    assert original == {"token": "fixture"}
+
+
+def test_filter_sensitive_data_does_not_mutate_caller_dicts_or_crash_on_non_str_keys() -> (
+    None
+):
     caller_payload = {"refresh_token": "rt-secret", 1: "numeric-key", "ip": "10.0.0.1"}
     event = {"event": "test", "payload": caller_payload}
 

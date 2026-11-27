@@ -19,6 +19,9 @@ _SENSITIVE_KEYS = {
     "secret",
     "api_key",
     "authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
 }
 _IP_KEYS = {"ip", "client_ip", "request_ip"}
 _EMAIL_KEYS = {"email", "user_email"}
@@ -54,6 +57,18 @@ def _mask_email(value: Any) -> Any:
     return f"{local[0]}***@{domain}"
 
 
+def _sanitize_value(value: Any, *, depth: int) -> Any:
+    if depth >= _MAX_REDACTION_DEPTH:
+        return value
+    if isinstance(value, dict):
+        return _sanitize_mapping(value, depth=depth + 1)
+    if isinstance(value, list):
+        return [_sanitize_value(item, depth=depth + 1) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_value(item, depth=depth + 1) for item in value)
+    return value
+
+
 def _sanitize_mapping(mapping: dict[Any, Any], *, depth: int = 0) -> dict[Any, Any]:
     """Return a sanitized copy of mapping with secrets redacted and PII masked."""
     sanitized: dict[Any, Any] = {}
@@ -69,10 +84,7 @@ def _sanitize_mapping(mapping: dict[Any, Any], *, depth: int = 0) -> dict[Any, A
             if low in _EMAIL_KEYS:
                 sanitized[key] = _mask_email(val)
                 continue
-        if isinstance(val, dict) and depth < _MAX_REDACTION_DEPTH:
-            sanitized[key] = _sanitize_mapping(val, depth=depth + 1)
-        else:
-            sanitized[key] = val
+        sanitized[key] = _sanitize_value(val, depth=depth)
     return sanitized
 
 
@@ -82,13 +94,14 @@ def _filter_sensitive_data(
     """Redacta campos sensibles para que nunca aparezcan en logs"""
     return _sanitize_mapping(event_dict)
 
+
 def setup_logging() -> None:
     renderer = (
         structlog.dev.ConsoleRenderer()
         if settings.ENVIRONMENT == "development"
         else structlog.processors.JSONRenderer()
     )
-    
+
     structlog.configure(
         processors=[
             structlog.stdlib.add_log_level,
@@ -104,6 +117,7 @@ def setup_logging() -> None:
     )
     log_level = logging.DEBUG if settings.ENVIRONMENT == "development" else logging.INFO
     logging.basicConfig(level=log_level)
+
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     return structlog.get_logger(name)

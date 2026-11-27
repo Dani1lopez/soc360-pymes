@@ -117,9 +117,9 @@ class TestReadNewUsesBlockingXreadgroup:
 
         result = await consumer.read_new()
         assert len(result) == 2
-        assert result[0]["message_id"] == b"100-0"
+        assert result[0]["message_id"] == "100-0"
         assert result[0]["data"]["user_id"] == "u1"
-        assert result[1]["message_id"] == b"101-0"
+        assert result[1]["message_id"] == "101-0"
         assert result[1]["data"]["user_id"] == "u2"
 
     @pytest.mark.asyncio
@@ -204,7 +204,7 @@ class TestConsumerLoopRuntimeBehavior:
         mock_redis.aclose = AsyncMock()
 
         pending_msg = {
-            "message_id": b"50-0",
+            "message_id": "50-0",
             "data": {"user_id": "pending-user"},
         }
 

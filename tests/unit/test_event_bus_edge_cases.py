@@ -240,7 +240,8 @@ class TestEventBusDispatchRouting:
             messages = await consumer.read_new(block=1)
             assert len(messages) == 1
             message = messages[0]
-            message_id_str = message["message_id"].decode()
+            message_id_str = message["message_id"]
+            assert isinstance(message_id_str, str)
             retry_key = f"event_retry:auth.login:{message_id_str}"
             await redis.hset(retry_key, mapping={"retry_count": settings.EVENT_MAX_RETRIES})
             with patch.object(EventBus, "_handle_auth_login", side_effect=RuntimeError("handler boom")):
@@ -266,7 +267,7 @@ class TestEventBusDispatchRouting:
         """The consumer must not ACK a message whose terminal write failed."""
         from app.main import _consumer_loop
         redis = AsyncMock()
-        message = {"message_id": b"1-0", "data": {"user_id": "u1"}}
+        message = {"message_id": "1-0", "data": {"user_id": "u1"}}
         consumer = AsyncMock()
         consumer.read_pending.side_effect = [[message], asyncio.CancelledError()]
         consumer.read_new.return_value = []

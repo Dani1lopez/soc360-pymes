@@ -74,7 +74,7 @@ class EventConsumer:
 
         Returns:
             List of dicts, each containing:
-              - "message_id": bytes
+              - "message_id": str
               - "data": dict with event fields
             Returns an empty list if no pending messages exist.
         """
@@ -135,7 +135,7 @@ class EventConsumer:
                         for k, v in fields.items()
                     }
                     result.append({
-                        "message_id": cid if isinstance(cid, bytes) else cid.encode(),
+                        "message_id": cid.decode() if isinstance(cid, bytes) else cid,
                         "data": str_fields,
                     })
         except Exception as exc:
@@ -163,7 +163,7 @@ class EventConsumer:
 
         Returns:
             List of dicts, each containing:
-              - "message_id": bytes
+              - "message_id": str
               - "data": dict with event fields
             Returns an empty list if no messages available within the timeout.
         """
@@ -193,7 +193,7 @@ class EventConsumer:
                     for k, v in fields.items()
                 }
                 messages.append({
-                    "message_id": msg_id if isinstance(msg_id, bytes) else msg_id.encode(),
+                    "message_id": msg_id.decode() if isinstance(msg_id, bytes) else msg_id,
                     "data": str_fields,
                 })
         return messages
@@ -232,8 +232,6 @@ class EventConsumer:
             message_id: The message ID to acknowledge (as returned by read_pending).
         """
         stream_key = self._stream_key()
-        if isinstance(message_id, str):
-            message_id = message_id.encode()
         try:
             await self.redis_client.xack(stream_key, self.group_name, message_id)
         except Exception as exc:
@@ -246,6 +244,4 @@ class EventConsumer:
             message_id: The message ID to delete.
         """
         stream_key = self._stream_key()
-        if isinstance(message_id, str):
-            message_id = message_id.encode()
         await self.redis_client.xdel(stream_key, message_id)

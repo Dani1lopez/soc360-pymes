@@ -10,8 +10,9 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy import text
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy import event, text
+from sqlalchemy.engine import Connection
+from sqlalchemy.orm import DeclarativeBase, Session, SessionTransaction
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -60,6 +61,55 @@ AsyncSessionLocal = async_sessionmaker(
     expire_on_commit=False,
 )
 
+_TENANT_CONTEXT_KEY = "tenant_context"
+
+
+def _build_tenant_context_statements(
+    tenant_id: UUID | None,
+    is_superadmin: bool,
+) -> list[tuple[str, dict[str, str]]]:
+    """Build SET LOCAL SQL statements and bind params for RLS context."""
+    if not is_superadmin and tenant_id is None:
+        raise ValueError("tenant_id requerido para usuarios no superadmin")
+
+    if is_superadmin:
+        return [
+            (
+                "SELECT "
+                "set_config('app.is_superadmin', 'true', true), "
+                "set_config('app.current_tenant', '', true)",
+                {},
+            )
+        ]
+    return [
+        (
+            "SELECT set_config('app.current_tenant', :tenant_id, true)",
+            {"tenant_id": str(tenant_id)},
+        ),
+        ("SELECT set_config('app.is_superadmin', 'false', true)", {}),
+    ]
+
+
+@event.listens_for(Session, "after_begin")
+def _reapply_tenant_context_on_begin(
+    session: Session,
+    transaction: SessionTransaction,
+    connection: Connection,
+) -> None:
+    """Re-apply canonical SET LOCAL RLS context when a session opens a new transaction.
+
+    Prevents silent RLS context loss if a service commits or rolls back mid-request
+    and a subsequent query on the same AsyncSession triggers autobegin.
+    """
+    if transaction.nested:
+        return
+    ctx = session.info.get(_TENANT_CONTEXT_KEY)
+    if ctx is None:
+        return
+    tenant_id, is_superadmin = ctx
+    for sql, params in _build_tenant_context_statements(tenant_id, is_superadmin):
+        connection.execute(text(sql), params)
+
 
 class Base(DeclarativeBase):
     pass
@@ -84,26 +134,10 @@ async def set_tenant_context(
 
     Both set_config calls run in a single roundtrip to minimize latency.
     """
-    if not is_superadmin and tenant_id is None:
-        raise ValueError("tenant_id requerido para usuarios no superadmin")
+    for sql, params in _build_tenant_context_statements(tenant_id, is_superadmin):
+        await db.execute(text(sql), params)
+    db.info[_TENANT_CONTEXT_KEY] = (tenant_id, is_superadmin)
 
-    if is_superadmin:
-        # Single roundtrip: set superadmin flag AND clear current_tenant to prevent
-        # session poisoning across pooled connections.
-        await db.execute(
-            text(
-                "SELECT "
-                "set_config('app.is_superadmin', 'true', true), "
-                "set_config('app.current_tenant', '', true)"
-            )
-        )
-    else:
-        await db.execute(
-            text("SELECT set_config('app.current_tenant', :tenant_id, true)"),
-            {"tenant_id": str(tenant_id)},
-        )
-        await db.execute(text("SELECT set_config('app.is_superadmin', 'false', true)"))
-    
     logger.debug(
         "tenant_context_set", 
         tenant_id=str(tenant_id) if tenant_id else "ALL",
@@ -136,5 +170,11 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     Para esos usar get_db_with_tenant() en dependencies.py
     """
     async with AsyncSessionLocal() as session:
-        async with session.begin():
+        try:
             yield session
+            if session.in_transaction():
+                await session.commit()
+        except BaseException:
+            if session.in_transaction():
+                await session.rollback()
+            raise

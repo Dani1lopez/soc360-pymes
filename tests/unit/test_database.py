@@ -201,3 +201,154 @@ class TestBuildConnectArgs:
 
         assert settings.DB_STATEMENT_TIMEOUT_MS == 30_000
         assert settings.DB_LOCK_TIMEOUT_MS == 5_000
+
+
+def _fake_session_cm(session: AsyncMock) -> MagicMock:
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return cm
+
+
+class TestGetDbLifecycle:
+    @pytest.mark.asyncio
+    async def test_commits_when_transaction_is_still_open(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core import database
+        from app.core.database import get_db
+
+        session = AsyncMock()
+        session.in_transaction = MagicMock(return_value=True)
+        monkeypatch.setattr(database, "AsyncSessionLocal", lambda: _fake_session_cm(session))
+
+        gen = get_db()
+        yielded = await gen.__anext__()
+        assert yielded is session
+
+        with pytest.raises(StopAsyncIteration):
+            await gen.__anext__()
+
+        session.commit.assert_awaited_once()
+        session.rollback.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_skips_commit_after_in_service_commit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core import database
+        from app.core.database import get_db
+
+        session = AsyncMock()
+        session.in_transaction = MagicMock(return_value=False)
+        monkeypatch.setattr(database, "AsyncSessionLocal", lambda: _fake_session_cm(session))
+
+        gen = get_db()
+        await gen.__anext__()
+        with pytest.raises(StopAsyncIteration):
+            await gen.__anext__()
+
+        session.commit.assert_not_awaited()
+        session.rollback.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rolls_back_on_exception_when_in_transaction(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core import database
+        from app.core.database import get_db
+
+        session = AsyncMock()
+        session.in_transaction = MagicMock(return_value=True)
+        monkeypatch.setattr(database, "AsyncSessionLocal", lambda: _fake_session_cm(session))
+
+        gen = get_db()
+        await gen.__anext__()
+        with pytest.raises(RuntimeError, match="boom"):
+            await gen.athrow(RuntimeError("boom"))
+
+        session.rollback.assert_awaited_once()
+        session.commit.assert_not_awaited()
+
+
+class TestTenantContextReapply:
+    @pytest.mark.asyncio
+    async def test_set_tenant_context_stores_canonical_context_and_uses_is_local(self) -> None:
+        from app.core.database import _TENANT_CONTEXT_KEY, set_tenant_context
+
+        db = AsyncMock()
+        db.info = {}
+        tenant_id = UUID("11111111-1111-1111-1111-111111111111")
+
+        await set_tenant_context(db, tenant_id=tenant_id, is_superadmin=False)
+
+        assert db.info[_TENANT_CONTEXT_KEY] == (tenant_id, False)
+        assert db.execute.await_count == 2
+        first_stmt, first_params = db.execute.await_args_list[0].args
+        second_stmt, second_params = db.execute.await_args_list[1].args
+        assert "set_config('app.current_tenant', :tenant_id, true)" in str(first_stmt)
+        assert first_params == {"tenant_id": str(tenant_id)}
+        assert "set_config('app.is_superadmin', 'false', true)" in str(second_stmt)
+        assert second_params == {}
+
+    def test_after_begin_reapplies_set_config_only_on_non_nested_with_context(self) -> None:
+        from types import SimpleNamespace
+
+        from app.core.database import _TENANT_CONTEXT_KEY, _reapply_tenant_context_on_begin
+
+        conn = MagicMock()
+        session = SimpleNamespace(info={})
+        tx = SimpleNamespace(nested=False)
+
+        _reapply_tenant_context_on_begin(session, tx, conn)
+        conn.execute.assert_not_called()
+
+        tenant_id = UUID("22222222-2222-2222-2222-222222222222")
+        session.info[_TENANT_CONTEXT_KEY] = (tenant_id, False)
+
+        _reapply_tenant_context_on_begin(session, SimpleNamespace(nested=True), conn)
+        conn.execute.assert_not_called()
+
+        _reapply_tenant_context_on_begin(session, tx, conn)
+        assert conn.execute.call_count == 2
+        first_stmt, first_params = conn.execute.call_args_list[0].args
+        second_stmt, second_params = conn.execute.call_args_list[1].args
+        assert "set_config('app.current_tenant', :tenant_id, true)" in str(first_stmt)
+        assert first_params == {"tenant_id": str(tenant_id)}
+        assert "set_config('app.is_superadmin', 'false', true)" in str(second_stmt)
+        assert second_params == {}
+
+    def test_sqlalchemy_event_fires_on_real_session_begin_after_commit(self) -> None:
+        from sqlalchemy import create_engine, event, text
+        from sqlalchemy.orm import Session
+
+        engine = create_engine("sqlite:///:memory:")
+        captured_set_config: list[tuple[str, object]] = []
+        tenant_id = UUID("33333333-3333-3333-3333-333333333333")
+
+        @event.listens_for(engine, "before_cursor_execute", retval=True)
+        def _intercept_set_config(_conn, _cursor, statement, parameters, _ctx, _many):
+            if "set_config" in statement:
+                captured_set_config.append((statement, parameters))
+                return "SELECT 1", ()
+            return statement, parameters
+
+        from app.core.database import _TENANT_CONTEXT_KEY
+
+        with Session(engine) as session:
+            session.execute(text("SELECT 1"))
+            assert captured_set_config == []
+
+            session.info[_TENANT_CONTEXT_KEY] = (tenant_id, False)
+            session.commit()
+
+            session.execute(text("SELECT 1"))
+
+        assert len(captured_set_config) == 2
+        sql_tenant, params_tenant = captured_set_config[0]
+        sql_admin, params_admin = captured_set_config[1]
+        assert "set_config('app.current_tenant'" in sql_tenant
+        assert params_tenant == (str(tenant_id),)
+        assert "set_config('app.is_superadmin', 'false', true)" in sql_admin
+        assert params_admin == ()
+        engine.dispose()

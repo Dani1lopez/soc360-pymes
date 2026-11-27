@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from app.core.database import get_db, set_tenant_context
+from app.core.database import engine, get_db, set_tenant_context
 from tests.conftest import TENANT_A_ID
 
 pytestmark = pytest.mark.integration
@@ -89,3 +89,4 @@ async def test_rls_context_survives_in_service_commit_under_get_db() -> None:
         assert superadmin_setting == "false"
     finally:
         await gen.aclose()
+        await engine.dispose()

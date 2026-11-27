@@ -45,7 +45,7 @@ def test_filter_sensitive_data_masks_scoped_ipv6_without_leaking_zone() -> None:
     assert "eth0" not in result["client_ip"]
 
 
-@pytest.mark.parametrize("value", ["192.0.2.1%eth0", "fe80::1%"])
+@pytest.mark.parametrize("value", ["192.0.2.1%eth0", "fe80::1%", "fe80::1%eth0%eth0"])
 def test_filter_sensitive_data_redacts_malformed_scoped_ips(value: str) -> None:
     result = _filter_sensitive_data(None, "info", {"client_ip": value})
 

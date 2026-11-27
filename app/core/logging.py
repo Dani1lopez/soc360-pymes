@@ -34,10 +34,7 @@ def _mask_ip(value: Any) -> Any:
         return value
     raw = value.strip()
     try:
-        address, separator, zone = raw.partition("%")
-        addr = ipaddress.ip_address(address)
-        if separator and (not zone or not isinstance(addr, ipaddress.IPv6Address)):
-            return "***"
+        addr = ipaddress.ip_address(raw)
         if isinstance(addr, ipaddress.IPv4Address):
             octets = raw.split(".")
             return f"{octets[0]}.{octets[1]}.***.***"

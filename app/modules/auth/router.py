@@ -143,7 +143,12 @@ async def login(
         # Record failure on auth error (wrong password, user not found, etc.)
         if settings.RATE_LIMIT_ENABLED:
             try:
-                await rate_limiter.record_failure(ip, body.email)
+                if getattr(exc, "record_email", True):
+                    await rate_limiter.record_failure(ip, body.email)
+                else:
+                    await rate_limiter.record_failure(
+                        ip, body.email, record_email=False
+                    )
             except Exception:
                 _record_partial_rate_limit(_FLOW_ID_AUTH_LOGIN_RATE_RECORD)
                 logger.warning("rate_limit_record_failed", reason="redis_error", ip=ip)

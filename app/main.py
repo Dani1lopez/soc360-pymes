@@ -319,8 +319,9 @@ def create_app() -> FastAPI:
 
     # ─── Database health — index invalidity probe ────────────────────────
     # Inline (not a router) so it lives next to its sibling /health route.
-    # No auth, no tenant scoping: PostgreSQL indexes are schema-global, not
-    # per-tenant. Uses the bare `engine` from app.core.database with the
+    # Requires the same metrics-token auth as /metrics; no tenant scoping:
+    # PostgreSQL indexes are schema-global, not per-tenant. Uses the bare
+    # `engine` from app.core.database with the
     # AUTOCOMMIT isolation level so SQLAlchemy 2.x does NOT auto-begin a
     # transaction (spec db-index-health-check REQ-5).
     @app.get(
@@ -328,7 +329,11 @@ def create_app() -> FastAPI:
         tags=["system"],
         summary="List invalid public-schema indexes (k8s probe target).",
     )
-    async def db_index_health():
+    async def db_index_health(request: Request):
+        presented = _extract_header(request)
+        if not presented or not verify_metrics_token(presented):
+            return _unauthorized_response()
+
         sql = text(
             "SELECT c.relname AS indexname "
             "FROM pg_index i "

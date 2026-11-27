@@ -22,14 +22,27 @@ import asyncpg
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
+from pydantic import SecretStr
 from sqlalchemy import event, make_url
 
+from app.core import metrics_auth
 from app.core.config import settings
 from app.core.database import engine as app_engine
 
 pytestmark = pytest.mark.integration
 
 TARGET_INDEX_FOR_MUTATION = "ix_vulnerabilities_scan_tenant"
+_METRICS_TOKEN = "test-index-health-token"
+_METRICS_HEADERS = {"x-metrics-token": _METRICS_TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _configure_metrics_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configure a deterministic metrics token for index health probe tests."""
+    metrics_auth._current_bytes.cache_clear()
+    metrics_auth._previous_bytes.cache_clear()
+    monkeypatch.setattr(settings, "METRICS_TOKEN", SecretStr(_METRICS_TOKEN))
+    monkeypatch.setattr(settings, "METRICS_TOKEN_PREVIOUS", None)
 
 
 # ---------------------------------------------------------------------------
@@ -108,11 +121,19 @@ def _set_index_validity(indexname: str, valid: bool) -> "asyncio.Future[None]":
 
 
 @pytest.mark.asyncio
-async def test_scn_1_1_probe_access_without_headers(client: AsyncClient) -> None:
-    """GET /health/db/indexes with no auth/tenant headers returns a valid HTTP
-    response (does not reject access)."""
-    resp = await client.get("/health/db/indexes")
-    # Pre-Task-4 this returns 404; post-Task-4 it returns 200 or 503 (with body).
+async def test_scn_1_1_probe_requires_metrics_token(client: AsyncClient) -> None:
+    """GET /health/db/indexes rejects missing/invalid x-metrics-token with 401
+    and accepts a valid x-metrics-token without JWT or tenant headers."""
+    resp_missing = await client.get("/health/db/indexes")
+    assert resp_missing.status_code == 401
+
+    resp_wrong = await client.get(
+        "/health/db/indexes",
+        headers={"x-metrics-token": "wrong-token"},
+    )
+    assert resp_wrong.status_code == 401
+
+    resp = await client.get("/health/db/indexes", headers=_METRICS_HEADERS)
     assert resp.status_code in (
         200,
         503,
@@ -128,7 +149,7 @@ async def test_scn_1_1_probe_access_without_headers(client: AsyncClient) -> None
 async def test_scn_3_1_fresh_database_returns_200_ok(client: AsyncClient) -> None:
     """On a fresh DB (no invalid indexes), the endpoint returns 200 with
     body {"status":"ok","invalid":[]}."""
-    resp = await client.get("/health/db/indexes")
+    resp = await client.get("/health/db/indexes", headers=_METRICS_HEADERS)
     assert (
         resp.status_code == 200
     ), f"SCN-3.1 failed — expected 200, got {resp.status_code}: {resp.text!r}"
@@ -154,7 +175,7 @@ async def test_scn_4_1_invalid_index_returns_503(client: AsyncClient) -> None:
     # the DB at head).
     await _set_index_validity(TARGET_INDEX_FOR_MUTATION, False)
     try:
-        resp = await client.get("/health/db/indexes")
+        resp = await client.get("/health/db/indexes", headers=_METRICS_HEADERS)
         assert (
             resp.status_code == 503
         ), f"SCN-4.1 failed — expected 503, got {resp.status_code}: {resp.text!r}"
@@ -199,7 +220,7 @@ async def test_scn_5_1_no_begin_or_advisory_lock_in_sql_trace(
 
     event.listen(app_engine.sync_engine, "before_cursor_execute", _capture)
     try:
-        resp = await client.get("/health/db/indexes")
+        resp = await client.get("/health/db/indexes", headers=_METRICS_HEADERS)
         assert resp.status_code in (200, 503), (
             f"SCN-5.1 failed — endpoint returned unexpected status "
             f"{resp.status_code}: {resp.text!r}"
@@ -248,10 +269,10 @@ async def test_scn_5_1_no_begin_or_advisory_lock_in_sql_trace(
 async def test_scn_6_1_header_invariance(client: AsyncClient) -> None:
     """With and without X-Tenant-Id, the response is byte-identical (index
     health is global, not tenant-scoped)."""
-    resp_no_header = await client.get("/health/db/indexes")
+    resp_no_header = await client.get("/health/db/indexes", headers=_METRICS_HEADERS)
     resp_with_header = await client.get(
         "/health/db/indexes",
-        headers={"X-Tenant-Id": "11111111-1111-1111-1111-111111111111"},
+        headers={**_METRICS_HEADERS, "X-Tenant-Id": "11111111-1111-1111-1111-111111111111"},
     )
 
     assert resp_no_header.status_code == resp_with_header.status_code, (

@@ -402,7 +402,7 @@ Los siguientes endpoints están disponibles actualmente:
 | `POST` | `/api/v1/vulnerabilities/{id}/enrichment` | Encolar funciones ausentes, fallidas o desactualizadas (admin/analyst/superadmin) |
 | `POST` | `/api/v1/scans/{id}/enrichment` | Encolar hallazgos con cobertura incompleta de funciones exitosas (admin/analyst/superadmin) |
 | `GET` | `/health` | Probe de liveness (estado + versión) |
-| `GET` | `/health/db/indexes` | Probe de índices DB inválidos (target k8s) |
+| `GET` | `/health/db/indexes` | Probe de índices DB inválidos (target k8s; requiere el mismo encabezado `x-metrics-token` que `/metrics`, de lo contrario devuelve 401) |
 | `GET` | `/metrics` | Endpoint de scrape Prometheus (autenticado por token, fuera del schema) |
 
 Los POST de enriquecimiento devuelven 202 con el número de tareas encoladas, o

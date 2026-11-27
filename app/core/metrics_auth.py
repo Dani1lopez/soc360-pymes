@@ -119,7 +119,7 @@ def verify_metrics_token(presented: str) -> bool:
     ``|`` (not ``&`` and not Python's short-circuiting ``or``) so the spec's
     "either credential authenticates during overlap" semantics is preserved.
     """
-    if presented == "":
+    if presented == "" or not _current_bytes():
         return False
     presented_bytes = presented.encode("utf-8")
     current_match = hmac.compare_digest(presented_bytes, _current_bytes())

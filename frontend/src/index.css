@@ -3,7 +3,10 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Instrument Sans Variable", "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:
+    "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, monospace;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -45,86 +48,91 @@
 }
 
 /*
- * "Medianoche" palette: neutrals on hue 250 with low chroma, primary on hue 225.
- * Severity colours keep wide lightness separation from their tints so badge
- * text stays above WCAG AA (worst measured case 6.0:1). Severity is never
- * conveyed by colour alone: badges also carry an icon and a label.
+ * Precision Editorial Console ("Monocromo + Uno"):
+ * - Light mode ("Papel Técnico"): warm technical paper neutrals (hue 85, ultra-low chroma)
+ *   paired with deep charcoal ink and crisp 1px borders.
+ * - Dark mode ("Grafito Mineral"): neutral mineral graphite canvas (hue 260, chroma 0.006)
+ *   with tonal surface steps instead of heavy shadows.
+ * - Functional accent: technical copper/amber (hue 55 light / hue 62 dark).
+ * - Severity tokens keep strict WCAG AA (>= 4.5:1) contrast against their tints and are
+ *   reserved exclusively for real risk signals. High severity uses hue 40 so it remains
+ *   visually distinct from the copper/amber primary accent.
  */
 :root {
-  --radius: 0.625rem;
-  --background: oklch(0.97 0.035 250);
-  --foreground: oklch(0.22 0.035 250);
-  --card: oklch(1 0.035 250);
-  --card-foreground: oklch(0.22 0.035 250);
-  --primary: oklch(0.46 0.13 225);
-  --primary-foreground: oklch(0.99 0.035 250);
-  --secondary: oklch(0.92 0.035 250);
-  --secondary-foreground: oklch(0.22 0.035 250);
-  --muted: oklch(0.94 0.035 250);
-  --muted-foreground: oklch(0.44 0.035 250);
-  --accent: oklch(0.9 0.035 250);
-  --accent-foreground: oklch(0.22 0.035 250);
-  --destructive: oklch(0.53 0.19 25);
-  --border: oklch(0.85 0.035 250);
-  --input: oklch(0.78 0.035 250);
-  --ring: oklch(0.46 0.13 225);
+  --radius: 0.5rem;
+  --background: oklch(0.975 0.006 85);
+  --foreground: oklch(0.18 0.008 260);
+  --card: oklch(0.995 0.003 85);
+  --card-foreground: oklch(0.18 0.008 260);
+  --primary: oklch(0.49 0.135 55);
+  --primary-foreground: oklch(0.99 0.003 85);
+  --secondary: oklch(0.935 0.007 85);
+  --secondary-foreground: oklch(0.2 0.008 260);
+  --muted: oklch(0.945 0.006 85);
+  --muted-foreground: oklch(0.45 0.01 260);
+  --accent: oklch(0.92 0.014 70);
+  --accent-foreground: oklch(0.2 0.01 55);
+  --destructive: oklch(0.51 0.185 25);
+  --border: oklch(0.865 0.008 85);
+  --input: oklch(0.8 0.009 85);
+  --ring: oklch(0.52 0.14 55);
 
-  --sev-critical: oklch(0.48 0.12 25);
-  --sev-critical-tint: oklch(0.94 0.0267 25);
-  --sev-critical-foreground: oklch(0.22 0.015 25);
-  --sev-high: oklch(0.48 0.12 55);
-  --sev-high-tint: oklch(0.94 0.0267 55);
-  --sev-high-foreground: oklch(0.22 0.015 55);
-  --sev-medium: oklch(0.48 0.12 85);
-  --sev-medium-tint: oklch(0.94 0.0267 85);
-  --sev-medium-foreground: oklch(0.22 0.015 85);
-  --sev-low: oklch(0.48 0.12 250);
-  --sev-low-tint: oklch(0.94 0.0267 250);
-  --sev-low-foreground: oklch(0.22 0.015 250);
-  --sev-info: oklch(0.48 0.025 240);
-  --sev-info-tint: oklch(0.94 0.0267 240);
-  --sev-info-foreground: oklch(0.22 0.015 240);
-  --sev-ok: oklch(0.48 0.12 155);
-  --sev-ok-tint: oklch(0.94 0.0267 155);
-  --sev-ok-foreground: oklch(0.22 0.015 155);
+  --sev-critical: oklch(0.48 0.14 24);
+  --sev-critical-tint: oklch(0.94 0.025 24);
+  --sev-critical-foreground: oklch(0.22 0.02 24);
+  --sev-high: oklch(0.49 0.135 40);
+  --sev-high-tint: oklch(0.94 0.025 40);
+  --sev-high-foreground: oklch(0.22 0.02 40);
+  --sev-medium: oklch(0.48 0.115 88);
+  --sev-medium-tint: oklch(0.94 0.025 88);
+  --sev-medium-foreground: oklch(0.22 0.018 88);
+  --sev-low: oklch(0.46 0.11 245);
+  --sev-low-tint: oklch(0.94 0.022 245);
+  --sev-low-foreground: oklch(0.22 0.018 245);
+  --sev-info: oklch(0.46 0.018 250);
+  --sev-info-tint: oklch(0.935 0.01 250);
+  --sev-info-foreground: oklch(0.22 0.012 250);
+  --sev-ok: oklch(0.46 0.12 155);
+  --sev-ok-tint: oklch(0.94 0.024 155);
+  --sev-ok-foreground: oklch(0.22 0.018 155);
 }
 
 .dark {
-  --background: oklch(0.16 0.035 250);
-  --foreground: oklch(0.96 0.035 250);
-  --card: oklch(0.21 0.035 250);
-  --card-foreground: oklch(0.96 0.035 250);
-  --primary: oklch(0.8 0.13 225);
-  --primary-foreground: oklch(0.16 0.035 250);
-  --secondary: oklch(0.28 0.035 250);
-  --secondary-foreground: oklch(0.96 0.035 250);
-  --muted: oklch(0.25 0.035 250);
-  --muted-foreground: oklch(0.76 0.035 250);
-  --accent: oklch(0.32 0.035 250);
-  --accent-foreground: oklch(0.96 0.035 250);
-  --destructive: oklch(0.53 0.19 25);
-  --border: oklch(0.32 0.035 250);
-  --input: oklch(0.36 0.035 250);
-  --ring: oklch(0.8 0.13 225);
+  --background: oklch(0.14 0.006 260);
+  --foreground: oklch(0.95 0.005 85);
+  --card: oklch(0.18 0.006 260);
+  --card-foreground: oklch(0.95 0.005 85);
+  --primary: oklch(0.76 0.14 62);
+  --primary-foreground: oklch(0.15 0.012 55);
+  --secondary: oklch(0.23 0.006 260);
+  --secondary-foreground: oklch(0.94 0.005 85);
+  --muted: oklch(0.21 0.006 260);
+  --muted-foreground: oklch(0.72 0.008 260);
+  --accent: oklch(0.25 0.014 62);
+  --accent-foreground: oklch(0.95 0.008 75);
+  --destructive: oklch(0.58 0.185 25);
+  --border: oklch(0.27 0.007 260);
+  --input: oklch(0.32 0.008 260);
+  --ring: oklch(0.76 0.14 62);
 
-  --sev-critical: oklch(0.78 0.12 25);
-  --sev-critical-tint: oklch(0.28 0.0267 25);
-  --sev-critical-foreground: oklch(0.96 0.015 25);
-  --sev-high: oklch(0.78 0.12 55);
-  --sev-high-tint: oklch(0.28 0.0267 55);
-  --sev-high-foreground: oklch(0.96 0.015 55);
-  --sev-medium: oklch(0.78 0.12 85);
-  --sev-medium-tint: oklch(0.28 0.0267 85);
-  --sev-medium-foreground: oklch(0.96 0.015 85);
-  --sev-low: oklch(0.78 0.12 250);
-  --sev-low-tint: oklch(0.28 0.0267 250);
-  --sev-low-foreground: oklch(0.96 0.015 250);
-  --sev-info: oklch(0.78 0.025 240);
-  --sev-info-tint: oklch(0.28 0.0267 240);
-  --sev-info-foreground: oklch(0.96 0.015 240);
-  --sev-ok: oklch(0.78 0.12 155);
-  --sev-ok-tint: oklch(0.28 0.0267 155);
-  --sev-ok-foreground: oklch(0.96 0.015 155);
+  --sev-critical: oklch(0.76 0.14 24);
+  --sev-critical-tint: oklch(0.25 0.032 24);
+  --sev-critical-foreground: oklch(0.96 0.012 24);
+  --sev-high: oklch(0.76 0.135 40);
+  --sev-high-tint: oklch(0.25 0.032 40);
+  --sev-high-foreground: oklch(0.96 0.012 40);
+  --sev-medium: oklch(0.78 0.12 88);
+  --sev-medium-tint: oklch(0.25 0.028 88);
+  --sev-medium-foreground: oklch(0.96 0.012 88);
+  --sev-low: oklch(0.76 0.11 245);
+  --sev-low-tint: oklch(0.25 0.028 245);
+  --sev-low-foreground: oklch(0.96 0.012 245);
+  --sev-info: oklch(0.74 0.018 250);
+  --sev-info-tint: oklch(0.24 0.012 250);
+  --sev-info-foreground: oklch(0.95 0.008 250);
+  --sev-ok: oklch(0.76 0.125 155);
+  --sev-ok-tint: oklch(0.25 0.03 155);
+  --sev-ok-foreground: oklch(0.96 0.012 155);
 }
 
 @layer base {
@@ -139,5 +147,17 @@
   }
   body {
     @apply bg-background font-sans text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+  table,
+  code,
+  pre,
+  kbd,
+  samp,
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+  }
+  ::selection {
+    background-color: color-mix(in oklch, var(--primary) 24%, transparent);
   }
 }

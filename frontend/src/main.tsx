@@ -4,6 +4,8 @@ import { RouterProvider } from "@tanstack/react-router";
 import { AppProviders } from "@/app/providers";
 import { createAppRouter } from "@/app/router";
 import { createQueryClient } from "@/app/query-client";
+import "@fontsource-variable/instrument-sans";
+import "@fontsource-variable/jetbrains-mono";
 import "@/index.css";
 
 const queryClient = createQueryClient();

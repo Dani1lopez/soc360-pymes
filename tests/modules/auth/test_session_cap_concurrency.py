@@ -11,9 +11,8 @@ from fakeredis.aioredis import FakeRedis
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import Base
 from app.core.redis import get_redis
 from app.core.security import hash_password
 from app.dependencies import get_db, get_db_with_tenant
@@ -25,7 +24,6 @@ from app.modules.users.models import User
 from tests.conftest import (
     ADMIN_A_ID,
     TENANT_A_ID,
-    TEST_DATABASE_URL,
 )
 
 ADMIN_A_EMAIL = "admin@alpha.test"

@@ -76,6 +76,13 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen --extra dev
 
+      - name: Lint (Ruff)
+        run: uv run ruff check app tests
+
+      - name: Typecheck (Mypy, advisory)
+        continue-on-error: true
+        run: uv run mypy app
+
       - name: Check the OpenAPI snapshot is up to date
         run: uv run python scripts/dump_openapi.py --check
 
@@ -195,3 +202,17 @@ jobs:
           test "$memory" -gt 0
           export REDIS_PRESSURE_CONTAINER_ID="$container_id"
           uv run pytest -m redis_pressure -q
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build API runtime image
+        run: docker build --target runtime -t soc360-api:ci .
+
+      - name: Build scanner worker image
+        run: docker build --target worker -t soc360-worker:ci .

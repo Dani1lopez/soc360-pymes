@@ -62,13 +62,13 @@ os.environ.setdefault("REDIS_PORT", "6379")
 os.environ.setdefault("REDIS_DB", "15")
 os.environ.setdefault("REDIS_PASSWORD", "soc360_redis_dev_password")
 
-import pytest
-from httpx import ASGITransport, AsyncClient
-from pydantic import SecretStr
+import pytest  # noqa: E402
+from httpx import ASGITransport, AsyncClient  # noqa: E402
+from pydantic import SecretStr  # noqa: E402
 
-from app.core import metrics_auth
-from app.core.config import settings
-from app.main import create_app
+from app.core import metrics_auth  # noqa: E402
+from app.core.config import settings  # noqa: E402
+from app.main import create_app  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

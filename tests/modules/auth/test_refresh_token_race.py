@@ -8,7 +8,7 @@ from uuid import UUID
 
 from fakeredis.aioredis import FakeRedis
 from httpx import AsyncClient, ASGITransport, Response
-from sqlalchemy import func, select, text, insert, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 

@@ -255,11 +255,11 @@ if _XDIST_WORKER_ID and (
 
 
 
-from app.core.redis import close_pool, get_redis
-from app.dependencies import get_db, get_db_with_tenant
-from app.main import create_app
-from app.modules.tenants.models import Tenant
-from app.modules.users.models import User
+from app.core.redis import close_pool, get_redis  # noqa: E402
+from app.dependencies import get_db, get_db_with_tenant  # noqa: E402
+from app.main import create_app  # noqa: E402
+from app.modules.tenants.models import Tenant  # noqa: E402
+from app.modules.users.models import User  # noqa: E402
 
 TENANT_A_ID = "11111111-1111-1111-1111-111111111111"
 TENANT_B_ID = "22222222-2222-2222-2222-222222222222"

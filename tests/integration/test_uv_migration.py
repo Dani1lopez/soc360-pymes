@@ -159,8 +159,9 @@ def test_ci_workflow_has_uv_job_only():
             job_ids.append(line.split(":", 1)[0].strip())
 
     assert job_ids == [
-        "test"
-    ], f"CI must contain only the canonical uv test job, found: {job_ids}"
+        "test",
+        "docker",
+    ], f"CI must contain only the canonical uv test and docker jobs, found: {job_ids}"
     assert (
         "pip install -r requirements-dev.txt" not in ci_text
     ), "Legacy pip install step must be removed"

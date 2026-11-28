@@ -576,10 +576,10 @@ def test_scn_3_4_auto_recovery_drops_invalid_index_and_rebuilds() -> None:
         # their names do not exist in the catalog — they must also end up
         # fully healthy post-upgrade.
         for name in FOUR_INDEX_NAMES - {target}:
-            v, r, l = _index_health(name)
-            assert v and r and l, (
+            is_valid, is_ready, is_live = _index_health(name)
+            assert is_valid and is_ready and is_live, (
                 f"SCN-3.4 failed — sibling {name!r} unhealthy after "
-                f"upgrade: indisvalid={v}, indisready={r}, indislive={l}"
+                f"upgrade: indisvalid={is_valid}, indisready={is_ready}, indislive={is_live}"
             )
     finally:
         _run_alembic("upgrade", "head")

@@ -3,10 +3,8 @@ from __future__ import annotations
 from httpx import AsyncClient
 
 from tests.conftest import (
-    TENANT_A_ID,
     TENANT_B_ID,
     ANALYST_A_ID,
-    ADMIN_B_ID,
 )
 
 

@@ -21,7 +21,6 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 
 from app.core.exceptions import ServiceUnavailableError
 from app.modules.auth.service import (
-    _ADVISORY_LOCK_SQL,
     _ADVISORY_LOCK_TIMEOUT_MS,
     _LOCK_TIMEOUT_SQL,
     _acquire_session_cap_lock,
@@ -453,7 +452,7 @@ class TestPGIntegrationLockTimeout:
     async def test_real_lock_timeout_converts_to_service_unavailable(self):
         """With a real PG, a contended advisory lock triggers 55P03 -> 503."""
         from sqlalchemy import text as sa_text
-        from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+        from sqlalchemy.ext.asyncio import create_async_engine
 
         engine = create_async_engine(_PG_DSN)
         try:

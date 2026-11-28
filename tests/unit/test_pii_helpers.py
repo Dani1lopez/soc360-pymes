@@ -1,7 +1,6 @@
 """Tests for app/core/pii.py — PII sanitization helpers."""
 from __future__ import annotations
 
-import pytest
 
 from app.core.pii import hash_email, mask_ip, sanitize_user_agent
 

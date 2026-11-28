@@ -11,7 +11,6 @@ They are SKIPPED when Redis is not available (local dev without Redis).
 """
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -289,7 +288,7 @@ class TestEventBusE2E:
     ):
         """EventBus._dispatch_event should handle auth.login events."""
         # Publish
-        msg_id = await event_bus.publish(sample_event)
+        await event_bus.publish(sample_event)
 
         # Read the message
         consumer = EventConsumer(

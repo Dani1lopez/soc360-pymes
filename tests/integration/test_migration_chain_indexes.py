@@ -87,7 +87,7 @@ def _existing_indexes() -> dict[str, str]:
     )
 
     from app.core.config import settings
-    from sqlalchemy import text, make_url
+    from sqlalchemy import make_url
     import asyncpg
 
     parsed = make_url(settings.DATABASE_URL_MIGRATION)

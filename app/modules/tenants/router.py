@@ -4,9 +4,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status, Query
 
+from app.core.config import settings
+from app.core.dist_lock import acquire_dist_lock
 from app.core.exceptions import TenantError
+from app.core.outage import _FLOW_ID_AUTH_TENANT_DEACTIVATE_LOCK
 from app.dependencies import (
-    DBDep,
+    DBWithTenantDep,
     SuperadminDep,
     RedisDep,
     TenantDeactivationDBDep,
@@ -26,7 +29,7 @@ router = APIRouter(prefix="/tenants", tags=["tenants"])
 )
 async def create_tenant(
     payload: schemas.TenantCreate,
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: SuperadminDep,
 ) -> schemas.TenantResponse:
     """Crea una nueva organizacion- Solo superadmin"""
@@ -46,7 +49,7 @@ async def create_tenant(
     summary="Listar todos los tenants",
 )
 async def list_tenants(
-    db: DBDep,
+    db: DBWithTenantDep,
     current_user: SuperadminDep,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -85,13 +88,32 @@ async def get_tenant(
 async def update_tenant(
     tenant_id: UUID,
     payload: schemas.TenantUpdate,
-    db: DBDep,
+    db: DBWithTenantDep,
     redis: RedisDep,
     current_user: SuperadminDep,
 ) -> schemas.TenantResponse:
     """Actualiza campos de un tenant"""
     try:
-        updated = await service.update_tenant(tenant_id, payload, db, redis)
+        if payload.is_active is False:
+            async with acquire_dist_lock(
+                flow_id=_FLOW_ID_AUTH_TENANT_DEACTIVATE_LOCK,
+                tenant_id=str(tenant_id),
+                asset_id=f"tenant:{tenant_id}",
+                operation="deactivate",
+                ttl_seconds=settings.LOCK_DEFAULT_TTL_SECONDS,
+                wait_timeout_seconds=2.0,
+                redis=redis,
+            ):
+                try:
+                    updated = await service.update_tenant(
+                        tenant_id, payload, db, redis
+                    )
+                    await db.commit()
+                except BaseException:
+                    await db.rollback()
+                    raise
+        else:
+            updated = await service.update_tenant(tenant_id, payload, db, redis)
     except TenantError as exc:
         raise HTTPException(
             status_code=exc.status_code,

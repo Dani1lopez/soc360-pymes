@@ -206,6 +206,11 @@ def _create_provider(provider_name: str) -> "LLMProvider":
     return entry.cls(**kwargs)  # type: ignore[arg-type]
 
 
+def create_llm_provider() -> LLMProvider:
+    """Create a fresh LLM provider bound to the caller's event loop."""
+    return _create_provider(settings.LLM_PROVIDER)
+
+
 def get_llm_provider() -> "LLMProvider":
     """Return the singleton LLM provider for the configured provider name.
 

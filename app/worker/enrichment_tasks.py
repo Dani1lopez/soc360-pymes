@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from collections.abc import Callable
 from uuid import UUID
@@ -12,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from app.core.config import settings
 from app.core.database import set_tenant_context
 from app.core.exceptions import VulnerabilityError
-from app.core.llm.factory import get_llm_model_name, get_llm_provider
+from app.core.llm.factory import create_llm_provider, get_llm_model_name
 from app.core.llm.providers import LLMProvider
 from app.modules.enrichment.service import EnrichmentRunResult, enrich_vulnerability
 from app.worker.celery_app import celery_app
@@ -31,17 +32,19 @@ async def _enrich(
     only_functions: list[str] | None,
     *,
     engine_factory: Callable[[], AsyncEngine] = build_task_engine,
-    provider_factory: Callable[[], LLMProvider] = get_llm_provider,
+    provider_factory: Callable[[], LLMProvider] = create_llm_provider,
     model_name: Callable[[], str] = get_llm_model_name,
 ) -> EnrichmentRunResult | None:
     engine = engine_factory()
+    provider: LLMProvider | None = None
     try:
+        provider = provider_factory()
         maker = async_sessionmaker(engine, expire_on_commit=False)
         async with maker() as session:
             await set_tenant_context(session, UUID(tenant_id), False)
             try:
                 result = await enrich_vulnerability(
-                    session, UUID(vulnerability_id), provider=provider_factory(),
+                    session, UUID(vulnerability_id), provider=provider,
                     model=model_name(), language=settings.ENRICHMENT_LANGUAGE,
                     max_concurrency=settings.ENRICHMENT_MAX_CONCURRENCY,
                     budget_seconds=settings.ENRICHMENT_BUDGET_SECONDS,
@@ -55,7 +58,12 @@ async def _enrich(
             await session.commit()
             return result
     finally:
-        await engine.dispose()
+        try:
+            close = getattr(provider, "close", None)
+            if inspect.iscoroutinefunction(close):
+                await close()
+        finally:
+            await engine.dispose()
 
 
 @celery_app.task(

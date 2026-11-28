@@ -50,6 +50,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+    mem_limit: ${POSTGRES_MEM_LIMIT:-1g}
+    cpus: ${POSTGRES_CPUS:-1.0}
+    pids_limit: ${POSTGRES_PIDS_LIMIT:-256}
     restart: unless-stopped
 
   # No env_file: the container needs no credential of its own. Compose
@@ -140,6 +143,21 @@ services:
     security_opt: ["no-new-privileges:true"]
     read_only: true
     tmpfs: [/tmp]
+    mem_limit: ${API_MEM_LIMIT:-512m}
+    cpus: ${API_CPUS:-1.0}
+    pids_limit: ${API_PIDS_LIMIT:-128}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     # No published port on purpose: nginx reaches the API over the internal
     # network, so the only public entry point is the frontend. To debug it,
     # `docker compose -f docker-compose.app.yml exec api curl -s localhost:8000`.
@@ -209,6 +227,9 @@ services:
     read_only: true
     tmpfs: [/tmp]
     init: true
+    mem_limit: ${BEAT_MEM_LIMIT:-256m}
+    cpus: ${BEAT_CPUS:-0.5}
+    pids_limit: ${BEAT_PIDS_LIMIT:-64}
     # Exactly one beat: two beats double every schedule.
     deploy:
       replicas: 1
@@ -276,6 +297,9 @@ services:
     read_only: true
     tmpfs: [/tmp]
     init: true
+    mem_limit: ${MAINTENANCE_MEM_LIMIT:-256m}
+    cpus: ${MAINTENANCE_CPUS:-0.5}
+    pids_limit: ${MAINTENANCE_PIDS_LIMIT:-64}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -308,6 +332,9 @@ services:
     read_only: true
     tmpfs: [/tmp]
     init: true
+    mem_limit: ${ENRICHMENT_MEM_LIMIT:-512m}
+    cpus: ${ENRICHMENT_CPUS:-1.0}
+    pids_limit: ${ENRICHMENT_PIDS_LIMIT:-128}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -323,13 +350,22 @@ services:
     security_opt: ["no-new-privileges:true"]
     read_only: true
     tmpfs: ["/var/cache/nginx", "/var/run", "/tmp"]
+    mem_limit: ${FRONTEND_MEM_LIMIT:-128m}
+    cpus: ${FRONTEND_CPUS:-0.5}
+    pids_limit: ${FRONTEND_PIDS_LIMIT:-64}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
     ports:
       # 8088 rather than 80 or 8080: those are commonly taken on a developer
       # machine (macOS ships an Apache listening on 8080).
       - "${APP_HTTP_PORT:-8088}:80"
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
     # nginx only needs `api:8000` (see frontend/nginx.conf), so it is isolated
     # from the database and queue containers on the ordinary network.

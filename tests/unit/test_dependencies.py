@@ -1,7 +1,7 @@
 """Tests for app/dependencies.py — T3.1: EventBus dependency injection."""
 from __future__ import annotations
 
-from uuid import UUID, uuid4
+from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.ext.asyncio import AsyncSession
 

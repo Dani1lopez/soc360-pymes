@@ -1,13 +1,18 @@
 """Event bus dependency: singleton factory for EventBus."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from app.core.redis import get_redis_client
 
+if TYPE_CHECKING:
+    from app.event_bus import EventBus
 
-_event_bus: "EventBus | None" = None
+
+_event_bus: EventBus | None = None
 
 
-async def get_event_bus() -> "EventBus":
+async def get_event_bus() -> EventBus:
     """Singleton factory for the EventBus dependency."""
     global _event_bus
     if _event_bus is None:

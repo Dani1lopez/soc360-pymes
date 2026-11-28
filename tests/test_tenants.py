@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 from httpx import AsyncClient
 
 from tests.conftest import TENANT_A_ID, TENANT_B_ID, ADMIN_B_ID

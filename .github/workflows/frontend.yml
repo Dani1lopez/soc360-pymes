@@ -64,3 +64,9 @@ jobs:
       - name: Check the generated route tree is up to date
         working-directory: frontend
         run: git diff --exit-code -- src/routeTree.gen.ts
+
+      - name: Build frontend Docker image
+        run: docker build -t soc360-frontend:ci frontend
+
+      - name: Validate nginx config
+        run: docker run --rm --add-host api:127.0.0.1 soc360-frontend:ci nginx -t

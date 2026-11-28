@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import pytest
 
 # Deterministic high-entropy key (128 chars, ~4.7 bits/char Shannon entropy)

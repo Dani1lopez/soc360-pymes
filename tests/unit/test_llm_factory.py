@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Tests for LLM provider factory and singleton behavior.
 
 These tests verify that:
@@ -7,6 +5,8 @@ These tests verify that:
 2. Provider instances are cached (singleton pattern) within a process
 3. Unknown provider names raise LLMResponseError with a safe (no key) message
 """
+from __future__ import annotations
+
 import pytest
 
 

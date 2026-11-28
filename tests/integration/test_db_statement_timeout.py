@@ -8,7 +8,6 @@ from __future__ import annotations
 import os
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,

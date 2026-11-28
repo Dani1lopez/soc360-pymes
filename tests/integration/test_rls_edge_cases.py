@@ -336,7 +336,6 @@ async def test_refresh_tokens_isolation(
     from sqlalchemy.exc import IntegrityError, ProgrammingError
 
     await set_tenant_context(db_session, UUID(TENANT_A_ID), is_superadmin=False)
-    rt_b_id = seed_two_tenants["refresh_tokens"]["tenant_b"]
 
     # SELECT — should return zero rows
     result = await db_session.execute(

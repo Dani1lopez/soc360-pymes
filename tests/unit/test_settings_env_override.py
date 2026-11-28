@@ -1,7 +1,6 @@
 """Tests for app/core/config.py — settings env override behavior."""
 from __future__ import annotations
 
-import os
 
 import pytest
 

@@ -2,6 +2,7 @@ import { apiFetch } from "@/api/client";
 import type {
   VulnerabilityCreateInput,
   VulnerabilityList,
+  VulnerabilityListFilters,
   VulnerabilityResponse,
   VulnerabilityUpdateInput,
 } from "@/api/schema";
@@ -11,21 +12,22 @@ const BASE = "/api/v1/vulnerabilities";
 /** Tamaño de página de la tabla (el backend admite de 1 a 200). */
 export const VULNERABILITIES_PAGE_SIZE = 20;
 
-/**
- * Página de hallazgos, filtrable por escaneo. La API no filtra por estado ni
- * por severidad: eso se resuelve en la UI sobre la página cargada.
- */
+/** Página de hallazgos filtrada en el servidor por escaneo, estado y severidad. */
 export function listVulnerabilities({
   offset,
   limit = VULNERABILITIES_PAGE_SIZE,
   scanId,
-}: {
+  status,
+  severity,
+}: VulnerabilityListFilters & {
   offset: number;
   limit?: number;
   scanId?: string | null;
 }): Promise<VulnerabilityList> {
   const query = new URLSearchParams({ offset: String(offset), limit: String(limit) });
   if (scanId) query.set("scan_id", scanId);
+  if (status) query.set("status", status);
+  if (severity) query.set("severity", severity);
   return apiFetch<VulnerabilityList>(`${BASE}/?${query.toString()}`);
 }
 

@@ -46,6 +46,8 @@ from app.modules.vulnerabilities.schemas import (
     VulnerabilityCreate,
     VulnerabilityListResponse,
     VulnerabilityResponse,
+    VulnerabilitySeverity,
+    VulnerabilityStatus,
     VulnerabilityUpdate,
 )
 
@@ -149,7 +151,7 @@ async def create_vulnerability(
 @router.get(
     "/",
     response_model=VulnerabilityListResponse,
-    summary="List vulnerabilities (paginated), optionally filtered by scan",
+    summary="List vulnerabilities (paginated), optionally filtered by scan, status, and severity",
 )
 async def list_vulnerabilities(
     db: DBWithTenantDep,
@@ -159,6 +161,8 @@ async def list_vulnerabilities(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     scan_id: uuid.UUID | None = Query(None),
+    status: VulnerabilityStatus | None = Query(None),
+    severity: VulnerabilitySeverity | None = Query(None),
 ) -> VulnerabilityListResponse:
     """List vulnerabilities visible to ``current_user``, newest first.
 
@@ -174,6 +178,8 @@ async def list_vulnerabilities(
         limit=limit,
         offset=offset,
         scan_id=scan_id,
+        status=status,
+        severity=severity,
     )
     return VulnerabilityListResponse(
         items=[VulnerabilityResponse.from_orm_instance(v) for v in items],

@@ -23,14 +23,7 @@ import { scanAssetIds, useScanOptions } from "@/features/scans";
 import { errorMessage } from "@/lib/errors";
 import { formatDateTime } from "@/lib/format";
 import { VULNERABILITIES_PAGE_SIZE } from "../api/vulnerabilities-api";
-import {
-  NO_PAGE_FILTERS,
-  type PageFilters,
-  SEVERITIES,
-  assetLabelForScan,
-  filterPage,
-  formatCvss,
-} from "../lib/vulnerability-labels";
+import { SEVERITIES, assetLabelForScan, formatCvss } from "../lib/vulnerability-labels";
 import { useVulnerabilities } from "../hooks/use-vulnerabilities";
 import { useDeleteVulnerability } from "../hooks/use-vulnerability-mutations";
 import { VulnerabilityForm } from "./vulnerability-form";
@@ -39,12 +32,16 @@ import { VulnerabilityStatusBadge } from "./vulnerability-status-badge";
 export function VulnerabilitiesPage() {
   const [offset, setOffset] = useState(0);
   const [scanFilter, setScanFilter] = useState("");
-  const [filters, setFilters] = useState<PageFilters>(NO_PAGE_FILTERS);
+  const [statusFilter, setStatusFilter] = useState<"all" | "open">("all");
+  const [severityFilter, setSeverityFilter] = useState<Severity | "all">("all");
   const [creating, setCreating] = useState(false);
   const { data: user } = useCurrentUser();
   const scans = useScanOptions();
   const assets = useAssetOptions();
-  const query = useVulnerabilities(offset, scanFilter === "" ? null : scanFilter);
+  const query = useVulnerabilities(offset, scanFilter || null, {
+    status: statusFilter === "all" ? undefined : statusFilter,
+    severity: severityFilter === "all" ? undefined : severityFilter,
+  });
   const remove = useDeleteVulnerability();
 
   // El backend decide con las mismas allowlists; aquí solo se oculta lo que
@@ -57,12 +54,11 @@ export function VulnerabilitiesPage() {
   const assetValues = assetValuesById(assets.data?.items);
   const items = query.data?.items ?? [];
   const total = query.data?.total ?? 0;
-  const visible = filterPage(items, filters);
 
   function handleDelete(id: string) {
     remove.mutate(id, {
       onSuccess: () => {
-        if (visible.length === 1 && offset > 0) {
+        if (items.length === 1 && offset > 0) {
           setOffset(Math.max(0, offset - VULNERABILITIES_PAGE_SIZE));
         }
       },
@@ -112,13 +108,11 @@ export function VulnerabilitiesPage() {
           </label>
           <Select
             id="vulnerability-filter-subset"
-            value={filters.subset}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                subset: event.target.value as PageFilters["subset"],
-              }))
-            }
+            value={statusFilter}
+            onChange={(event) => {
+              setStatusFilter(event.target.value === "open" ? "open" : "all");
+              setOffset(0);
+            }}
           >
             <option value="all">Todo</option>
             <option value="open">Solo abiertas</option>
@@ -130,13 +124,11 @@ export function VulnerabilitiesPage() {
           </label>
           <Select
             id="vulnerability-filter-severity"
-            value={filters.severity}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                severity: event.target.value as Severity | "all",
-              }))
-            }
+            value={severityFilter}
+            onChange={(event) => {
+              setSeverityFilter(SEVERITIES.find((value) => value === event.target.value) ?? "all");
+              setOffset(0);
+            }}
           >
             <option value="all">Todas</option>
             {SEVERITIES.map((severity) => (
@@ -147,9 +139,6 @@ export function VulnerabilitiesPage() {
           </Select>
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">
-        «Mostrar» y «Severidad» filtran la página cargada: la API solo filtra por escaneo.
-      </p>
 
       {canWrite && !canCreate && (
         <p className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
@@ -178,7 +167,7 @@ export function VulnerabilitiesPage() {
         isPending={query.isPending}
         isFetching={query.isFetching}
         error={query.error}
-        isEmpty={visible.length === 0}
+        isEmpty={items.length === 0}
         emptyTitle="No hay hallazgos"
         emptyMessage="Cuando un escaneo encuentre algo, aparecerá aquí."
         onRetry={() => void query.refetch()}
@@ -197,7 +186,7 @@ export function VulnerabilitiesPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {visible.map((vulnerability) => (
+            {items.map((vulnerability) => (
               <TableRow key={vulnerability.id}>
                 <TableCell className="font-medium">
                   <Link

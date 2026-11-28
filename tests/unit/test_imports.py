@@ -84,14 +84,6 @@ def _format_offender(path: Path, lineno: int, line: str) -> str:
         pytest.param(
             APP_DIR / "event_bus" / "bus.py",
             id="app/event_bus/bus.py",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "event_bus/bus.py uses __import__('datetime') inside the "
-                    "DLQ write block. Belongs to the event_bus cleanup issue, "
-                    "not #101. Remove this xfail mark when that issue is fixed."
-                ),
-            ),
         ),
     ],
 )

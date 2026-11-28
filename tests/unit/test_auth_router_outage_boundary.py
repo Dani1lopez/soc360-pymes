@@ -59,11 +59,15 @@ async def test_auth_router_re_raises_typed_outage_to_global_handler(
     app = _build_app()
     service_method = AsyncMock(side_effect=RedisOutageError("database credential leaked"))
 
+    client_cookies = request_kwargs.get("cookies")
+    post_kwargs = {k: v for k, v in request_kwargs.items() if k != "cookies"}
     with patch.object(__import__("app.modules.auth.service", fromlist=[method_name]), method_name, service_method):
         async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            cookies=client_cookies,
         ) as client:
-            response = await client.post(path, **request_kwargs)
+            response = await client.post(path, **post_kwargs)
 
     assert response.status_code == 503
     assert response.json() == {"detail": "service temporarily unavailable"}

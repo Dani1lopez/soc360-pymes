@@ -45,6 +45,8 @@ class _DeterministicWaiter:
     async def wait(self, awaitable: Awaitable[Any], *, timeout: float) -> Any:
         self._calls.append((awaitable, timeout))
         if self._should_timeout:
+            if hasattr(awaitable, "close"):
+                awaitable.close()
             raise asyncio.TimeoutError()
         return await awaitable
 

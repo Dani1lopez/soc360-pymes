@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from fakeredis.aioredis import FakeRedis
 
 
@@ -160,7 +160,7 @@ class TestRedisClientFactory:
 
         # Patch to use fakeredis so we don't need real Redis
         with patch("app.core.redis.get_pool") as mock_get_pool:
-            mock_pool = AsyncMock()
+            mock_pool = MagicMock(connection_kwargs={})
             mock_get_pool.return_value = mock_pool
             with patch("redis.asyncio.Redis") as MockRedis:
                 mock_instance = AsyncMock()

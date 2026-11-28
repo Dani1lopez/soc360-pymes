@@ -9,10 +9,10 @@ export interface ApiRequestOptions extends Omit<RequestInit, "body" | "headers">
   auth?: boolean;
   /**
    * How to decode a successful body. `json` (default) is used by every
-   * endpoint that answers with JSON; `text` covers the CSV export, which
-   * shares its path with a JSON list route.
+   * endpoint that answers with JSON; `text` covers text exports; `blob`
+   * preserves binary payloads such as PDF downloads.
    */
-  parseAs?: "json" | "text";
+  parseAs?: "json" | "text" | "blob";
 }
 
 function buildInit(options: ApiRequestOptions): RequestInit {
@@ -38,9 +38,10 @@ async function send(path: string, init: RequestInit): Promise<Response> {
   }
 }
 
-async function read<T>(response: Response, parseAs: "json" | "text"): Promise<T> {
+async function read<T>(response: Response, parseAs: "json" | "text" | "blob"): Promise<T> {
   if (!response.ok) throw await parseApiError(response);
   if (response.status === 204) return undefined as T;
+  if (parseAs === "blob") return (await response.blob()) as T;
   const text = await response.text();
   if (parseAs === "text") return text as T;
   if (text === "") return undefined as T;

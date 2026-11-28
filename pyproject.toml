@@ -36,6 +36,7 @@ dependencies = [
     # maintained package for that; uvicorn's own uvicorn.workers module is
     # deprecated.
     "uvicorn-worker>=0.2,<1",
+    "fpdf2>=2.9.0",
 ]
 
 [project.optional-dependencies]

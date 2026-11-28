@@ -3396,6 +3396,81 @@
         ]
       }
     },
+    "/api/v1/reports/{report_id}/download": {
+      "get": {
+        "description": "Download a report rendered from public asset/scan/vulnerability fields.",
+        "operationId": "download_report_api_v1_reports__report_id__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Report Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "md",
+              "enum": [
+                "md",
+                "json",
+                "pdf"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "application/pdf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Rendered report attachment"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Download a report as Markdown, JSON, or PDF",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
     "/api/v1/scans/": {
       "get": {
         "description": "List scans visible to ``current_user``, newest first.\n\nWith ``asset_id`` the SAME asset resolution as POST runs first, so an\ninvisible or missing asset is 404 rather than an empty page.",

@@ -10,19 +10,28 @@ import { AppShell } from "./app-shell";
 beforeEach(() => vi.spyOn(window, "scrollTo").mockImplementation(() => {}));
 afterEach(() => vi.restoreAllMocks());
 
-test.each(["viewer", "admin"] as const)("renders %s navigation and identity", async (role) => {
+test.each([
+  ["viewer", "Lector", 6],
+  ["analyst", "Analista", 6],
+  ["admin", "Administrador", 7],
+  ["superadmin", "Superadministrador", 7],
+] as const)("renders %s navigation and identity", async (role, label, count) => {
   renderShell(<AppShell />, currentUserQueryKey, makeUser({ role }));
   const nav = await screen.findByRole("navigation", { name: "Navegación principal" });
-  expect(within(nav).getAllByRole("link")).toHaveLength(role === "viewer" ? 5 : 7);
+  expect(within(nav).getByRole("link", { name: "Configuración" })).toHaveAttribute(
+    "href",
+    "/settings",
+  );
+  expect(within(nav).getAllByRole("link")).toHaveLength(count);
   expect(
     within(screen.getByRole("banner")).getByRole("button", { name: /^Tema:/ }),
   ).toBeInTheDocument();
   expect(screen.getByText("Ana Demo")).toBeInTheDocument();
-  expect(screen.getByText(role === "viewer" ? "Lector" : "Administrador")).toBeInTheDocument();
-  if (role === "viewer") expect(within(nav).queryByText("Usuarios")).not.toBeInTheDocument();
-  else {
+  expect(screen.getByText(label)).toBeInTheDocument();
+  if (role === "viewer" || role === "analyst") {
+    expect(within(nav).queryByText("Usuarios")).not.toBeInTheDocument();
+  } else {
     expect(within(nav).getByText("Usuarios")).toBeInTheDocument();
-    expect(within(nav).getByText("Configuración")).toBeInTheDocument();
   }
   expect(within(nav).getByRole("link", { name: "Panel" })).toHaveAttribute("aria-current", "page");
 });

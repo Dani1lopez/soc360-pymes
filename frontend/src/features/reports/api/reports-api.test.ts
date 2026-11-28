@@ -101,7 +101,8 @@ describe("reports API", () => {
         }),
       );
       const blob = await downloadReport("selected", format);
-      expect(blob).toBeInstanceOf(Blob);
+      expect(blob.type).toBe(contentType);
+      expect(blob.size).toBe(body.length);
       expect(await blob.text()).toBe(body);
       expect(seen).toHaveBeenCalledWith("selected", format);
     },

@@ -39,7 +39,7 @@ describe("ReportsPage", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Nuevo informe/ })).not.toBeInTheDocument();
   });
-  it("lists type, status, asset and dates with the metadata-only notice", async () => {
+  it("lists type, status, asset and dates with download actions", async () => {
     const report = makeReport({ generated_at: "2026-10-03T12:00:00Z" });
     setup([report]);
     await screen.findByText(report.name);
@@ -49,7 +49,9 @@ describe("ReportsPage", () => {
     expect(table.getByText("Pendiente")).toBeInTheDocument();
     expect(table.getByText(formatDateTime(report.generated_at))).toBeInTheDocument();
     expect(table.getByText(formatDateTime(report.updated_at))).toBeInTheDocument();
-    expect(screen.getByText(/La generación y la descarga de PDF/)).toBeInTheDocument();
+    expect(table.getByRole("button", { name: "MD" })).toBeInTheDocument();
+    expect(table.getByRole("button", { name: "JSON" })).toBeInTheDocument();
+    expect(table.getByRole("button", { name: "PDF" })).toBeInTheDocument();
   });
   it("shows an empty state", async () => {
     setup([]);
@@ -68,13 +70,16 @@ describe("ReportsPage", () => {
     expect(await screen.findByText(makeReport().name)).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
-  it("hides creation and row actions from viewers", async () => {
+  it("hides write actions from viewers while keeping download actions", async () => {
     setup([makeReport()], "viewer");
     await screen.findByText(makeReport().name);
     for (const name of ["Nuevo informe", "Editar", "Eliminar"]) {
       expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
     }
-    expect(screen.queryByRole("columnheader", { name: "Acciones" })).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Acciones" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "MD" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "JSON" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "PDF" })).toBeInTheDocument();
   });
   it.each(["admin", "superadmin"] as const)(
     "creates using the effective tenant as %s",
@@ -178,5 +183,38 @@ describe("ReportsPage", () => {
     expect(deleted).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Eliminar informe" }));
     await waitFor(() => expect(deleted).toHaveBeenCalledWith(makeReport().id));
+  });
+  it("downloads pdf and shows an alert when download fails", async () => {
+    const report = makeReport();
+    setup([report], "viewer");
+    const requested = vi.fn();
+    const createObjectURL = vi.fn(() => "blob:report");
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { writable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { writable: true, value: revokeObjectURL });
+    server.use(
+      http.get("*/api/v1/reports/:id/download", ({ request, params }) => {
+        requested(params.id, new URL(request.url).searchParams.get("format"));
+        return new HttpResponse("%PDF-1.4", {
+          headers: { "Content-Type": "application/pdf" },
+        });
+      }),
+    );
+
+    await screen.findByText(report.name);
+    fireEvent.click(screen.getByRole("button", { name: "PDF" }));
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+    expect(requested).toHaveBeenCalledWith(report.id, "pdf");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:report");
+
+    server.use(
+      http.get("*/api/v1/reports/:id/download", () =>
+        HttpResponse.json({ detail: "Error al generar informe" }, { status: 500 }),
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "JSON" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Error del servidor. Inténtalo de nuevo más tarde.",
+    );
   });
 });

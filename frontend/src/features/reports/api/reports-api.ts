@@ -41,6 +41,13 @@ export function updateReport(id: string, input: ReportUpdateInput): Promise<Repo
   return apiFetch<ReportResponse>(`${BASE}/${id}`, { method: "PATCH", body: input });
 }
 
+export type ReportDownloadFormat = "md" | "json" | "pdf";
+
 export function deleteReport(id: string): Promise<void> {
   return apiFetch<void>(`${BASE}/${id}`, { method: "DELETE" });
+}
+
+export function downloadReport(id: string, format: ReportDownloadFormat = "md"): Promise<Blob> {
+  const query = new URLSearchParams({ format });
+  return apiFetch<Blob>(`${BASE}/${id}/download?${query.toString()}`, { parseAs: "blob" });
 }

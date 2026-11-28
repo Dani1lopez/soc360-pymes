@@ -289,6 +289,26 @@ export interface paths {
         patch: operations["update_report_api_v1_reports__report_id__patch"];
         trace?: never;
     };
+    "/api/v1/reports/{report_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download a report as Markdown, JSON, or PDF
+         * @description Download a report rendered from public asset/scan/vulnerability fields.
+         */
+        get: operations["download_report_api_v1_reports__report_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/scans/": {
         parameters: {
             query?: never;
@@ -2327,6 +2347,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_report_api_v1_reports__report_id__download_get: {
+        parameters: {
+            query?: {
+                format?: "md" | "json" | "pdf";
+            };
+            header?: never;
+            path: {
+                report_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rendered report attachment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                    "application/pdf": string;
+                    "text/markdown": string;
                 };
             };
             /** @description Validation Error */

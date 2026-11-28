@@ -35,7 +35,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 
 from app.dependencies import DBWithTenantDep
@@ -214,6 +214,51 @@ async def get_report(
             status_code=status.HTTP_404_NOT_FOUND, detail="report not found"
         )
     return ReportResponse.from_orm_instance(report)
+
+
+# ---------------------------------------------------------------------------
+# GET /reports/{report_id}/download
+# ---------------------------------------------------------------------------
+@router.get(
+    "/{report_id}/download",
+    summary="Download a report as Markdown, JSON, or PDF",
+    responses={
+        200: {
+            "description": "Rendered report attachment",
+            "content": {
+                "text/markdown": {"schema": {"type": "string"}},
+                "application/json": {"schema": {"type": "object"}},
+                "application/pdf": {"schema": {"type": "string", "format": "binary"}},
+            },
+        }
+    },
+)
+async def download_report(
+    report_id: uuid.UUID,
+    db: DBWithTenantDep,
+    current_user: User = Depends(
+        require_any_role("admin", "analyst", "viewer", "superadmin")
+    ),
+    export_format: service.ReportDownloadFormat = Query("md", alias="format"),
+) -> Response:
+    """Download a report rendered from public asset/scan/vulnerability fields."""
+    exported = await service.build_report_export(
+        report_id=report_id,
+        tenant_id=_caller_tenant_id(current_user),
+        db=db,
+        fmt=export_format,
+    )
+    if exported is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="report not found"
+        )
+    return Response(
+        content=exported.content,
+        media_type=exported.media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{exported.filename}"',
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

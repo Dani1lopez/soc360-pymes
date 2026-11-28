@@ -2,7 +2,13 @@ import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
 import { makeReport, reportList } from "@/test/fixtures/reports";
 import { server } from "@/test/msw";
-import { createReport, deleteReport, listReports, updateReport } from "./reports-api";
+import {
+  createReport,
+  deleteReport,
+  downloadReport,
+  listReports,
+  updateReport,
+} from "./reports-api";
 
 describe("reports API", () => {
   it.each([
@@ -72,4 +78,32 @@ describe("reports API", () => {
     await expect(deleteReport("selected")).resolves.toBeUndefined();
     expect(seen).toHaveBeenCalledWith("selected");
   });
+  it.each(["md", "json", "pdf"] as const)(
+    "downloads report blob with format=%s",
+    async (format) => {
+      const seen = vi.fn();
+      const body =
+        format === "json"
+          ? '{"report":{"id":"selected"}}'
+          : format === "pdf"
+            ? "%PDF-1.4"
+            : "# Report";
+      const contentType =
+        format === "json"
+          ? "application/json"
+          : format === "pdf"
+            ? "application/pdf"
+            : "text/markdown";
+      server.use(
+        http.get("*/api/v1/reports/:id/download", ({ request, params }) => {
+          seen(params.id, new URL(request.url).searchParams.get("format"));
+          return new HttpResponse(body, { headers: { "Content-Type": contentType } });
+        }),
+      );
+      const blob = await downloadReport("selected", format);
+      expect(blob).toBeInstanceOf(Blob);
+      expect(await blob.text()).toBe(body);
+      expect(seen).toHaveBeenCalledWith("selected", format);
+    },
+  );
 });

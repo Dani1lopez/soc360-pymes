@@ -3,7 +3,7 @@
     "schemas": {
       "AssetResponse": {
         "additionalProperties": false,
-        "description": "The public Assets response.\n\nOnly six fields are exposed. The ``from_orm_instance`` helper performs\nthe explicit ``asset_type`` → ``type`` mapping so the ORM column name\nnever leaks (D-009).",
+        "description": "The public Assets response.\n\nOnly six fields are exposed. The ``from_orm_instance`` helper performs\nthe explicit ``asset_type`` \u2192 ``type`` mapping so the ORM column name\nnever leaks (D-009).",
         "properties": {
           "created_at": {
             "format": "date-time",
@@ -1627,7 +1627,7 @@
                 "type": "null"
               }
             ],
-            "description": "Tenant requerido para creación pública",
+            "description": "Tenant requerido para creaci\u00f3n p\u00fablica",
             "title": "Tenant Id"
           }
         },
@@ -2124,7 +2124,7 @@
       },
       "VulnerabilityUpdate": {
         "additionalProperties": false,
-        "description": "Partial update payload.\n\nOnly ``status``, ``description``, ``cvss_score`` and\n``vulnerability_metadata`` are accepted. ``title``, ``scan_id``,\n``tenant_id``, ``severity`` and ``cve_id`` cannot appear here: they\nidentify the finding and where it came from, and never change once\nrecorded — matching Scans' pattern of keeping identity fields out of\nPATCH.",
+        "description": "Partial update payload.\n\nOnly ``status``, ``description``, ``cvss_score`` and\n``vulnerability_metadata`` are accepted. ``title``, ``scan_id``,\n``tenant_id``, ``severity`` and ``cve_id`` cannot appear here: they\nidentify the finding and where it came from, and never change once\nrecorded \u2014 matching Scans' pattern of keeping identity fields out of\nPATCH.",
         "properties": {
           "cvss_score": {
             "anyOf": [
@@ -2280,7 +2280,7 @@
     }
   },
   "info": {
-    "description": "SOC as a Service para pequeñas y medianas empresas",
+    "description": "SOC as a Service para peque\u00f1as y medianas empresas",
     "title": "SOC 360 PYMEs",
     "version": "0.1.0"
   },
@@ -3205,7 +3205,7 @@
         ]
       },
       "post": {
-        "description": "Create a new report for a visible asset of the effective target tenant.\n\nThe asset must resolve as ``Asset.id == asset_id`` AND\n``Asset.tenant_id == effective tenant`` (even for a superadmin — this\nvalidates the report/asset coherence, not global visibility). A miss is\n404 ``report asset not found`` and nothing is persisted.",
+        "description": "Create a new report for a visible asset of the effective target tenant.\n\nThe asset must resolve as ``Asset.id == asset_id`` AND\n``Asset.tenant_id == effective tenant`` (even for a superadmin \u2014 this\nvalidates the report/asset coherence, not global visibility). A miss is\n404 ``report asset not found`` and nothing is persisted.",
         "operationId": "create_report_api_v1_reports__post",
         "requestBody": {
           "content": {
@@ -3396,6 +3396,81 @@
         ]
       }
     },
+    "/api/v1/reports/{report_id}/download": {
+      "get": {
+        "description": "Download a report rendered from public asset/scan/vulnerability fields.",
+        "operationId": "download_report_api_v1_reports__report_id__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Report Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "md",
+              "enum": [
+                "md",
+                "json",
+                "pdf"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "application/pdf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Rendered report attachment"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Download a report as Markdown, JSON, or PDF",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
     "/api/v1/scans/": {
       "get": {
         "description": "List scans visible to ``current_user``, newest first.\n\nWith ``asset_id`` the SAME asset resolution as POST runs first, so an\ninvisible or missing asset is 404 rather than an empty page.",
@@ -3475,7 +3550,7 @@
         ]
       },
       "post": {
-        "description": "Create a new scan for a visible asset of the effective target tenant.\n\nThe asset must resolve as ``Asset.id == asset_id`` AND\n``Asset.tenant_id == effective tenant`` (even for a superadmin — this\nvalidates the scan/asset coherence, not global visibility). A miss is\n404 ``scan asset not found`` and nothing is persisted.",
+        "description": "Create a new scan for a visible asset of the effective target tenant.\n\nThe asset must resolve as ``Asset.id == asset_id`` AND\n``Asset.tenant_id == effective tenant`` (even for a superadmin \u2014 this\nvalidates the scan/asset coherence, not global visibility). A miss is\n404 ``scan asset not found`` and nothing is persisted.",
         "operationId": "create_scan_api_v1_scans__post",
         "requestBody": {
           "content": {
@@ -4271,7 +4346,7 @@
     },
     "/api/v1/users/{user_id}": {
       "delete": {
-        "description": "Desactiva un usuario y revoca todas sus sesiones.\n\nThe cross-tenant pre-check fires inside the Depends (R03, R04, R05).\nThe in-router policy checks (self-deactivation 409, superadmin\ndeactivation 403, admin-deactivates-admin 403) STAY HERE — they\nare policy rules, not tenant rules.",
+        "description": "Desactiva un usuario y revoca todas sus sesiones.\n\nThe cross-tenant pre-check fires inside the Depends (R03, R04, R05).\nThe in-router policy checks (self-deactivation 409, superadmin\ndeactivation 403, admin-deactivates-admin 403) STAY HERE \u2014 they\nare policy rules, not tenant rules.",
         "operationId": "deactivate_user_api_v1_users__user_id__delete",
         "parameters": [
           {
@@ -4358,7 +4433,7 @@
         ]
       },
       "patch": {
-        "description": "Actualiza un usuario.\n\nThe cross-tenant pre-check fires inside the Depends (R02, R04, R05).\nThe in-router policy checks (self-deactivation 409, role hierarchy\n403, admin-modifies-superadmin 403) STAY HERE — they are policy\nrules, not tenant rules.",
+        "description": "Actualiza un usuario.\n\nThe cross-tenant pre-check fires inside the Depends (R02, R04, R05).\nThe in-router policy checks (self-deactivation 409, role hierarchy\n403, admin-modifies-superadmin 403) STAY HERE \u2014 they are policy\nrules, not tenant rules.",
         "operationId": "update_user_api_v1_users__user_id__patch",
         "parameters": [
           {
@@ -4539,7 +4614,7 @@
         ]
       },
       "post": {
-        "description": "Create a new vulnerability for a visible scan of the effective target tenant.\n\nThe scan must resolve as ``Scan.id == scan_id`` AND\n``Scan.tenant_id == effective tenant`` (even for a superadmin — this\nvalidates the vulnerability/scan coherence, not global visibility). A\nmiss is 404 ``vulnerability scan not found`` and nothing is persisted.",
+        "description": "Create a new vulnerability for a visible scan of the effective target tenant.\n\nThe scan must resolve as ``Scan.id == scan_id`` AND\n``Scan.tenant_id == effective tenant`` (even for a superadmin \u2014 this\nvalidates the vulnerability/scan coherence, not global visibility). A\nmiss is 404 ``vulnerability scan not found`` and nothing is persisted.",
         "operationId": "create_vulnerability_api_v1_vulnerabilities__post",
         "requestBody": {
           "content": {

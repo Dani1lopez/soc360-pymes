@@ -18,6 +18,8 @@ from app.core.database import set_tenant_context
 from app.main import create_app
 from app.modules.assets.models import Asset
 from app.modules.reports.models import Report
+from app.modules.scans.models import Scan
+from app.modules.vulnerabilities.models import Vulnerability
 from tests.conftest import TENANT_A_ID, TENANT_B_ID
 
 
@@ -80,6 +82,7 @@ def test_reports_router_is_registered_under_api_v1() -> None:
     paths = {route.path for route in app.routes}
     assert "/api/v1/reports/" in paths
     assert "/api/v1/reports/{report_id}" in paths
+    assert "/api/v1/reports/{report_id}/download" in paths
 
 
 # ---------------------------------------------------------------------------
@@ -302,3 +305,129 @@ class TestTenantIsolation:
         body = resp.json()
         assert body["total"] == 1
         assert body["items"][0]["id"] == str(report_a.id)
+
+
+# ---------------------------------------------------------------------------
+# Report download (3B)
+# ---------------------------------------------------------------------------
+class TestReportDownload:
+    @pytest.mark.asyncio
+    async def test_download_markdown_and_json_with_real_asset_scan_and_vuln(
+        self,
+        tenant_client: AsyncClient,
+        admin_a_headers: dict,
+        viewer_a_headers: dict,
+        db_session: AsyncSession,
+    ) -> None:
+        asset_id = await _seed_asset(db_session, "198.51.100.20")
+        report = await _seed_report(
+            db_session,
+            asset_id=asset_id,
+            name="Informe Trimestral",
+            report_type="executive",
+        )
+        await _set_superadmin_context(db_session)
+        scan = Scan(
+            tenant_id=UUID(TENANT_A_ID),
+            asset_id=UUID(asset_id),
+            name="Nightly nmap",
+            scan_type="vulnerability",
+            status="completed",
+            raw_output="<nmaprun>INTERNAL_RAW_DO_NOT_LEAK</nmaprun>",
+        )
+        db_session.add(scan)
+        await db_session.flush()
+        vuln = Vulnerability(
+            tenant_id=UUID(TENANT_A_ID),
+            scan_id=scan.id,
+            title="TLS 1.0 enabled",
+            severity="high",
+            status="open",
+            cve_id="CVE-2026-1234",
+            cvss_score=7.5,
+        )
+        db_session.add(vuln)
+        await db_session.commit()
+
+        md_resp = await tenant_client.get(
+            f"/api/v1/reports/{report.id}/download",
+            headers=admin_a_headers,
+        )
+        assert md_resp.status_code == 200, md_resp.text
+        assert md_resp.headers["content-type"].startswith("text/markdown")
+        assert (
+            md_resp.headers["content-disposition"]
+            == 'attachment; filename="report-Informe-Trimestral.md"'
+        )
+        assert "# Informe Trimestral" in md_resp.text
+        assert "198.51.100.20" in md_resp.text
+        assert "TLS 1.0 enabled" in md_resp.text
+        assert "INTERNAL_RAW_DO_NOT_LEAK" not in md_resp.text
+
+        json_resp = await tenant_client.get(
+            f"/api/v1/reports/{report.id}/download?format=json",
+            headers=viewer_a_headers,
+        )
+        assert json_resp.status_code == 200, json_resp.text
+        assert json_resp.headers["content-type"].startswith("application/json")
+        assert (
+            json_resp.headers["content-disposition"]
+            == 'attachment; filename="report-Informe-Trimestral.json"'
+        )
+        body = json_resp.json()
+        assert body["report"]["id"] == str(report.id)
+        assert body["asset"]["value"] == "198.51.100.20"
+        assert body["summary_counts"]["total_vulnerabilities"] == 1
+        assert body["summary_counts"]["by_severity"]["high"] == 1
+        assert body["vulnerabilities"][0]["title"] == "TLS 1.0 enabled"
+        assert "raw_output" not in body["scans"][0]
+
+        pdf_resp = await tenant_client.get(
+            f"/api/v1/reports/{report.id}/download?format=pdf",
+            headers=viewer_a_headers,
+        )
+        assert pdf_resp.status_code == 200, pdf_resp.text
+        assert pdf_resp.headers["content-type"].startswith("application/pdf")
+        assert (
+            pdf_resp.headers["content-disposition"]
+            == 'attachment; filename="report-Informe-Trimestral.pdf"'
+        )
+        assert pdf_resp.content.startswith(b"%PDF-")
+        assert b"INTERNAL_RAW_DO_NOT_LEAK" not in pdf_resp.content
+
+    @pytest.mark.asyncio
+    async def test_download_rejects_invalid_format_with_422(
+        self,
+        tenant_client: AsyncClient,
+        admin_a_headers: dict,
+        db_session: AsyncSession,
+    ) -> None:
+        asset_id = await _seed_asset(db_session, "198.51.100.21")
+        report = await _seed_report(
+            db_session, asset_id=asset_id, name="bad-format-report"
+        )
+
+        resp = await tenant_client.get(
+            f"/api/v1/reports/{report.id}/download?format=xml",
+            headers=admin_a_headers,
+        )
+        assert resp.status_code == 422, resp.text
+
+    @pytest.mark.asyncio
+    async def test_download_cross_tenant_is_404(
+        self,
+        tenant_client: AsyncClient,
+        admin_b_headers: dict,
+        db_session: AsyncSession,
+    ) -> None:
+        asset_id = await _seed_asset(db_session, "198.51.100.22")
+        report = await _seed_report(
+            db_session, asset_id=asset_id, name="iso-download"
+        )
+
+        resp = await tenant_client.get(
+            f"/api/v1/reports/{report.id}/download",
+            headers=admin_b_headers,
+        )
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == "report not found"

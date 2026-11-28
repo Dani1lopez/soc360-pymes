@@ -6,8 +6,10 @@ in scope per the active freeze: no exhaustive edge-case suite.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,9 +21,12 @@ from app.event_schemas import (
     ReportDeletedEvent,
     ReportUpdatedEvent,
 )
+from app.modules.assets.models import Asset
 from app.modules.reports import service
 from app.modules.reports.models import Report
 from app.modules.reports.schemas import ReportCreate, ReportUpdate
+from app.modules.scans.models import Scan
+from app.modules.vulnerabilities.models import Vulnerability
 
 
 class TestReportEventSchemas:
@@ -247,3 +252,168 @@ class TestDeleteReport:
 
         assert result is False
         event_bus.publish.assert_not_awaited()
+
+
+class TestReportExport:
+    def test_sanitize_download_filename_strips_header_injection_and_falls_back(
+        self,
+    ) -> None:
+        report_id = uuid.UUID("12345678-1234-5678-1234-567812345678")
+
+        safe = service.sanitize_download_filename(
+            'Q3 "Exec"\r\nX-Injected: 1/../../secret', report_id, "md"
+        )
+        assert "\r" not in safe
+        assert "\n" not in safe
+        assert '"' not in safe
+        assert "/" not in safe
+        assert safe.startswith("report-")
+        assert safe.endswith(".md")
+
+        fallback = service.sanitize_download_filename("!!! ///", report_id, "json")
+        assert fallback == "report-12345678.json"
+
+    def test_render_report_export_whitelists_public_fields_in_md_and_json(
+        self,
+    ) -> None:
+        now = datetime(2026, 11, 28, 12, 0, tzinfo=UTC)
+        tenant_id = uuid.uuid4()
+        asset_id = uuid.uuid4()
+        scan_id = uuid.uuid4()
+
+        report = _make_report(
+            tenant_id=tenant_id,
+            asset_id=asset_id,
+            name="Executive Q4",
+            report_type="executive",
+            status="completed",
+            summary="Key risks found on perimeter.",
+            report_metadata={"internal_only": "SECRET_REPORT_META"},
+            generated_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        asset = Asset(
+            id=asset_id,
+            tenant_id=tenant_id,
+            value="api.acme.example",
+            asset_type="domain",
+            status="active",
+            asset_metadata={"internal_only": "SECRET_ASSET_META"},
+        )
+        scan = Scan(
+            id=scan_id,
+            tenant_id=tenant_id,
+            asset_id=asset_id,
+            name="Perimeter scan",
+            scan_type="vulnerability",
+            status="completed",
+            config={"secret_flag": "SECRET_SCAN_CONFIG"},
+            raw_output="<nmaprun>SECRET_RAW_XML</nmaprun>",
+            completed_at=now,
+            created_at=now,
+        )
+        vuln_low = Vulnerability(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            scan_id=scan_id,
+            title="Minor banner leak",
+            severity="low",
+            status="fixed",
+            cve_id=None,
+            cvss_score=None,
+            vulnerability_metadata={"internal_only": "SECRET_VULN_META"},
+            created_at=now,
+        )
+        vuln_crit = Vulnerability(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            scan_id=scan_id,
+            title="OpenSSH RCE | critical",
+            severity="critical",
+            status="open",
+            cve_id="CVE-2026-0001",
+            cvss_score=Decimal("9.8"),
+            description="Remote code execution.",
+            vulnerability_metadata={"internal_only": "SECRET_VULN_META"},
+            created_at=now,
+        )
+
+        md_export = service.render_report_export(
+            report, asset, [scan], [vuln_low, vuln_crit], "md"
+        )
+        assert md_export.media_type == "text/markdown; charset=utf-8"
+        assert md_export.filename == "report-Executive-Q4.md"
+        assert "# Executive Q4" in md_export.content
+        assert "api.acme.example (domain)" in md_export.content
+        assert "Key risks found on perimeter." in md_export.content
+        assert "OpenSSH RCE \\| critical" in md_export.content
+        assert "CVE-2026-0001" in md_export.content
+        assert "9.8" in md_export.content
+        for secret in (
+            "SECRET_RAW_XML",
+            "SECRET_SCAN_CONFIG",
+            "SECRET_REPORT_META",
+            "SECRET_ASSET_META",
+            "SECRET_VULN_META",
+        ):
+            assert secret not in md_export.content
+
+        json_export = service.render_report_export(
+            report, asset, [scan], [vuln_low, vuln_crit], "json"
+        )
+        assert json_export.media_type == "application/json"
+        assert json_export.filename == "report-Executive-Q4.json"
+        parsed = json.loads(json_export.content)
+        assert parsed["report"]["name"] == "Executive Q4"
+        assert parsed["asset"]["value"] == "api.acme.example"
+        assert parsed["summary_counts"] == {
+            "total_scans": 1,
+            "total_vulnerabilities": 2,
+            "open_vulnerabilities": 1,
+            "by_severity": {
+                "critical": 1,
+                "high": 0,
+                "medium": 0,
+                "low": 1,
+                "info": 0,
+            },
+        }
+        assert [v["severity"] for v in parsed["vulnerabilities"]] == [
+            "critical",
+            "low",
+        ]
+        assert parsed["vulnerabilities"][0]["cvss_score"] == 9.8
+        assert "raw_output" not in parsed["scans"][0]
+        assert "config" not in parsed["scans"][0]
+        assert "report_metadata" not in parsed["report"]
+        assert "asset_metadata" not in parsed["asset"]
+        assert "vulnerability_metadata" not in parsed["vulnerabilities"][0]
+
+        report_unicode = _make_report(
+            tenant_id=tenant_id,
+            asset_id=asset_id,
+            name="Informe Español 🔒",
+            report_type="executive",
+            status="completed",
+            summary="Resumen con ñ, tildes y emoji 🔒",
+            report_metadata={"internal_only": "SECRET_REPORT_META"},
+            generated_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        pdf_export = service.render_report_export(
+            report_unicode, asset, [scan], [vuln_low, vuln_crit], "pdf"
+        )
+        assert pdf_export.media_type == "application/pdf"
+        assert pdf_export.filename.endswith(".pdf")
+        assert isinstance(pdf_export.content, bytes)
+        assert pdf_export.content.startswith(b"%PDF-")
+        for secret in (
+            b"SECRET_RAW_XML",
+            b"SECRET_SCAN_CONFIG",
+            b"SECRET_REPORT_META",
+            b"SECRET_ASSET_META",
+            b"SECRET_VULN_META",
+        ):
+            assert secret not in pdf_export.content

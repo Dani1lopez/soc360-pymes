@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus } from "lucide-react";
+import { Download, Plus } from "lucide-react";
 import type { ReportResponse } from "@/api/schema";
 import { AsyncSection } from "@/components/async-section";
 import { ConfirmButton } from "@/components/confirm-button";
@@ -17,9 +17,10 @@ import {
 } from "@/components/ui/table";
 import { ADMIN_ROLES, hasAnyRole, useCurrentUser, useEffectiveTenantId } from "@/features/auth";
 import { assetValuesById, useAssetOptions } from "@/features/assets";
+import { downloadBlobFile } from "@/lib/download";
 import { errorMessage } from "@/lib/errors";
 import { formatDateTime, orDash } from "@/lib/format";
-import { REPORTS_PAGE_SIZE } from "../api/reports-api";
+import { REPORTS_PAGE_SIZE, type ReportDownloadFormat } from "../api/reports-api";
 import {
   REPORT_STATUSES,
   REPORT_TYPES,
@@ -27,11 +28,19 @@ import {
   reportTypeLabel,
 } from "../lib/report-labels";
 import { useReports } from "../hooks/use-reports";
-import { useDeleteReport } from "../hooks/use-report-mutations";
+import { useDeleteReport, useDownloadReport } from "../hooks/use-report-mutations";
 import { ReportForm } from "./report-form";
 import { ReportStatusBadge } from "./report-status-badge";
 
 type Editor = { report: ReportResponse | null } | null;
+
+function downloadFilename(report: ReportResponse, format: ReportDownloadFormat): string {
+  const slug = report.name
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "")
+    .slice(0, 64);
+  return `report-${slug || report.id.slice(0, 8)}.${format}`;
+}
 
 export function ReportsPage() {
   const [offset, setOffset] = useState(0);
@@ -48,6 +57,7 @@ export function ReportsPage() {
     status: statusFilter === "" ? null : statusFilter,
   });
   const remove = useDeleteReport();
+  const download = useDownloadReport();
 
   const canWrite = hasAnyRole(user, ADMIN_ROLES);
   const tenantId = useEffectiveTenantId();
@@ -60,11 +70,22 @@ export function ReportsPage() {
     setEditor(null);
   }
 
+  function handleDownload(report: ReportResponse, format: ReportDownloadFormat) {
+    download.mutate(
+      { id: report.id, format },
+      {
+        onSuccess: (blob) => {
+          downloadBlobFile(blob, downloadFilename(report, format));
+        },
+      },
+    );
+  }
+
   return (
     <section className="space-y-6">
       <PageHeader
         title="Informes"
-        description="Metadatos de los informes de tus activos."
+        description="Gestiona y descarga los informes de tus activos en Markdown, JSON o PDF."
         actions={
           canCreate && (
             <Button onClick={() => setEditor({ report: null })}>
@@ -74,10 +95,6 @@ export function ReportsPage() {
           )
         }
       />
-      <p className="text-sm text-muted-foreground">
-        La generación y la descarga de PDF llegan en una fase posterior: aquí se gestiona el
-        registro del informe y su estado.
-      </p>
 
       <div className="flex flex-wrap items-end gap-3">
         <div className="space-y-2">
@@ -157,6 +174,12 @@ export function ReportsPage() {
         </p>
       )}
 
+      {download.error !== null && (
+        <p role="alert" className="text-sm text-destructive">
+          {errorMessage(download.error)}
+        </p>
+      )}
+
       {editor !== null && (
         <ReportForm
           report={editor.report}
@@ -185,44 +208,74 @@ export function ReportsPage() {
               <TableHead>Estado</TableHead>
               <TableHead>Generado</TableHead>
               <TableHead>Actualizado</TableHead>
-              {canWrite && <TableHead>Acciones</TableHead>}
+              <TableHead>Acciones</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.map((report) => (
-              <TableRow key={report.id}>
-                <TableCell className="font-medium">{report.name}</TableCell>
-                <TableCell className="break-all text-muted-foreground">
-                  {orDash(assetNames[report.asset_id])}
-                </TableCell>
-                <TableCell>{reportTypeLabel(report.report_type)}</TableCell>
-                <TableCell>
-                  <ReportStatusBadge status={report.status} />
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {formatDateTime(report.generated_at)}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {formatDateTime(report.updated_at)}
-                </TableCell>
-                {canWrite && (
+            {items.map((report) => {
+              const isDownloading = download.isPending && download.variables?.id === report.id;
+              return (
+                <TableRow key={report.id}>
+                  <TableCell className="font-medium">{report.name}</TableCell>
+                  <TableCell className="break-all text-muted-foreground">
+                    {orDash(assetNames[report.asset_id])}
+                  </TableCell>
+                  <TableCell>{reportTypeLabel(report.report_type)}</TableCell>
+                  <TableCell>
+                    <ReportStatusBadge status={report.status} />
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {formatDateTime(report.generated_at)}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {formatDateTime(report.updated_at)}
+                  </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap items-center gap-2">
-                      <Button variant="outline" size="sm" onClick={() => setEditor({ report })}>
-                        Editar
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={isDownloading}
+                        onClick={() => handleDownload(report, "md")}
+                      >
+                        <Download aria-hidden="true" className="size-3.5" />
+                        MD
                       </Button>
-                      <ConfirmButton
-                        label="Eliminar"
-                        confirmLabel="Eliminar informe"
-                        question="¿Eliminar el informe?"
-                        disabled={remove.isPending}
-                        onConfirm={() => remove.mutate(report.id)}
-                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={isDownloading}
+                        onClick={() => handleDownload(report, "json")}
+                      >
+                        JSON
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={isDownloading}
+                        onClick={() => handleDownload(report, "pdf")}
+                      >
+                        PDF
+                      </Button>
+                      {canWrite && (
+                        <>
+                          <Button variant="outline" size="sm" onClick={() => setEditor({ report })}>
+                            Editar
+                          </Button>
+                          <ConfirmButton
+                            label="Eliminar"
+                            confirmLabel="Eliminar informe"
+                            question="¿Eliminar el informe?"
+                            disabled={remove.isPending}
+                            onConfirm={() => remove.mutate(report.id)}
+                          />
+                        </>
+                      )}
                     </div>
                   </TableCell>
-                )}
-              </TableRow>
-            ))}
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
         <Pagination total={total} limit={REPORTS_PAGE_SIZE} offset={offset} onChange={setOffset} />

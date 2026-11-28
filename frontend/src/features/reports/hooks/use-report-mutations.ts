@@ -1,6 +1,12 @@
 import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { ReportUpdateInput } from "@/api/schema";
-import { createReport, deleteReport, updateReport } from "../api/reports-api";
+import {
+  createReport,
+  deleteReport,
+  downloadReport,
+  type ReportDownloadFormat,
+  updateReport,
+} from "../api/reports-api";
 import { reportsKeys } from "./use-reports";
 
 function invalidate(queryClient: QueryClient): Promise<void> {
@@ -24,4 +30,11 @@ export function useUpdateReport() {
 export function useDeleteReport() {
   const queryClient = useQueryClient();
   return useMutation({ mutationFn: deleteReport, onSuccess: () => invalidate(queryClient) });
+}
+
+export function useDownloadReport() {
+  return useMutation({
+    mutationFn: ({ id, format }: { id: string; format: ReportDownloadFormat }) =>
+      downloadReport(id, format),
+  });
 }

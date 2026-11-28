@@ -24,7 +24,7 @@ export const NAV_ITEMS: readonly NavigationItem[] = [
   { label: "Vulnerabilidades", to: "/vulnerabilities", allowed: READ_ROLES, icon: ShieldAlert },
   { label: "Informes", to: "/reports", allowed: READ_ROLES, icon: FileText },
   { label: "Usuarios", to: "/users", allowed: ADMIN_ROLES, icon: Users },
-  { label: "Configuración", to: "/settings", allowed: ADMIN_ROLES, icon: Settings },
+  { label: "Configuración", to: "/settings", allowed: READ_ROLES, icon: Settings },
 ];
 
 export function navigationFor(user: Pick<UserResponse, "role">) {

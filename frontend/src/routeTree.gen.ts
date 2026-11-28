@@ -14,12 +14,12 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedAdminRouteImport } from './routes/_authenticated/_admin'
 import { Route as AuthenticatedReaderRouteImport } from './routes/_authenticated/_reader'
 import { Route as AuthenticatedForbiddenRouteImport } from './routes/_authenticated/forbidden'
-import { Route as AuthenticatedAdminSettingsRouteImport } from './routes/_authenticated/_admin/settings'
 import { Route as AuthenticatedAdminUsersRouteImport } from './routes/_authenticated/_admin/users'
 import { Route as AuthenticatedReaderIndexRouteImport } from './routes/_authenticated/_reader/index'
 import { Route as AuthenticatedReaderAssetsRouteImport } from './routes/_authenticated/_reader/assets'
 import { Route as AuthenticatedReaderReportsRouteImport } from './routes/_authenticated/_reader/reports'
 import { Route as AuthenticatedReaderScansRouteImport } from './routes/_authenticated/_reader/scans'
+import { Route as AuthenticatedReaderSettingsRouteImport } from './routes/_authenticated/_reader/settings'
 import { Route as AuthenticatedReaderVulnerabilitiesRouteImport } from './routes/_authenticated/_reader/vulnerabilities'
 import { Route as AuthenticatedReaderScansIndexRouteImport } from './routes/_authenticated/_reader/scans.index'
 import { Route as AuthenticatedReaderScansIdRouteImport } from './routes/_authenticated/_reader/scans.$id'
@@ -48,12 +48,6 @@ const AuthenticatedForbiddenRoute = AuthenticatedForbiddenRouteImport.update({
   path: '/forbidden',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
-const AuthenticatedAdminSettingsRoute =
-  AuthenticatedAdminSettingsRouteImport.update({
-    id: '/settings',
-    path: '/settings',
-    getParentRoute: () => AuthenticatedAdminRoute,
-  } as any)
 const AuthenticatedAdminUsersRoute = AuthenticatedAdminUsersRouteImport.update({
   id: '/users',
   path: '/users',
@@ -81,6 +75,12 @@ const AuthenticatedReaderScansRoute =
   AuthenticatedReaderScansRouteImport.update({
     id: '/scans',
     path: '/scans',
+    getParentRoute: () => AuthenticatedReaderRoute,
+  } as any)
+const AuthenticatedReaderSettingsRoute =
+  AuthenticatedReaderSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
     getParentRoute: () => AuthenticatedReaderRoute,
   } as any)
 const AuthenticatedReaderVulnerabilitiesRoute =
@@ -118,11 +118,11 @@ export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedReaderIndexRoute
   '/login': typeof LoginRoute
   '/forbidden': typeof AuthenticatedForbiddenRoute
-  '/settings': typeof AuthenticatedAdminSettingsRoute
   '/users': typeof AuthenticatedAdminUsersRoute
   '/assets': typeof AuthenticatedReaderAssetsRoute
   '/reports': typeof AuthenticatedReaderReportsRoute
   '/scans': typeof AuthenticatedReaderScansRouteWithChildren
+  '/settings': typeof AuthenticatedReaderSettingsRoute
   '/vulnerabilities': typeof AuthenticatedReaderVulnerabilitiesRouteWithChildren
   '/scans/$id': typeof AuthenticatedReaderScansIdRoute
   '/vulnerabilities/$id': typeof AuthenticatedReaderVulnerabilitiesIdRoute
@@ -133,10 +133,10 @@ export interface FileRoutesByTo {
   '/': typeof AuthenticatedReaderIndexRoute
   '/login': typeof LoginRoute
   '/forbidden': typeof AuthenticatedForbiddenRoute
-  '/settings': typeof AuthenticatedAdminSettingsRoute
   '/users': typeof AuthenticatedAdminUsersRoute
   '/assets': typeof AuthenticatedReaderAssetsRoute
   '/reports': typeof AuthenticatedReaderReportsRoute
+  '/settings': typeof AuthenticatedReaderSettingsRoute
   '/scans/$id': typeof AuthenticatedReaderScansIdRoute
   '/vulnerabilities/$id': typeof AuthenticatedReaderVulnerabilitiesIdRoute
   '/scans': typeof AuthenticatedReaderScansIndexRoute
@@ -149,11 +149,11 @@ export interface FileRoutesById {
   '/_authenticated/_admin': typeof AuthenticatedAdminRouteWithChildren
   '/_authenticated/_reader': typeof AuthenticatedReaderRouteWithChildren
   '/_authenticated/forbidden': typeof AuthenticatedForbiddenRoute
-  '/_authenticated/_admin/settings': typeof AuthenticatedAdminSettingsRoute
   '/_authenticated/_admin/users': typeof AuthenticatedAdminUsersRoute
   '/_authenticated/_reader/assets': typeof AuthenticatedReaderAssetsRoute
   '/_authenticated/_reader/reports': typeof AuthenticatedReaderReportsRoute
   '/_authenticated/_reader/scans': typeof AuthenticatedReaderScansRouteWithChildren
+  '/_authenticated/_reader/settings': typeof AuthenticatedReaderSettingsRoute
   '/_authenticated/_reader/vulnerabilities': typeof AuthenticatedReaderVulnerabilitiesRouteWithChildren
   '/_authenticated/_reader/': typeof AuthenticatedReaderIndexRoute
   '/_authenticated/_reader/scans/$id': typeof AuthenticatedReaderScansIdRoute
@@ -167,11 +167,11 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/forbidden'
-    | '/settings'
     | '/users'
     | '/assets'
     | '/reports'
     | '/scans'
+    | '/settings'
     | '/vulnerabilities'
     | '/scans/$id'
     | '/vulnerabilities/$id'
@@ -182,10 +182,10 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/forbidden'
-    | '/settings'
     | '/users'
     | '/assets'
     | '/reports'
+    | '/settings'
     | '/scans/$id'
     | '/vulnerabilities/$id'
     | '/scans'
@@ -197,11 +197,11 @@ export interface FileRouteTypes {
     | '/_authenticated/_admin'
     | '/_authenticated/_reader'
     | '/_authenticated/forbidden'
-    | '/_authenticated/_admin/settings'
     | '/_authenticated/_admin/users'
     | '/_authenticated/_reader/assets'
     | '/_authenticated/_reader/reports'
     | '/_authenticated/_reader/scans'
+    | '/_authenticated/_reader/settings'
     | '/_authenticated/_reader/vulnerabilities'
     | '/_authenticated/_reader/'
     | '/_authenticated/_reader/scans/$id'
@@ -252,13 +252,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedForbiddenRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/_admin/settings': {
-      id: '/_authenticated/_admin/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof AuthenticatedAdminSettingsRouteImport
-      parentRoute: typeof AuthenticatedAdminRoute
-    }
     '/_authenticated/_admin/users': {
       id: '/_authenticated/_admin/users'
       path: '/users'
@@ -292,6 +285,13 @@ declare module '@tanstack/react-router' {
       path: '/scans'
       fullPath: '/scans'
       preLoaderRoute: typeof AuthenticatedReaderScansRouteImport
+      parentRoute: typeof AuthenticatedReaderRoute
+    }
+    '/_authenticated/_reader/settings': {
+      id: '/_authenticated/_reader/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AuthenticatedReaderSettingsRouteImport
       parentRoute: typeof AuthenticatedReaderRoute
     }
     '/_authenticated/_reader/vulnerabilities': {
@@ -333,12 +333,10 @@ declare module '@tanstack/react-router' {
 }
 
 interface AuthenticatedAdminRouteChildren {
-  AuthenticatedAdminSettingsRoute: typeof AuthenticatedAdminSettingsRoute
   AuthenticatedAdminUsersRoute: typeof AuthenticatedAdminUsersRoute
 }
 
 const AuthenticatedAdminRouteChildren: AuthenticatedAdminRouteChildren = {
-  AuthenticatedAdminSettingsRoute: AuthenticatedAdminSettingsRoute,
   AuthenticatedAdminUsersRoute: AuthenticatedAdminUsersRoute,
 }
 
@@ -383,6 +381,7 @@ interface AuthenticatedReaderRouteChildren {
   AuthenticatedReaderAssetsRoute: typeof AuthenticatedReaderAssetsRoute
   AuthenticatedReaderReportsRoute: typeof AuthenticatedReaderReportsRoute
   AuthenticatedReaderScansRoute: typeof AuthenticatedReaderScansRouteWithChildren
+  AuthenticatedReaderSettingsRoute: typeof AuthenticatedReaderSettingsRoute
   AuthenticatedReaderVulnerabilitiesRoute: typeof AuthenticatedReaderVulnerabilitiesRouteWithChildren
   AuthenticatedReaderIndexRoute: typeof AuthenticatedReaderIndexRoute
 }
@@ -391,6 +390,7 @@ const AuthenticatedReaderRouteChildren: AuthenticatedReaderRouteChildren = {
   AuthenticatedReaderAssetsRoute: AuthenticatedReaderAssetsRoute,
   AuthenticatedReaderReportsRoute: AuthenticatedReaderReportsRoute,
   AuthenticatedReaderScansRoute: AuthenticatedReaderScansRouteWithChildren,
+  AuthenticatedReaderSettingsRoute: AuthenticatedReaderSettingsRoute,
   AuthenticatedReaderVulnerabilitiesRoute:
     AuthenticatedReaderVulnerabilitiesRouteWithChildren,
   AuthenticatedReaderIndexRoute: AuthenticatedReaderIndexRoute,

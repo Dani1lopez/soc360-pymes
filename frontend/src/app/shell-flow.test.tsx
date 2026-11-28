@@ -6,6 +6,7 @@ import type { Role } from "@/api/schema";
 import { __resetSession } from "@/api/session";
 import { makeUser, tokenBody } from "@/test/fixtures/auth";
 import { makeDashboardSummary } from "@/test/fixtures/dashboard";
+import { makeTenant } from "@/test/fixtures/tenants";
 import { server } from "@/test/msw";
 import { AppProviders } from "./providers";
 import { createAppRouter } from "./router";
@@ -49,6 +50,25 @@ test("admin can open users", async () => {
   mount("/users", "admin");
   expect(await screen.findByRole("heading", { name: "Usuarios" })).toBeInTheDocument();
 });
+test.each(["analyst", "viewer"] as const)(
+  "%s can open password settings and see their read-only organization",
+  async (role) => {
+    const tenant = makeTenant({ id: makeUser().tenant_id ?? "" });
+    server.use(http.get(`*/api/v1/tenants/${tenant.id}`, () => HttpResponse.json(tenant)));
+    const router = mount("/settings", role);
+
+    expect(await screen.findByLabelText("Contraseña actual")).toBeInTheDocument();
+    expect(screen.getByLabelText("Nueva contraseña")).toBeInTheDocument();
+    expect(screen.getByLabelText("Repetir nueva contraseña")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cambiar contraseña" })).toBeEnabled();
+    expect(router.state.location.pathname).toBe("/settings");
+    const name = await screen.findByLabelText("Nombre");
+    expect(name).toHaveValue(tenant.name);
+    expect(name).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("Plan")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Guardar configuración" })).not.toBeInTheDocument();
+  },
+);
 test("shell logout ends at login", async () => {
   const logout = vi.fn(() => {
     server.use(http.post("*/api/v1/auth/refresh", () => new HttpResponse(null, { status: 401 })));

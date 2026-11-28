@@ -77,10 +77,11 @@ async def _seed_vulnerability(
     title: str,
     tenant_id: str = TENANT_A_ID,
     severity: str = "high",
+    status: str = "open",
 ) -> Vulnerability:
     await _set_superadmin_context(db_session)
     vuln = Vulnerability(
-        tenant_id=UUID(tenant_id), scan_id=scan_id, title=title, severity=severity
+        tenant_id=UUID(tenant_id), scan_id=scan_id, title=title, severity=severity, status=status
     )
     db_session.add(vuln)
     await db_session.flush()
@@ -313,6 +314,78 @@ class TestHappyPath:
         )
         assert resp.status_code == 422, resp.text
         assert resp.json()["detail"] == "tenant_id mismatch"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "titles", "total", "offset", "limit"),
+    [
+        ({}, ["fixed-high", "open-other-scan", "open-low", "open-high-2", "open-high-1"], 5, 0, 50),
+        ({"status": "fixed"}, ["fixed-high"], 1, 0, 50),
+        ({"severity": "low"}, ["open-low"], 1, 0, 50),
+        ({"status": "open", "severity": "high", "limit": "1"}, ["open-high-2"], 2, 0, 1),
+        (
+            {"status": "open", "severity": "high", "limit": "1", "offset": "1"},
+            ["open-high-1"],
+            2,
+            1,
+            1,
+        ),
+    ],
+)
+async def test_list_status_and_severity_filters(
+    tenant_client: AsyncClient,
+    admin_a_headers: dict,
+    db_session: AsyncSession,
+    params: dict[str, str],
+    titles: list[str],
+    total: int,
+    offset: int,
+    limit: int,
+) -> None:
+    asset_a = await _seed_asset(db_session, "192.0.2.18")
+    asset_b = await _seed_asset(db_session, "192.0.2.19", tenant_id=TENANT_B_ID)
+    scan = await _seed_scan(db_session, asset_id=asset_a, name="filtered")
+    other_scan = await _seed_scan(db_session, asset_id=asset_a, name="other")
+    foreign_scan = await _seed_scan(
+        db_session, asset_id=asset_b, name="foreign", tenant_id=TENANT_B_ID
+    )
+    await _seed_vulnerability(db_session, scan_id=scan.id, title="open-high-1")
+    await _seed_vulnerability(db_session, scan_id=scan.id, title="open-high-2")
+    await _seed_vulnerability(db_session, scan_id=scan.id, title="open-low", severity="low")
+    await _seed_vulnerability(db_session, scan_id=other_scan.id, title="open-other-scan")
+    await _seed_vulnerability(db_session, scan_id=scan.id, title="fixed-high", status="fixed")
+    await _seed_vulnerability(
+        db_session, scan_id=foreign_scan.id, title="foreign", severity="low", status="fixed",
+        tenant_id=TENANT_B_ID,
+    )
+
+    query = {**params, "scan_id": str(scan.id)} if "limit" in params else params
+    response = await tenant_client.get(
+        "/api/v1/vulnerabilities/", headers=admin_a_headers, params=query
+    )
+    assert response.status_code == 200, response.text
+    page = response.json()
+    assert (page["total"], page["offset"], page["limit"]) == (total, offset, limit)
+    assert [item["title"] for item in page["items"]] == titles
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parameter", ["status", "severity"])
+async def test_list_rejects_invalid_enum_filter(
+    tenant_client: AsyncClient, admin_a_headers: dict, parameter: str
+) -> None:
+    path = "/api/v1/vulnerabilities/"
+    before = await tenant_client.get(path, headers=admin_a_headers)
+    rejected = await tenant_client.get(
+        path, headers=admin_a_headers, params={parameter: "not-a-valid-value"}
+    )
+    after = await tenant_client.get(path, headers=admin_a_headers)
+
+    assert rejected.status_code == 422, rejected.text
+    assert [error["loc"] for error in rejected.json()["detail"]] == [["query", parameter]]
+    assert before.status_code == after.status_code == 200
+    assert before.json() == after.json()
 
 
 # ---------------------------------------------------------------------------

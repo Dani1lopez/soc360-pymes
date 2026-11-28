@@ -33,7 +33,20 @@ function setup(
     http.get("*/api/v1/vulnerabilities/", ({ request }) => {
       const params = Object.fromEntries(new URL(request.url).searchParams);
       onList?.(params);
-      return HttpResponse.json(vulnerabilityList(items, { offset: Number(params.offset ?? 0) }));
+      const offset = Number(params.offset ?? 0);
+      const limit = Number(params.limit ?? 20);
+      const matching = items.filter(
+        (item) =>
+          (!params.status || item.status === params.status) &&
+          (!params.severity || item.severity === params.severity),
+      );
+      return HttpResponse.json(
+        vulnerabilityList(matching.slice(offset, offset + limit), {
+          total: matching.length,
+          offset,
+          limit,
+        }),
+      );
     }),
   );
   return renderShell(<VulnerabilitiesPage />, currentUserQueryKey, user ?? makeUser({ role }));
@@ -77,24 +90,57 @@ describe("VulnerabilitiesPage", () => {
     expect(within(table).getAllByText(asset.value)).toHaveLength(2);
   });
 
-  it("filters the loaded page by status and severity", async () => {
-    setup([
-      makeVulnerability({ id: "1", title: "Abierta crítica" }),
-      makeVulnerability({ id: "2", title: "Corregida crítica", status: "fixed" }),
-      makeVulnerability({ id: "3", title: "Abierta baja", severity: "low" }),
-    ]);
+  it("queries filtered pages and resets pagination each time a filter changes", async () => {
+    const requested = vi.fn();
+    setup(
+      [
+        makeVulnerability({ id: "fixed", title: "Corregida crítica", status: "fixed" }),
+        ...Array.from({ length: 21 }, (_, index) =>
+          makeVulnerability({
+            id: `low-${index}`,
+            title: `Abierta baja ${index}`,
+            severity: "low",
+          }),
+        ),
+        makeVulnerability({ id: "critical", title: "Abierta crítica" }),
+      ],
+      { onList: requested },
+    );
 
+    await screen.findByText("Corregida crítica");
+    expect(requested).toHaveBeenLastCalledWith({ offset: "0", limit: "20" });
+    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
     await screen.findByText("Abierta crítica");
-    fireEvent.change(screen.getByLabelText("Mostrar"), { target: { value: "open" } });
+    expect(requested).toHaveBeenLastCalledWith({ offset: "20", limit: "20" });
 
+    fireEvent.change(screen.getByLabelText("Mostrar"), { target: { value: "open" } });
+    await screen.findByText("Abierta baja 0");
+    expect(requested).toHaveBeenLastCalledWith({ offset: "0", limit: "20", status: "open" });
     expect(screen.queryByText("Corregida crítica")).not.toBeInTheDocument();
-    expect(screen.getByText("Abierta baja")).toBeInTheDocument();
+    expect(screen.getByText("Mostrando 1–20 de 22")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+    await screen.findByText("Abierta baja 20");
+    expect(requested).toHaveBeenLastCalledWith({ offset: "20", limit: "20", status: "open" });
 
     fireEvent.change(screen.getByLabelText("Filtrar por severidad"), {
       target: { value: "critical" },
     });
-    expect(screen.queryByText("Abierta baja")).not.toBeInTheDocument();
+    await screen.findByText("Mostrando 1–1 de 1");
+    expect(requested).toHaveBeenLastCalledWith({
+      offset: "0",
+      limit: "20",
+      status: "open",
+      severity: "critical",
+    });
+    expect(screen.queryByText("Abierta baja 20")).not.toBeInTheDocument();
     expect(screen.getByText("Abierta crítica")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Mostrar"), { target: { value: "all" } });
+    await screen.findByText("Corregida crítica");
+    expect(requested).toHaveBeenLastCalledWith({ offset: "0", limit: "20", severity: "critical" });
+    fireEvent.change(screen.getByLabelText("Filtrar por severidad"), { target: { value: "all" } });
+    await screen.findByText("Abierta baja 0");
+    await waitFor(() => expect(requested).toHaveBeenLastCalledWith({ offset: "0", limit: "20" }));
   });
 
   it("shows an empty state when there is nothing", async () => {

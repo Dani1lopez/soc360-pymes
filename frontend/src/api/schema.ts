@@ -68,6 +68,10 @@ export type VulnerabilityResponse = Omit<
   "vulnerability_metadata"
 > & { vulnerability_metadata: Record<string, unknown> | null };
 export type VulnerabilityList = Paginated<VulnerabilityResponse>;
+export type VulnerabilityListFilters = Pick<
+  NonNullable<ApiPaths["/api/v1/vulnerabilities/"]["get"]["parameters"]["query"]>,
+  "status" | "severity"
+>;
 export type VulnerabilityCreateInput = Omit<
   ApiSchemas["VulnerabilityCreate"],
   "vulnerability_metadata"

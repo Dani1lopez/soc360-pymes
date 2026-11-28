@@ -564,7 +564,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List vulnerabilities (paginated), optionally filtered by scan
+         * List vulnerabilities (paginated), optionally filtered by scan, status, and severity
          * @description List vulnerabilities visible to ``current_user``, newest first.
          *
          *     With ``scan_id`` the SAME scan resolution as POST runs first, so an
@@ -2944,6 +2944,8 @@ export interface operations {
                 offset?: number;
                 limit?: number;
                 scan_id?: string | null;
+                status?: ("open" | "fixed" | "accepted_risk" | "false_positive") | null;
+                severity?: ("critical" | "high" | "medium" | "low" | "info") | null;
             };
             header?: never;
             path?: never;

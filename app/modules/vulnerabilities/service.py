@@ -24,6 +24,7 @@ from app.event_schemas import (
     VulnerabilityCreatedEvent,
     VulnerabilityDeletedEvent,
     VulnerabilitySeverity,
+    VulnerabilityStatus,
     VulnerabilityUpdatedEvent,
 )
 from app.modules.vulnerabilities.models import Vulnerability
@@ -214,6 +215,8 @@ async def list_vulnerabilities(
     limit: int,
     offset: int,
     scan_id: uuid.UUID | None = None,
+    status: VulnerabilityStatus | None = None,
+    severity: VulnerabilitySeverity | None = None,
 ) -> tuple[Sequence[Vulnerability], int]:
     """Return ``(items, total)`` ordered by ``created_at DESC, id DESC``.
 
@@ -221,18 +224,23 @@ async def list_vulnerabilities(
     a deterministic ``created_at DESC, id DESC`` order plus offset/limit.
     Tenant-scoping rule: ``Vulnerability.tenant_id == tenant_id`` is added to
     both queries when ``tenant_id`` is not None; ``None`` is the superadmin
-    path. When ``scan_id`` is given, the SAME predicate is applied to both
-    the count and the items query, so the page metadata can never disagree
-    with the items it describes.
+    path. Optional scan, status, and severity filters apply to both queries.
     """
     base_stmt = _add_tenant_predicate(select(Vulnerability), tenant_id)
     count_stmt = _add_tenant_predicate(
         select(func.count()).select_from(Vulnerability),
         tenant_id,
     )
+    filters = []
     if scan_id is not None:
-        base_stmt = base_stmt.where(Vulnerability.scan_id == scan_id)
-        count_stmt = count_stmt.where(Vulnerability.scan_id == scan_id)
+        filters.append(Vulnerability.scan_id == scan_id)
+    if status is not None:
+        filters.append(Vulnerability.status == status)
+    if severity is not None:
+        filters.append(Vulnerability.severity == severity)
+
+    base_stmt = base_stmt.where(*filters)
+    count_stmt = count_stmt.where(*filters)
 
     total = (await db.execute(count_stmt)).scalar_one()
 

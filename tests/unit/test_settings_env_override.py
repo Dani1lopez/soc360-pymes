@@ -15,8 +15,6 @@ class TestSettingsEnvOverride:
         monkeypatch.setenv("EVENT_MAX_RETRIES", "7")
         # Create a fresh Settings instance — the module-level `settings` singleton
         # was already loaded with defaults; we test override on a new instance.
-        local_settings = Settings.model_construct()
-        # Use model_validate with _env_sources_ to pick up env vars
         local_settings = Settings()
         assert local_settings.EVENT_MAX_RETRIES == 7
 

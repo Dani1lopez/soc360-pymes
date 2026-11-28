@@ -335,6 +335,7 @@ async def test_refresh_tokens_isolation(
     """Tenant A cannot access Tenant B refresh tokens."""
     from sqlalchemy.exc import IntegrityError, ProgrammingError
 
+    assert seed_two_tenants["refresh_tokens"]["tenant_b"] is not None
     await set_tenant_context(db_session, UUID(TENANT_A_ID), is_superadmin=False)
 
     # SELECT — should return zero rows

@@ -7,6 +7,7 @@ Wraps Redis Streams primitives with typed Pydantic event schemas.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 from redis.asyncio import Redis
 
@@ -272,7 +273,7 @@ class EventBus:
                 dlq_payload = {
                     **data,
                     "_dlq_reason": str(exc),
-                    "_dlq_timestamp": str(__import__("datetime").datetime.now(__import__("datetime").timezone.utc)),
+                    "_dlq_timestamp": str(datetime.now(timezone.utc)),
                 }
                 # Convert all values to strings for Redis
                 dlq_payload = {

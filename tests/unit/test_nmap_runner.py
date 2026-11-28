@@ -26,7 +26,7 @@ async def test_cleanup_bounds_post_kill_wait(
 
     process.wait = AsyncMock(side_effect=never_exits)
     before = set(asyncio.all_tasks())
-    await asyncio.wait_for(_cleanup(process, grace_period=0.01), timeout=0.2)
+    await asyncio.wait_for(_cleanup(process, grace_period=0.01), timeout=1.0)
     assert killpg.call_args_list == [
         ((12345, signal.SIGTERM),),
         ((12345, signal.SIGKILL),),

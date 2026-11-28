@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     # Base de datos
     DATABASE_URL: str
-    DATABASE_URL_MIGRATION: str
+    DATABASE_URL_MIGRATION: str = ""
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str
     POSTGRES_DB: str

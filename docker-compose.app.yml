@@ -118,7 +118,7 @@ services:
       # The application role, never the schema owner: this is what keeps row
       # level security in force.
       DATABASE_URL: ${STACK_DB_DSN}
-      DATABASE_URL_MIGRATION: ${STACK_DB_MIGRATION_DSN}
+      DATABASE_URL_MIGRATION: ""
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       # The API gates POST /scans/{id}/run on these, so it must read the same
@@ -162,7 +162,7 @@ services:
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       DATABASE_URL: ${STACK_DB_DSN}
-      DATABASE_URL_MIGRATION: ${STACK_DB_MIGRATION_DSN}
+      DATABASE_URL_MIGRATION: ""
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       # Secure by default. Turn these on in .env only for a local demo: see
@@ -201,7 +201,7 @@ services:
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       DATABASE_URL: ${STACK_DB_DSN}
-      DATABASE_URL_MIGRATION: ${STACK_DB_MIGRATION_DSN}
+      DATABASE_URL_MIGRATION: ""
       REDIS_HOST: redis
       REDIS_PORT: "6379"
     cap_drop: [ALL]
@@ -268,7 +268,7 @@ services:
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       DATABASE_URL: ${STACK_DB_DSN}
-      DATABASE_URL_MIGRATION: ${STACK_DB_MIGRATION_DSN}
+      DATABASE_URL_MIGRATION: ""
       REDIS_HOST: redis
       REDIS_PORT: "6379"
     cap_drop: [ALL]
@@ -299,7 +299,7 @@ services:
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       DATABASE_URL: ${STACK_DB_DSN}
-      DATABASE_URL_MIGRATION: ${STACK_DB_MIGRATION_DSN}
+      DATABASE_URL_MIGRATION: ""
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       ENRICHMENT_ENABLED: ${ENRICHMENT_ENABLED:-false}

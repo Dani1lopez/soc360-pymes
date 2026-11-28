@@ -39,6 +39,8 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+if not settings.DATABASE_URL_MIGRATION:
+    raise RuntimeError("DATABASE_URL_MIGRATION is required to run Alembic migrations")
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL_MIGRATION)
 
 

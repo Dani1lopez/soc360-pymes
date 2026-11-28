@@ -10,13 +10,13 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.database import get_db
 from app.core.dist_lock import acquire_dist_lock
 from app.core.outage import (
     _FLOW_ID_AUTH_POST_CREDENTIAL_USER_DEACTIVATE_LOCK,
     _FLOW_ID_AUTH_TENANT_DEACTIVATE_LOCK,
 )
 from app.core.redis import get_redis
+from app.dependencies.auth import require_superadmin
 from app.dependencies.cross_tenant import get_user_for_admin_delete
 from app.dependencies.db_deps import get_db_with_tenant
 from app.modules.users.models import User
@@ -48,7 +48,8 @@ async def get_user_deactivation_db(
 
 async def get_tenant_deactivation_db(
     tenant_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_db_with_tenant),
     redis: Redis = Depends(get_redis),
 ) -> AsyncGenerator[AsyncSession, None]:
     """Hold the tenant deactivation lease through commit or rollback."""
